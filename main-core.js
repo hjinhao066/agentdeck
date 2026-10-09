@@ -877,27 +877,53 @@
   // row in the live area just above the prompt's top rule (a custom status
   // line under the prompt carries no count):
   //   ✻ Baked for 40s · done 8:27 AM · 1 shell, 1 monitor still running
-  // A narrow column wraps it ("… · 1" / "monitor still running"), and Claude
-  // may add "Update available!" between it and the rule. It is live only while
+  // A narrow column folds it onto up to five rows ("✻ Churned for 3m 55s · done" /
+  // "9:16 PM · 1 shell still" / "running"), and Claude may add "Update available!"
+  // between it and the rule. While a background agent runs, the row reads
+  // "✻ Waiting for 1 background agent to finish". It is live only while
   // nothing else sits between it and the prompt: a later reply, tool row or
   // user message means a newer turn, and the old row is history.
+  const CLAUDE_DONE_ROW = /^\s*[✻✽✳✶✢✺*]\s*[^\s·]+\s+for\s+(?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/;
+  const CLAUDE_WAIT_ROW = /^\s*[✻✽✳✶✢✺*·]\s*Waiting\s+for\b/i;
+  const CLAUDE_FOLD_END = /^\s*(?:[─━═]{3,}\s*$|Update available\b|[⏺●❯›>⎿✻✽✳✶✢✺∴])/i;
+  const CLAUDE_BG_RUNNING = /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i;
+  const CLAUDE_BG_WAITING = /\bWaiting for [1-9]\d* background\b/i;
+  // Each status row with the rows it was folded onto: { start, end, text }.
+  function claudeStatusBlocks(lines) {
+    const blocks = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (!CLAUDE_DONE_ROW.test(lines[i]) && !CLAUDE_WAIT_ROW.test(lines[i])) continue;
+      let end = i + 1;
+      while (end < lines.length && end - i < 5 && lines[end].trim() && !CLAUDE_FOLD_END.test(lines[end])) end++;
+      blocks.push({ start: i, end, text: lines.slice(i, end).join(' ').replace(/\s+/g, ' ') });
+      i = end - 1;
+    }
+    return blocks;
+  }
   function claudeStatusRowRunning(above) {
-    const rows = above.slice(-8);
-    let at = -1;
-    rows.forEach((line, i) => {
-      if (/^\s*[✻✽✳✶✢✺*]\s*[^\s·]+\s+for\s+(?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/.test(line)) at = i;
-    });
-    if (at < 0) return false;
-    const block = [rows[at]];
-    let i = at + 1;
-    for (; i < rows.length && block.length < 3; i++) {
-      if (!rows[i].trim() || /^\s*[─━═]{3,}\s*$/.test(rows[i]) || /^\s*Update available\b/i.test(rows[i])) break;
-      block.push(rows[i]);
-    }
-    for (; i < rows.length; i++) {
-      if (!/^\s*$|^\s*[─━═]{3,}\s*$|^\s*Update available\b/i.test(rows[i])) return false;
-    }
-    return /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(block.join(' ').replace(/\s+/g, ' '));
+    const rows = above.slice(-10);
+    const block = claudeStatusBlocks(rows).at(-1);
+    if (!block || rows.slice(block.end).some((row) => !/^\s*$|^\s*[─━═]{3,}\s*$|^\s*Update available\b/i.test(row))) return false;
+    return CLAUDE_BG_RUNNING.test(block.text) || CLAUDE_BG_WAITING.test(block.text);
+  }
+  // Claude's status rows are never a spinner, live or history, even when a narrow
+  // column leaves "running" alone on a row. Blanked before the spinner patterns run.
+  function claudeStatusRowsBlanked(screen, cmd) {
+    const lines = String(screen || '').split('\n');
+    if (cmd && !/\bclaude\b/i.test(cmd)) return lines.join('\n');
+    for (const block of claudeStatusBlocks(lines)) lines.fill('', block.start, block.end);
+    return lines.join('\n');
+  }
+  // The footer counts background work as "· 1 shell ·". A narrow column cuts it at
+  // its width, mid-word too ("· 1 she"), so the line's last segment may stop
+  // anywhere inside those words; two letters are needed to tell which word it is.
+  const CLAUDE_BG_PHRASES = ['shell', 'monitor', 'task', 'agent'].flatMap((w) => [w + 's still running', w + ' still running']);
+  function claudeFooterCount(part, last) {
+    const m = /^[\s│┃]*[1-9]\d*\s+([^│┃]*?)[\s.…│┃]*$/.exec(part);
+    if (!m) return false;
+    const words = m[1].toLowerCase().replace(/\s+/g, ' ');
+    if (/^(?:shells?|monitors?|tasks?|agents?)(?: still running)?$/.test(words)) return true;
+    return last && words.length >= 2 && CLAUDE_BG_PHRASES.some((phrase) => phrase.startsWith(words));
   }
   // Claude's live footer counts background work after its ready prompt, and
   // its completed-turn status row counts it just above (claudeStatusRowRunning).
@@ -909,16 +935,11 @@
     if (prompt < 0 || /^\s*[│┃]?\s*❯\s*\d+\./.test(lines[prompt])) return false;
     if (claudeStatusRowRunning(lines.slice(0, prompt))) return true;
     const footer = lines.slice(prompt + 1);
-    // Match "N tasks/shells/monitors/agents still running" (complete words)
-    if (footer.some((line) => /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(line))) return true;
-    // Match "Waiting for N background agent(s) to finish" pattern
-    if (footer.some((line) => /\bWaiting\s+for\s+[1-9]\d*\s+background\s+agents?/i.test(line))) return true;
-    // Match truncated indicators in narrow columns: "1 she" "2 mon" etc
-    if (footer.some((line) => /\b[1-9]\d*\s+(?:shells?|she|monitors?|mon|tasks?|agents?|age)/i.test(line))) return true;
-    // A narrow column drops the tail of the footer ("· 1 monitor ·", "still running"
-    // cut off), so a bare "N monitors" segment of the footer counts as well.
-    return footer.some((line) => line.split(/[·,]/).some((part) =>
-      /^[\s│┃]*[1-9]\d*\s+(?:shells?|she|monitors?|mon|tasks?|agents?|age)(?:\s+still\s+running)?[\s.…│┃]*$/i.test(part)));
+    if (footer.some((line) => CLAUDE_BG_RUNNING.test(line) || CLAUDE_BG_WAITING.test(line))) return true;
+    return footer.some((line) => {
+      const parts = line.split(/[·,]/);
+      return parts.some((part, i) => claudeFooterCount(part, i === parts.length - 1));
+    });
   }
   // A quota failure receipt is provisional: Claude and Codex continue by themselves
   // once the limit resets. True while the terminal is alive, no longer shows the
@@ -1088,7 +1109,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, claudeStatusRowsBlanked, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };

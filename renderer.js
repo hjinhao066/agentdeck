@@ -549,7 +549,7 @@ function terminalIdle(col, entry) {
     return live === 'idle' || (live !== 'working' && !MainCore.cursorBusy(entry.lastScreen) && AGENT_IDLE_RE.test(entry.lastScreen || ''));
   }
   const screen = MainCore.codexStatusScreen(entry.lastScreen, col.cmd);
-  return !WORKING_RE.test(screen) && AGENT_IDLE_RE.test(screen);
+  return !WORKING_RE.test(MainCore.claudeStatusRowsBlanked(screen, col.cmd)) && AGENT_IDLE_RE.test(screen);
 }
 const WEB_QUEUED_TIP = '排队中：前面还有网页调研在跑';
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
@@ -569,7 +569,7 @@ function classify(text, entry, cmd, isCaptain = false, withoutBackground = false
     if (entry?.state === 'working' && Date.now() - (entry.lastOutputAt || 0) < 10_000) return 'working';
     return entry?.hasWorked ? 'done' : 'plain';
   }
-  if (WORKING_RE.test(text) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
+  if (WORKING_RE.test(MainCore.claudeStatusRowsBlanked(text, cmd)) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
   if (!isCaptain && !withoutBackground && MainCore.claudeBackgroundTasks(text, cmd)) return 'working';
   // After submission, an unrecognised/empty Cursor screen is initialization
