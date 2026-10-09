@@ -332,10 +332,15 @@
   }
   // Sent INSTEAD of the briefing when the app starts and the Captain's own
   // conversation came back with it (the terminal survived, or the CLI resumed the
-  // same session): it still holds the prompt, so nothing is pasted again.
-  function restartNotice(platform, file) {
+  // same session): it still holds the prompt, so nothing is pasted again. What it
+  // says about receipts follows the mode the core was written for: with the legacy
+  // injection on there is no listener to start.
+  function restartNotice(platform, file, legacyReceiptInjection = false) {
     const cli = boardCli(platform);
-    return `AgentDeck 刚重启，你还是原来的队长，上下文还在，所以不再重发提示词。在跑的队员由程序自动续接，不要重派；先运行 ${cli} handoff 取当前交接快照${file ? `（同时写在 ${file}）` : ''}，核对后读看板继续。回执监听先检查，没有才重挂恰好一个后台 receipts --wait。上下文里找不到队长规则，或记不清时，运行 ${cli} briefing 重读，细则用 briefing --topic 名。`;
+    const receipts = legacyReceiptInjection
+      ? '回执和提问照旧自动发给你（旧回执注入回退），不要挂 receipts --wait 后台监听。'
+      : '回执监听先检查，没有才重挂恰好一个后台 receipts --wait。';
+    return `AgentDeck 刚重启，你还是原来的队长，上下文还在，所以不再重发提示词。在跑的队员由程序自动续接，不要重派；先运行 ${cli} handoff 取当前交接快照${file ? `（同时写在 ${file}）` : ''}，核对后读看板继续。${receipts}上下文里找不到队长规则，或记不清时，运行 ${cli} briefing 重读，细则用 briefing --topic 名。`;
   }
   // What a superseded `receipts --wait` prints before it exits.
   const LISTENER_SUPERSEDED = '【AgentDeck 监听】已有更新的回执监听在运行，这个旧监听已自动退出。不要为它重挂。';

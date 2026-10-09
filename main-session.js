@@ -549,7 +549,7 @@
     briefing = id;
     const done = () => { if (briefing === id) briefing = ''; };
     const notice = !!kept && holdsBriefing(col);
-    const text = notice ? M.restartNotice(host.platform, state()?.seatCheckpoint || '') : briefingText(note);
+    const text = notice ? M.restartNotice(host.platform, state()?.seatCheckpoint || '', state()?.legacyReceiptInjection === true) : briefingText(note);
     const sent = () => {
       const s = state(), attempt = s?.relayStartup?.attempt?.colId === id;
       if (attempt) {

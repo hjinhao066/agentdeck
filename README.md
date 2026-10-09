@@ -769,7 +769,8 @@ restarts and the Captain's own conversation comes back with it (its terminal
 survived, or the CLI was relaunched with `--resume` into the same session) the
 prompt is not pasted again: the Captain gets one short notice
 (`MainCore.restartNotice`: run `handoff`, check the receipt listener, `briefing`
-to reread the rules). `config.mainSession.briefed` records which column was given
+to reread the rules; with the legacy receipt injection on it says not to start a
+listener, as that mode's core prompt does). `config.mainSession.briefed` records which column was given
 which wording of the prompt; a restart that finds a new conversation, another
 column or a changed prompt (a new version, a new concurrency limit) sends the core
 prompt again.

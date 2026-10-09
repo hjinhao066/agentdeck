@@ -224,6 +224,14 @@ test('the mark of a prompt changes with any change to it, and the restart notice
     assert.match(notice, /回执监听先检查，没有才重挂恰好一个后台 receipts --wait。/);
     assert.match(notice, /上下文里找不到队长规则，或记不清时，运行 node "\$(?:env:)?AGENTDECK_BOARD_CLI" briefing 重读，细则用 briefing --topic 名。$/);
     assert.ok(!notice.includes('红线'), 'not the prompt');
+    assert.ok(!notice.includes('旧回执注入'), 'the background listener is the default');
     assert.ok(!M.restartNotice(platform, '').includes('同时写在'));
+    // With the legacy receipt injection on, the core says not to start a listener, and so does the notice.
+    const legacy = M.restartNotice(platform, '/b/agentdeck-captain-handoff.md', true);
+    assert.match(M.instructions(platform, '', true), /不要再挂 receipts --wait 后台监听/);
+    assert.match(legacy, /回执和提问照旧自动发给你（旧回执注入回退），不要挂 receipts --wait 后台监听。/);
+    assert.doesNotMatch(legacy, /重挂|没有才|恰好一个/, 'nothing in it asks for a listener');
+    assert.ok(legacy.length < 400, String(legacy.length));
+    assert.equal(legacy.replace('回执和提问照旧自动发给你（旧回执注入回退），不要挂 receipts --wait 后台监听。', '回执监听先检查，没有才重挂恰好一个后台 receipts --wait。'), notice, 'only the receipts sentence differs');
   }
 });

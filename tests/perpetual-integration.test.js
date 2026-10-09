@@ -10,9 +10,11 @@ const B = require('../board-core');
 const S = require('../claude-seats-core');
 
 // resumed: the Captain's CLI came back into the conversation it had before the app closed.
-function session({ tasks = [], pending = [], cmd = '', relayStartup, briefed, seatCheckpoint, resumed = false } = {}) {
+// survived: the Captain's terminal outlived the window (a reload), so its CLI never stopped.
+function session({ tasks = [], pending = [], cmd = '', relayStartup, briefed, seatCheckpoint, legacyReceiptInjection, resumed = false, survived = false } = {}) {
   const col = { id: 'captain', isMain: true, cmd };
-  const config = { mainSession: { colId: col.id, tasks, pending, ...(relayStartup ? { relayStartup } : {}), ...(briefed ? { briefed } : {}), ...(seatCheckpoint ? { seatCheckpoint } : {}) } };
+  const config = { mainSession: { colId: col.id, cmd, tasks, pending, ...(relayStartup ? { relayStartup } : {}), ...(briefed ? { briefed } : {}), ...(seatCheckpoint ? { seatCheckpoint } : {}),
+    ...(legacyReceiptInjection ? { legacyReceiptInjection: true } : {}) } };
   const sends = [], saves = [];
   const entry = { alive: true, state: 'done', lastOutputAt: Date.now() - 5000, lastScreen: '' };
   const elements = new Map();
@@ -27,8 +29,8 @@ function session({ tasks = [], pending = [], cmd = '', relayStartup, briefed, se
     columns: () => [col], terms: new Map([[col.id, entry]]), userComposing: () => false,
     sendWhenReady: (column, text, options) => sends.push({ colId: column.id, text, options }),
     saveConfig: () => saves.push(JSON.parse(JSON.stringify(config))) });
-  // like the renderer once the column's terminal has been relaunched
-  window.MainSession.noteColdColumn(col, false, resumed);
+  // like the renderer once the column's terminal has been reconnected or relaunched
+  if (survived) window.MainSession.notePtySurvived(col); else window.MainSession.noteColdColumn(col, false, resumed);
   return { api: window.MainSession, entry, sends, saves, col };
 }
 const task = (id, title, status, failed) => ({ id, colId: 'worker-' + id, title, status, receipt: failed ? { failed } : undefined });
@@ -170,6 +172,47 @@ test('app restart into a new context, or holding another prompt: the core prompt
   // the core is all a new context is given: no rule file is pasted along
   assert.ok(CORE.length <= MC.CORE_LIMIT);
   assert.ok(!CORE.includes('模型分工（用户点名优先）'));
+});
+
+// The legacy receipt injection is still a supported mode: its core says not to start a listener,
+// so the notice after a restart must not ask for one either.
+test('legacy receipt injection: after a restart or a reload the short notice never asks for a receipts --wait listener', () => {
+  const legacyCore = MC.instructions('darwin', '', true, undefined);
+  assert.match(legacyCore, /不要再挂 receipts --wait 后台监听/);
+  const legacyHeld = { colId: 'captain', mark: MC.briefingMark(legacyCore) };
+  const file = '/b/agentdeck-captain-handoff.md';
+  for (const [name, how] of Object.entries({ 'cold restart, conversation resumed': { resumed: true }, 'reload, terminal survived': { survived: true } })) {
+    for (const seatCheckpoint of ['', file]) {
+      const h = session({ cmd: S.CLAUDE_COMMAND, briefed: legacyHeld, legacyReceiptInjection: true, seatCheckpoint, ...how });
+      assert.equal(h.api.state().legacyReceiptInjection, true, name);
+      assert.equal(h.sends.length, 1, name);
+      const text = h.sends[0].text;
+      assert.equal(text, MC.restartNotice('darwin', seatCheckpoint, true), name);
+      assert.match(text, /^AgentDeck 刚重启，你还是原来的队长/, name);
+      assert.match(text, /不要挂 receipts --wait 后台监听/, name);
+      assert.doesNotMatch(text, /重挂|没有才|恰好一个/, name + ': no listener is asked for');
+      assert.match(text, /handoff 取当前交接快照/, name); assert.match(text, /briefing 重读/, name);
+      h.sends[0].options.onSent();
+      assert.equal(h.sends.length, 1, name + ': nothing follows');
+    }
+  }
+  // the ordinary mode keeps asking for exactly one listener, restart and reload alike
+  for (const how of [{ resumed: true }, { survived: true }]) {
+    const h = session({ cmd: S.CLAUDE_COMMAND, briefed: held, ...how });
+    assert.equal(h.sends[0].text, MC.restartNotice('darwin', ''));
+    assert.match(h.sends[0].text, /回执监听先检查，没有才重挂恰好一个后台 receipts --wait。/);
+    assert.doesNotMatch(h.sends[0].text, /旧回执注入/);
+  }
+  // The mode was switched while the app was closed: the Captain holds the other mode's prompt,
+  // so it is given the prompt for the mode in force, not a notice.
+  const switchedOn = session({ cmd: S.CLAUDE_COMMAND, briefed: held, legacyReceiptInjection: true, resumed: true });
+  assert.equal(switchedOn.sends[0].text, legacyCore);
+  const switchedOff = session({ cmd: S.CLAUDE_COMMAND, briefed: legacyHeld, resumed: true });
+  assert.equal(switchedOff.sends[0].text, CORE);
+  // and a new context in the legacy mode gets the legacy core, which itself says not to start one
+  const fresh = session({ cmd: S.CLAUDE_COMMAND, briefed: legacyHeld, legacyReceiptInjection: true, resumed: false });
+  assert.equal(fresh.sends[0].text, legacyCore);
+  assert.ok(!legacyCore.includes('run_in_background: true'));
 });
 
 test('a bare shell in the Captain column is never briefed and holds nothing up', () => {
