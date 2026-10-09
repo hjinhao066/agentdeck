@@ -22,11 +22,13 @@ const defaultSay = (message) => console.log(`[e2e-auto] ${message}`);
 // waiting for another job's dependency install, 16 not enough free disk for an install).
 const INFRA_EXIT_CODES = new Set([255, 75, 10, 11, 12, 13, 14, 15, 16]);
 
-// Check if Windows PC is reachable via SSH
-function isWindowsOnline(host = 'winpc', timeoutSecs = 5) {
+// Check if Windows PC is reachable via SSH. ConnectTimeout bounds the connection; the whole
+// round trip (through a jump host, then the Windows login) measured about 6 s, so the cap on the
+// command is a separate, wider one.
+function isWindowsOnline(host = 'winpc', timeoutSecs = 5, totalSecs = 20) {
   try {
     execFileSync('ssh', ['-o', 'BatchMode=yes', '-o', `ConnectTimeout=${timeoutSecs}`, host, 'exit 0'], {
-      stdio: 'ignore', timeout: (timeoutSecs + 1) * 1000,
+      stdio: 'ignore', timeout: totalSecs * 1000,
     });
     return true;
   } catch {
