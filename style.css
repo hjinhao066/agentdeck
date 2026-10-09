@@ -274,6 +274,9 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
 .nav-brand.active { background: var(--active-bg); color: var(--text); }
 .nav-brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .nav-brand.unseen::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: var(--accent); vertical-align: 2px; }
+/* Too narrow for one row (fitNavBottom): the version gets a row of its own above the icons. */
+#navBottom.nb-stack { flex-basis: auto; flex-wrap: wrap; justify-content: space-between; padding: 6px 8px; }
+#navBottom.nb-stack .nav-brand { flex: 0 0 100%; margin: 0; text-align: left; }
 #navBottom .rail-btn { width: 28px; height: 28px; }
 #navBottom .rail-btn svg { width: 15px; height: 15px; }
 #hermesHubBtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -3328,10 +3331,12 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
    narrow for a chip beside the tools starts the chips on the next row. The tools come after the chips
    in the page (Tab reaches the chips first); an empty float as wide as the tools keeps their place. */
 .tbv-tools { position: absolute; top: 6px; right: 12px; display: flex; align-items: center; gap: 4px; height: 32px; white-space: nowrap; }
-.tbv-projects { min-width: 0; font-size: 0; line-height: 0; }
+/* Every chip keeps 6px after itself; the row lends that back at its end (-6px), so a chip that fits
+   before the tools' 10px or the bar's edge stays on the row. */
+.tbv-projects { min-width: 0; margin-right: -6px; font-size: 0; line-height: 0; }
 .tbv-projects::before { content: ''; float: right; width: var(--tbv-tools-w, 0px); height: 32px; margin-left: 10px; }
 .tbv-chip {
-  min-width: 0; max-width: 100%; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; height: 26px; margin: 3px 6px 3px 0; padding: 0 9px;
+  min-width: 0; max-width: calc(100% - 6px); box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; height: 26px; margin: 3px 6px 3px 0; padding: 0 9px;
   border: 1px solid var(--tbv-rim); border-radius: 13px; background: var(--tbv-chip); vertical-align: top;
   color: var(--tbv-ink-2); font: inherit; font-size: 12px; line-height: 18px; white-space: nowrap; cursor: pointer;
   transition: background .12s ease, border-color .12s ease, color .12s ease;

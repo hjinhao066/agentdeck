@@ -907,7 +907,7 @@ function buildChrome() {
   brand.setAttribute('aria-expanded', 'false');
   brand.classList.toggle('unseen', config.releaseNotesSeen !== env.version);
   brand.onclick = () => {
-    if (config.releaseNotesSeen !== env.version) { config.releaseNotesSeen = env.version; brand.classList.remove('unseen'); saveConfig(); }
+    if (config.releaseNotesSeen !== env.version) { config.releaseNotesSeen = env.version; brand.classList.remove('unseen'); fitNavBottom(); saveConfig(); }
     ReleaseNotesUI.toggle();
   };
   const themeBtn = railBtn(ICONS.moon, '切换主题', () => applyTheme(config.theme === 'dark' ? 'light' : 'dark'));
@@ -943,6 +943,14 @@ function fitTopBar() {
   if (bar.scrollWidth > bar.clientWidth) bar.classList.add('tb-compact');
 }
 new ResizeObserver(() => { fitTopBar(); positionQuotaDetails(); }).observe(document.getElementById('topBar'));
+// The version takes its own row above the footer icons while both do not fit on one.
+function fitNavBottom() {
+  const bottom = document.getElementById('navBottom'), brand = document.getElementById('releaseNotesBtn');
+  if (!brand || !bottom.clientWidth) return;
+  bottom.classList.remove('nb-stack');
+  if (brand.scrollWidth > brand.clientWidth || bottom.scrollWidth > bottom.clientWidth) bottom.classList.add('nb-stack');
+}
+new ResizeObserver(fitNavBottom).observe(document.getElementById('navBottom'));
 function positionQuotaPop() {
   const pop = document.getElementById('quotaPop');
   const r = document.getElementById('quotaRailBtn').getBoundingClientRect();
