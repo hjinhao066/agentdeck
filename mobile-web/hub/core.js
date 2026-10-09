@@ -251,7 +251,7 @@
         kept.push(line);
       }
       return kept.join('\n');
-    }).filter((block) => block.trim()).join('\n\n').replace(/^\n+|\s+$/g, '');
+    }).filter((block) => block.trim()).join('\n\n').replace(/^\n+/, '').trimEnd();   // not /\s+$/: quadratic on a long blank run
   }
   // The desktop saves one "turn" per injected prompt: the user's message, every
   // dispatch card, every automatic receipt delivery. They are folded back into

@@ -165,8 +165,9 @@ class TaskStore {
   mutate(run) {
     fs.mkdirSync(this.dir, { recursive: true });
     try { fs.mkdirSync(this.lock); } catch (err) { if (err.code === 'EEXIST') throw new Error('Task board is being written by another local process. Retry shortly; stale locks can be removed only after that process exits.'); throw err; }
-    fs.writeFileSync(path.join(this.lock, 'owner.json'), JSON.stringify({ pid: process.pid, created: new Date().toISOString() }));
     try {
+      // Inside the try: a failed owner record must not leave the lock behind for good.
+      fs.writeFileSync(path.join(this.lock, 'owner.json'), JSON.stringify({ pid: process.pid, created: new Date().toISOString() }));
       for (let retry = 0; retry < 3; retry++) {
         const docs = this.read();
         const result = run(docs);

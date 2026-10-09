@@ -955,6 +955,20 @@ app.whenReady().then(async () => {
   registerScheduleFeedIpc({ handleMain, dir: path.join(feedHome, '.agents', 'schedules'), home: feedHome, userData: app.getPath('userData'), env: ENV });
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
+  // What the periodic seat checks read from config.json (the 队长's idle report every
+  // status tick, the quota warm-up and seat-login checks every 30 s): parsed again only
+  // when the file changed, and only these fields are kept, not the archived sessions
+  // and task bodies around them. Readers only read it.
+  let seatView = { key: '', cfg: {} };
+  const seatViewConfig = () => {
+    let key = '';
+    try { const stat = fs.statSync(configPath); key = `${stat.ino}:${stat.size}:${stat.mtimeMs}`; } catch (_) {}
+    if (!key || key !== seatView.key) {
+      const { mainSession, activeClaudeSeatId, columns, claudeSeats, quotas, quotaWarmup: warmup, perpetualCaptain } = seatConfig();
+      seatView = { key, cfg: { mainSession: mainSession && { colId: mainSession.colId }, activeClaudeSeatId, columns, claudeSeats, quotas, quotaWarmup: warmup, perpetualCaptain } };
+    }
+    return seatView.cfg;
+  };
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, env: ENV, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
@@ -1164,11 +1178,11 @@ app.whenReady().then(async () => {
   } catch (_) {}
   const codexSeat = { id: 'codex', name: 'Codex', configDir: ENV.CODEX_HOME || '~/.codex' };
   const configuredAuthSeat = (sample) => sample.provider === 'Claude'
-    ? ClaudeSeatsCore.normalize(seatConfig().claudeSeats).find((s) => s.id === sample.seatId && s.configDir === sample.configDir)
+    ? ClaudeSeatsCore.normalize(seatViewConfig().claudeSeats).find((s) => s.id === sample.seatId && s.configDir === sample.configDir)
     : sample.provider === 'Codex' && sample.configDir === codexSeat.configDir ? codexSeat : null;
   const authSamples = () => seatAuth.samples().filter((s) => configuredAuthSeat(s));
   const queueAuthReceipts = () => {
-    const captain = seatConfig().columns?.find((c) => c.isMain);
+    const captain = seatViewConfig().columns?.find((c) => c.isMain);
     if (!captain || !boardRendererReady) return;
     for (const alert of seatAuth.pendingReceipts()) {
       if (pendingBoardCommands.has(alert.id)) continue;
@@ -1295,18 +1309,18 @@ app.whenReady().then(async () => {
   checkQuotaBark(); // A fresh low sample at launch alerts once, across relaunches too.
   let warmupCaptain = { id: '', idle: false, at: 0 };
   const idleCaptainId = () => warmupCaptain.idle && Date.now() - warmupCaptain.at <= 5000 &&
-    warmupCaptain.id === seatConfig().mainSession?.colId ? warmupCaptain.id : '';
+    warmupCaptain.id === seatViewConfig().mainSession?.colId ? warmupCaptain.id : '';
   quotaWarmupRunner = createQuotaWarmupRunner({ home: seatHome, env: ENV });
   if (tudArg) { app.testWarmupRuns = []; app.testWarmupResults = []; }
   quotaWarmup = createWarmupService({
     stateFile: path.join(app.getPath('userData'), 'quota-warmup-state.json'),
     logFile: path.join(app.getPath('userData'), 'quota-warmup.log'),
-    getSettings: () => seatConfig().quotaWarmup,
-    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatConfig().perpetualCaptain).threshold,
-    getSeats: () => ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
+    getSettings: () => seatViewConfig().quotaWarmup,
+    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatViewConfig().perpetualCaptain).threshold,
+    getSeats: () => ClaudeSeatsCore.normalize(seatViewConfig().claudeSeats),
     readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome, tudArg ? 'test' : process.platform),
-      quota: seatConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
-    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
+      quota: seatViewConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
+    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatViewConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
       tudArg ? async () => [] : undefined),
     run: tudArg ? async (seat) => {
       // Isolated UI tests can supply deterministic results from the Electron
@@ -1317,7 +1331,7 @@ app.whenReady().then(async () => {
   });
   handleMain('seats:warmup-status', () => quotaWarmup.snapshot());
   handleMain('seats:warmup-idle', (_e, { colId, idle }) => {
-    const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === colId);
+    const cfg = seatViewConfig(), col = cfg.columns?.find((c) => c.id === colId);
     if (!validId(colId) || colId !== cfg.mainSession?.colId || !col?.isMain || !ptys.has(colId) || typeof idle !== 'boolean') return false;
     const changed = warmupCaptain.id !== colId || warmupCaptain.idle !== idle;
     warmupCaptain = { id: colId, idle, at: Date.now() };
@@ -1458,7 +1472,8 @@ app.whenReady().then(async () => {
   onMain('pty:input', (_e, { id, data }) => {
     if (id === warmupCaptain.id) {
       warmupCaptain.idle = false;
-      const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === id);
+      // The seat it uses now; the cached view costs one stat per key, a parse only after a change.
+      const cfg = seatViewConfig(), col = cfg.columns?.find((c) => c.id === id);
       quotaWarmup.cancel(col?.claudeSeatId || cfg.activeClaudeSeatId);
     }
     const p = ptys.get(id); if (p) p.write(data);
@@ -1767,7 +1782,7 @@ app.whenReady().then(async () => {
       return { ok: true, status: 200, json: async () => ({ code: 200 }) };
     } } : {}) });
   if (!tudArg) {
-    claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats,
+    claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatViewConfig().claudeSeats,
       intervalMs: () => Battery.pollMs('claudeQuotaSample', power.active()), onSample: observeAuth });
     const refresh = async () => {
       await Promise.all([claudeQuotaRefresh.tick(), sampleCodex()]);
