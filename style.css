@@ -2545,7 +2545,10 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 }
 :root[data-theme="light"] .cm-viewport::before { background: radial-gradient(70% 60% at 50% -14%, rgba(255, 255, 255, .95), transparent 72%); }
 .cm-viewport.panning { cursor: grabbing; }
-.cm-canvas { position: absolute; left: 0; top: 0; z-index: 1; transform-origin: 0 0; will-change: transform; }
+/* The canvas is its own layer only while it moves (a glide, a drag, a wheel or a pinch): at rest it drops
+   will-change, so its text is drawn afresh at the scale it is shown at, sharp at 140% as at 80%. */
+.cm-canvas { position: absolute; left: 0; top: 0; z-index: 1; transform-origin: 0 0; }
+.cm-canvas.cm-smooth, .cm-viewport.panning .cm-canvas, .cm-viewport.cm-moving .cm-canvas { will-change: transform; }
 .cm-canvas.cm-smooth { transition: transform 0.32s cubic-bezier(0.2, 0.7, 0.2, 1); }
 .cm-viewport.cm-smooth { transition: background-position 0.32s cubic-bezier(0.2, 0.7, 0.2, 1), background-size 0.32s cubic-bezier(0.2, 0.7, 0.2, 1); }
 .cm-zones, .cm-edges, .cm-nodes { position: absolute; inset: 0; overflow: visible; }

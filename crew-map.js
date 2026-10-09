@@ -657,6 +657,10 @@
     if (mode !== 'crew' || !view || e.target.closest('.cm-pop')) return;
     e.preventDefault();
     hush();
+    // a layer while the wheel turns; dropped once it rests, so the text is drawn afresh at the new scale
+    vpEl.classList.add('cm-moving');
+    clearTimeout(onWheel.moving);
+    onWheel.moving = setTimeout(() => vpEl.classList.remove('cm-moving'), 200);
     const r = vpEl.getBoundingClientRect();
     // a pinch on a trackpad arrives as ctrl+wheel
     if (e.ctrlKey || e.metaKey) zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0022));
