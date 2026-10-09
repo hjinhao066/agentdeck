@@ -171,6 +171,29 @@ test('a wide character wrapped before the window grew leaves no space either: th
   }
 });
 
+// A full-screen TUI's rows are not re-wrapped when the terminal narrows: xterm keeps such a row as long as it was
+// (52 cells in a 48-column terminal, Windows probe). The live screen reads a row only as wide as the terminal is,
+// so the blank cells past the last column do not come back as spaces between two wide characters.
+test('a row longer than the terminal is now: the live screen reads it as wide as the terminal, a wrapped wide character joins without a space', () => {
+  const wideChar = (c) => /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(c);
+  // a row of `len` cells (the terminal has fewer), its text then fill to the end; translateToString as xterm's:
+  // (trimRight, startColumn, endColumn), the row's own length when no end is given
+  const row = (text, len, fill, isWrapped) => {
+    const cells = [];
+    for (const c of text) { if (wideChar(c)) cells.push([c, 2], ['', 0]); else cells.push([c, 1]); }
+    while (cells.length < len) cells.push([fill, 1]);
+    const str = (a, b) => cells.slice(a, b).map(([c, w]) => (w === 0 ? '' : c || ' ')).join('');
+    return { isWrapped, length: len, translateToString: (trim, a = 0, b = len) => (trim ? str(a, b).replace(/\s+$/, '') : str(a, b)), getCell: (x) => cells[x] && { getChars: () => cells[x][0], getWidth: () => cells[x][1] } };
+  };
+  const screen = (top, next, fill, len, cols) => ({ rows: 2, cols, buffer: { active: { baseY: 0, getLine: (y) => [row(top, len, fill, false), row(next, len, '', true)][y] } } });
+  for (const fill of [' ', '']) {
+    assert.equal(statusScreen(screen('⏺ 星图卡片深浅两套已截图，正在对', '比', fill, 52, 48)), '⏺ 星图卡片深浅两套已截图，正在对比', `fill ${JSON.stringify(fill)}`);
+    assert.match(statusScreen(screen('⏺ Running the crew map', 'tests', fill, 52, 48)), /^⏺ Running the crew map +tests$/);
+  }
+  // a row past the terminal's width is cut there, like the screen shows it
+  assert.equal(statusScreen({ rows: 1, cols: 10, buffer: { active: { baseY: 0, getLine: () => row('0123456789abcdef', 16, ' ', false) } } }), '0123456789');
+});
+
 test('quiet Codex, Claude, Gemini/agy and Cursor busy rows stay working above a tall footer', () => {
   for (const marker of busy) {
     const term = terminal([marker, ...Array(45).fill(''), '❯', 'Claude Code']);

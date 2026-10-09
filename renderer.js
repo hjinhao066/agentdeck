@@ -4039,7 +4039,8 @@ function statusScreen(term) {
   const lines = [];
   for (let y = buf.baseY; y < buf.baseY + term.rows; y++) {
     const line = buf.getLine(y);
-    const text = line ? line.translateToString(false) : '';
+    // (as wide as the terminal is: a full-screen TUI's row keeps its old length when the terminal narrows)
+    const text = line ? line.translateToString(false, 0, term.cols) : '';
     if (line?.isWrapped && lines.length) {
       // a wide character (中文) that did not fit at the end of the row above went down whole: the cell it left
       // there (empty in xterm, a space from the Windows console between two wide characters) is no space in the
