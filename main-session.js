@@ -461,7 +461,14 @@
       return { card, stranded: true };
     }
     const AV = window.AutoVerifyCore;
-    await tellSession({ to: execId, message: AV.reworkMessage({ card, findings: reject.findings }), id: AV.reworkAttemptId(id, reject.round) });
+    try {
+      await tellSession({ to: execId, message: AV.reworkMessage({ card, findings: reject.findings }), id: AV.reworkAttemptId(id, reject.round), reworkKey: reject.key });
+    } catch (error) {
+      // The card was moved after the check above: the rework is no longer wanted.
+      if (!/^自动返工已经不用发了/.test(error.message)) throw error;
+      await boardRequest('reworkDispatched', { id, key: input.key });
+      return { card, ignored: true };
+    }
     host.flushConfig?.();
     await boardRequest('reworkDispatched', { id, key: input.key });
     return { card, reworked: execId };
@@ -1288,6 +1295,8 @@
         reviews: metadata.reviews, review_round: metadata.reviewRound ?? metadata.autoReviewRound, exec_receipt: metadata.reviewReceipt,
         ...(metadata.worktree ? { worktree: metadata.worktree } : {}),
         assignee: { agent: window.BoardCore.inferAgentType(cmd), model: cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
+      // A tell took the card back to execution while this bind was on its way (tellSession).
+      if (retiredSessions.delete(id)) throw new Error('卡片已回到执行，这个审查会话不再开。');
     }
     col = host.createSession({ ...metadata, taskPrompt: text, captainTaskPrompt: text, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
     if (waiting) { waiting.boardId = metadata.boardId || ''; waiting.boardAttempt = requestId; }
@@ -2448,12 +2457,15 @@
       const takeBack = !!card && !reviewer && (card.status === 'done' || card.archived || card.flag === 'held' || card.status === 'review' || card.review_session === true);
       if (card && (takeBack || (card.attempt_closed || !card.session_id) && (!restored || card.status === 'doing' && card.flag !== 'held'))) {
         const bound = await boardRequest('bind', { id: card.id, project: card.project, session_id: col.id, attempt_id: message.id, ...(reviewer ? {} : { tell: true }),
+          ...(message.reworkKey ? { rework_key: message.reworkKey } : {}),
           assignee: { agent: window.BoardCore.inferAgentType(col.cmd), model: col.cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
         col.boardAttempt = message.id;
         // The card is already this session's: the instruction still goes in if ending fails.
+        // A reviewer bound a moment ago may have no terminal yet: openSession then never makes one.
         if (bound?.replaced_session) {
           try { replaced = await endSession(bound.replaced_session, { archive: true, summary: '卡片回到执行，这个审查会话已结束并归档。' }); }
           catch (error) { replaced = { error, id: bound.replaced_session }; }
+          if (!replaced && !(host.config.archived || []).some((a) => a.id === bound.replaced_session)) retiredSessions.add(bound.replaced_session);
         }
       }
     }
@@ -2510,6 +2522,8 @@
   }
   // In-flight only. A saved settling flag must not survive tell, archive, or restart.
   const settlingIds = new Set();
+  // Reviewers a tell replaced before openSession had made their terminal.
+  const retiredSessions = new Set();
   // Archive already stopped the terminal. Remove the copy only when it is clean
   // and the branch is on the trunk or a remote; otherwise keep it and say why.
   async function settleArchivedWorktree(col) {

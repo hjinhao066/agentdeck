@@ -53,6 +53,7 @@ function priorityLevel(value) {
   if (!PRIORITIES.includes(value)) throw new Error('priority must be high or normal.');
   return value;
 }
+const STALE_REWORK = '自动返工已经不用发了：卡片在这期间被移动过。';
 function touch(card) { card.updated = new Date(Math.max(Date.now(), (Date.parse(card.updated) || 0) + 1)).toISOString(); }
 function newCard(input, now = new Date().toISOString()) {
   const project = projectName(input.project);
@@ -275,41 +276,42 @@ class TaskStore {
     card.flag = card.consecutive_failures >= 2 ? 'held' : 'failed';
     card.latest_receipt = sentence(reason);
   }
-  // tellFrom (bind only, never from IPC): a Captain tell took this done, archived or
-  // held card back to doing. The failure count stays, so the hold still counts.
-  move(input, tellFrom = '') {
+  move(input) {
     if (!STATUSES.includes(input.status)) throw new Error('Invalid status.');
-    return this.mutate((docs) => {
-      const card = this.find(docs, input.id);
-      if (input.updated !== undefined && input.updated !== card.updated) throw new Error('Card changed since it was read. Reload before editing.');
-      const wasReview = card.status === 'review';
-      const wasHeld = card.flag === 'held';
-      if (input.status === 'doing') {
-        if (card.depends_on.some((id) => this.find(docs, id).status !== 'done')) throw new Error('Predecessor cards are not all done.');
-        if (wasReview) this.failure(card, card.review_round && card.exec_receipt ? AutoVerify.reviewAttemptId(card.id, card.review_round) : 'reject-' + (card.attempt_id || card.updated), '验收不通过，已打回返工', true);
-        else { card.flag = null; if (wasHeld && !tellFrom) card.consecutive_failures = 0; }
-      } else card.flag = null;
-      card.status = input.status;
-      if (tellFrom) { card.last_auto_recovered_at = new Date().toISOString(); card.last_auto_recovered_from = tellFrom; }
-      if (wasHeld && input.status === 'todo') card.consecutive_failures = 0;
-      if (input.status === 'done') card.consecutive_failures = 0;
-      // Keep unarchived sessions as an occupancy fence, including a finished
-      // worker which the Captain may tell to rework. A reviewer rejection ends
-      // its old attempt, so late receipts cannot undo the rejection.
-      const sessions = this.sessions();
-      if (input.status !== 'doing' || !this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at)) { card.session_id = null; card.attempt_id = null; card.session_host = null; card.session_bound_at = null; }
-      if (input.status !== 'doing' || !this.sessionOpen(card.dispatch_session_id, false, sessions, card.dispatch_host, card.dispatch_bound_at)) { card.dispatch_session_id = null; card.dispatch_host = null; card.dispatch_bound_at = null; }
-      if (wasReview && input.status === 'doing') { card.attempt_id = null; card.attempt_closed = true; }
-      card.archived = false; card.resource_failure = null; card.dispatch_wait = null;
-      if (input.status !== 'doing') card.dispatch_claim = null;
-      // A move is a Captain/user decision: it replaces any pending automatic rework or block.
-      if (card.review_block) card.review_block = null;
-      if (card.review_reject) card.review_reject.delivered = true;
-      // CLI moves are Captain decisions, not requests for an automatic model.
-      if (input.suppressDispatch && input.status === 'doing') card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: true, created: new Date().toISOString() };
-      finishStatus(card);
-      return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
-    });
+    return this.mutate((docs) => this.moveCard(docs, this.find(docs, input.id), input));
+  }
+  // The body of move, inside a write that is already open. tellFrom (bind only): a
+  // Captain tell took this done, archived or held card back to doing; the failure
+  // count stays, so the hold still counts.
+  moveCard(docs, card, input, tellFrom = '') {
+    if (input.updated !== undefined && input.updated !== card.updated) throw new Error('Card changed since it was read. Reload before editing.');
+    const wasReview = card.status === 'review';
+    const wasHeld = card.flag === 'held';
+    if (input.status === 'doing') {
+      if (card.depends_on.some((id) => this.find(docs, id).status !== 'done')) throw new Error('Predecessor cards are not all done.');
+      if (wasReview) this.failure(card, card.review_round && card.exec_receipt ? AutoVerify.reviewAttemptId(card.id, card.review_round) : 'reject-' + (card.attempt_id || card.updated), '验收不通过，已打回返工', true);
+      else { card.flag = null; if (wasHeld && !tellFrom) card.consecutive_failures = 0; }
+    } else card.flag = null;
+    card.status = input.status;
+    if (tellFrom) { card.last_auto_recovered_at = new Date().toISOString(); card.last_auto_recovered_from = tellFrom; }
+    if (wasHeld && input.status === 'todo') card.consecutive_failures = 0;
+    if (input.status === 'done') card.consecutive_failures = 0;
+    // Keep unarchived sessions as an occupancy fence, including a finished
+    // worker which the Captain may tell to rework. A reviewer rejection ends
+    // its old attempt, so late receipts cannot undo the rejection.
+    const sessions = this.sessions();
+    if (input.status !== 'doing' || !this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at)) { card.session_id = null; card.attempt_id = null; card.session_host = null; card.session_bound_at = null; }
+    if (input.status !== 'doing' || !this.sessionOpen(card.dispatch_session_id, false, sessions, card.dispatch_host, card.dispatch_bound_at)) { card.dispatch_session_id = null; card.dispatch_host = null; card.dispatch_bound_at = null; }
+    if (wasReview && input.status === 'doing') { card.attempt_id = null; card.attempt_closed = true; }
+    card.archived = false; card.resource_failure = null; card.dispatch_wait = null;
+    if (input.status !== 'doing') card.dispatch_claim = null;
+    // A move is a Captain/user decision: it replaces any pending automatic rework or block.
+    if (card.review_block) card.review_block = null;
+    if (card.review_reject) card.review_reject.delivered = true;
+    // CLI moves are Captain decisions, not requests for an automatic model.
+    if (input.suppressDispatch && input.status === 'doing') card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: true, created: new Date().toISOString() };
+    finishStatus(card);
+    return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
   }
   noteWorktree(input) {
     return this.mutate((docs) => {
@@ -380,19 +382,21 @@ class TaskStore {
   }
   // tell: the Captain told this session to carry on (main-tell, automatic rework). That
   // is an explicit decision to work on: a done, archived or held card goes back to doing
-  // first, a card waiting for review goes back to execution instead of making its own
-  // worker the reviewer, and a reviewer still bound to the card is replaced. The result
-  // names that reviewer (replaced_session) so the caller ends its terminal.
+  // first (in the same write: a bind that fails leaves the card as it was), a card
+  // waiting for review goes back to execution instead of making its own worker the
+  // reviewer, and a reviewer still bound to the card is replaced. The result names that
+  // reviewer (replaced_session) so the caller ends its terminal.
   bind(input) {
     idValue(input.session_id); idValue(input.attempt_id);
-    if (input.tell === true) {
-      const card = this.list({ archived: true }).find((c) => c.id === input.id);
-      if (card && (card.archived || card.flag === 'held' || card.status === 'done')) {
-        this.move({ id: input.id, status: 'doing', suppressDispatch: true }, card.archived ? 'archived' : card.flag === 'held' ? 'held' : 'done');
-      }
-    }
     return this.mutate((docs) => {
-      const card = this.find(docs, input.id); this.ready(docs, card);
+      const card = this.find(docs, input.id);
+      // An automatic rework names the rejection it delivers: once the card was moved
+      // (by the user or the Captain) that rejection is no longer waiting.
+      if (input.rework_key !== undefined && (card.review_reject?.key !== input.rework_key || card.review_reject.delivered)) throw new Error(STALE_REWORK);
+      if (input.tell === true && (card.archived || card.flag === 'held' || card.status === 'done')) {
+        this.moveCard(docs, card, { status: 'doing', suppressDispatch: true }, card.archived ? 'archived' : card.flag === 'held' ? 'held' : 'done');
+      }
+      this.ready(docs, card);
       if (input.project && !sameProject(input.project, card.project)) throw new Error('--project differs from the card project.');
       if (card.attempt_id === input.attempt_id) {
         if (input.worktree) { card.worktree = Worktree.normalizeRecord(input.worktree); touch(card); }

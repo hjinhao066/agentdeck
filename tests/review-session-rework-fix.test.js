@@ -38,7 +38,12 @@ function world(t) {
   const window = {
     deck: {
       onTaskStart() {}, onTaskReview() {}, onTaskRework(cb) { hooks.rework = cb; }, onTasksChanged() {},
-      taskBoard: (op, input) => Promise.resolve().then(() => store[op](input)),
+      taskBoard: (op, input) => Promise.resolve().then(() => {
+        if (op === 'bind') hooks.beforeBind?.(input);
+        const result = store[op](input);
+        const held = op === 'bind' && hooks.holdBind?.(input);
+        return held ? held.then(() => result) : result;
+      }),
       memoryPressure: async () => ({ level: null }), saveLongPrompt: async () => '', saveConfigSync() {},
       restartManifestLoad: () => null, restartManifestSave() {}, ptyInput() {},
       claudeSeats: async () => ClaudeSeatsCore.normalize().map((seat) => ({ id: seat.id, loggedIn: true })),
@@ -54,6 +59,11 @@ function world(t) {
     config, platform: 'darwin', terms: entries, userComposing: () => false, columnLabel: (c) => c.title || c.id,
     saveConfig() {}, flushConfig() {}, showToast() {}, columns: () => columns,
     agentInForeground: async () => true,
+    createSession(meta) {
+      const col = { ...meta, createdByRequestId: null };
+      columns.push(col); entries.set(col.id, { alive: true, state: 'done', lastScreen: '' });
+      return col;
+    },
     archiveColumn(col, opts) {
       ended.push({ id: col.id, captain: !!opts?.captain });
       config.archived = [{ ...col, archivedAt: Date.now() }, ...config.archived.filter((a) => a.id !== col.id)];
@@ -92,6 +102,7 @@ function world(t) {
     reviewed,
     card: (id) => store.list({ archived: true }).find((c) => c.id === id),
     tell: (to, message, id = 'tell-' + Math.random().toString(36).slice(2)) => window.MainSession.handle({ action: 'main-tell', to, message, id }, columns.find((c) => c.isMain)),
+    newReviewer: (cardId, id) => window.MainSession.handle({ action: 'main-new', id, title: '重开审查', task: '独立审查', boardId: cardId, project: 'demo', reviews: ['exec'], command: CODEX }, columns.find((c) => c.isMain)),
     move: (id, status) => window.MainSession.handle({ action: 'main-task', op: 'move', input: { id, status } }, columns.find((c) => c.isMain)),
   };
 }
@@ -135,6 +146,19 @@ test('automatic rework after 不通过 ends the finished reviewer and opens the 
   assert.match(w.sent[0].text, /测试没跑/);
 });
 
+test('an automatic rework overtaken by the user (card moved to done meanwhile) is not sent and does not reopen the card', async (t) => {
+  const w = world(t);
+  const { id, attempt } = w.reviewed({ reviewerWorking: false });
+  w.store.event({ id, type: 'complete', message: '不通过：测试没跑。', attempt_id: attempt, session_id: 'rev', source: 'command' });
+  // The user's move lands between the rework's check of the card and its bind.
+  w.hooks.beforeBind = (input) => { if (String(input.attempt_id).startsWith('auto-rework-')) w.store.move({ id, status: 'done' }); };
+  w.hooks.rework({ id, key: w.card(id).review_reject.key });
+  await flush(60);
+  assert.equal(w.card(id).status, 'done');
+  assert.equal(w.card(id).last_auto_recovered_at, undefined);
+  assert.deepEqual(w.sent, []);
+});
+
 test('after the Captain moves the card back to doing, the next tell ends the reviewer that is still running', async (t) => {
   const w = world(t);
   const { id } = w.reviewed();
@@ -162,6 +186,28 @@ test('a card waiting for its reviewer goes back to execution on a tell, instead 
   const done = w.store.event({ id: card.id, type: 'complete', message: '补好了。', attempt_id: now.attempt_id, session_id: 'exec', source: 'command' }).card;
   assert.equal(done.status, 'review');
   assert.equal(done.review_round, 2);
+});
+
+test('a reviewer replaced while its terminal was still opening never starts', async (t) => {
+  const w = world(t);
+  const card = w.store.add({ project: 'demo', title: '等审查', detail: '照做', verify: true }).card;
+  w.store.bind({ id: card.id, session_id: 'exec', attempt_id: 'a1', assignee: { agent: 'Claude', model: 'claude-opus-5-5' } });
+  w.store.event({ id: card.id, type: 'complete', message: '做完了。', attempt_id: 'a1', session_id: 'exec', source: 'command' });
+  w.columns.push({ id: 'exec', title: '执行', cmd: CLAUDE, captainCrew: true, boardId: card.id, boardAttempt: 'a1', reviews: [] });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  w.hooks.holdBind = (input) => (input.attempt_id === 'manual-review' ? gate : null);
+  const opening = w.newReviewer(card.id, 'manual-review').catch((error) => error);
+  await flush();
+  assert.equal(w.card(card.id).review_session, true, 'the reviewer is bound, its terminal not created yet');
+  await w.tell('exec', '补充：还差一个测试');
+  release();
+  await opening; await flush(60);
+  assert.equal(w.columns.some((c) => c.boardAttempt === 'manual-review'), false, 'the replaced reviewer never opened');
+  assert.deepEqual(w.sent.map((x) => x.to), ['exec']);
+  const now = w.card(card.id);
+  assert.equal(now.session_id, 'exec');
+  assert.equal(now.review_session, false);
 });
 
 test('a tell to the reviewer itself neither ends it nor takes the card back', async (t) => {
@@ -246,4 +292,27 @@ test('a tell bind replaces the bound reviewer and names it; a manual reviewer bi
   const manual = b.s.bind({ id: legacy.id, session_id: 'manual-reviewer', attempt_id: 'm1', assignee: b.assignee });
   assert.equal(manual.card.review_session, true);
   assert.equal(manual.replaced_session, undefined);
+});
+
+test('a tell that cannot bind leaves a done, archived or held card exactly as it was', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-tell-atomic-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Another live session is still working on the card, so the bind is refused.
+  const sessions = [{ id: 'other', active: true }];
+  const s = new TaskStore(path.join(root, 'tasks'), { sessions: () => sessions });
+  const assignee = { agent: 'Claude', model: 'claude-opus-5-5' };
+  for (const end of ['done', 'archived', 'held']) {
+    const card = s.add({ project: 'demo', title: end, detail: '照做' }).card;
+    if (end === 'held') {
+      s.bind({ id: card.id, session_id: 'exec', attempt_id: 'f1', assignee }); s.event({ id: card.id, type: 'failed', message: '挂了', attempt_id: 'f1', session_id: 'exec', source: 'command' });
+      s.bind({ id: card.id, session_id: 'exec', attempt_id: 'f2', assignee }); s.event({ id: card.id, type: 'failed', message: '又挂', attempt_id: 'f2', session_id: 'exec', source: 'command' });
+    } else {
+      s.bind({ id: card.id, session_id: 'exec', attempt_id: 'a1', assignee }); s.event({ id: card.id, type: 'complete', message: '做完了。', attempt_id: 'a1', session_id: 'exec', source: 'command' });
+      if (end === 'archived') s.archive({ done: true, project: 'demo' });
+    }
+    sessions[0].boardId = card.id;
+    const before = s.list({ archived: true }).find((c) => c.id === card.id);
+    assert.throws(() => s.bind({ id: card.id, session_id: 'exec', attempt_id: 'tell', assignee, tell: true }), /active execution/, end);
+    assert.deepEqual(s.list({ archived: true }).find((c) => c.id === card.id), before, end);
+  }
 });
