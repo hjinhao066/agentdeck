@@ -131,16 +131,23 @@ function terminal(lines, baseY = 0, rows = lines.length - baseY) {
 }
 
 // The live screen joins a wrapped row back onto the row above. A wide character (中文) that did not fit in
-// the last column went down whole, and xterm leaves that last cell empty: no space in the text. A real space
-// that ended the row above stays.
+// the last column went down whole; the cell it left there is no space in the text: xterm leaves it empty, the
+// Windows console writes a space into it (between two wide characters). Any other space ending the row stays.
 test('a wide character wrapped whole to the next row leaves no space in the live screen; a real space stays', () => {
-  const cell = (chars) => ({ getChars: () => chars, getWidth: () => 1 });
-  const wrapped = (top, last, next) => ({ rows: 2, cols: 21, buffer: { active: { baseY: 0, getLine: (y) => [
-    { isWrapped: false, translateToString: () => top, getCell: (x) => (x === 20 ? cell(last) : cell('x')) },
-    { isWrapped: true, translateToString: () => next, getCell: () => cell('') },
+  // cells: [chars, width] for the last two cells of the row above and the first of the row below (21 columns)
+  const cell = ([chars, width]) => ({ getChars: () => chars, getWidth: () => width });
+  const wrapped = (top, [beforeLast, last], next, first) => ({ rows: 2, cols: 21, buffer: { active: { baseY: 0, getLine: (y) => [
+    { isWrapped: false, translateToString: () => top, getCell: (x) => cell(x === 20 ? last : x === 19 ? beforeLast : ['x', 1]) },
+    { isWrapped: true, translateToString: () => next, getCell: (x) => cell(x === 0 ? first : ['x', 1]) },
   ][y] } } });
-  assert.equal(statusScreen(wrapped('⏺ 星图卡片深浅两套已截图，正在对 ', '', '比')), '⏺ 星图卡片深浅两套已截图，正在对比');
-  assert.equal(statusScreen(wrapped('⏺ Running the crew map ', ' ', 'tests')), '⏺ Running the crew map tests');
+  const wide = ['', 0], head = ['比', 2];
+  // xterm: the last cell left empty
+  assert.equal(statusScreen(wrapped('⏺ 星图卡片深浅两套已截图，正在对 ', [wide, ['', 1]], '比', head)), '⏺ 星图卡片深浅两套已截图，正在对比');
+  // the Windows console: a space between two wide characters
+  assert.equal(statusScreen(wrapped('⏺ 星图卡片深浅两套已截图，正在对 ', [wide, [' ', 1]], '比', head)), '⏺ 星图卡片深浅两套已截图，正在对比');
+  // a space after a word, or before one, is the text's own
+  assert.equal(statusScreen(wrapped('⏺ Running the crew map ', [['p', 1], [' ', 1]], 'tests', ['t', 1])), '⏺ Running the crew map tests');
+  assert.equal(statusScreen(wrapped('⏺ 星图卡片深浅两套已截图，正在跑 ', [wide, [' ', 1]], 'tests', ['t', 1])), '⏺ 星图卡片深浅两套已截图，正在跑 tests');
 });
 
 test('quiet Codex, Claude, Gemini/agy and Cursor busy rows stay working above a tall footer', () => {

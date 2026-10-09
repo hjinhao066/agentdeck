@@ -3911,10 +3911,13 @@ function statusScreen(term) {
     const line = buf.getLine(y);
     const text = line ? line.translateToString(false) : '';
     if (line?.isWrapped && lines.length) {
-      // a wide character (中文) that did not fit at the end of the row above went down whole: the cell it
-      // left empty there is no space in the text
-      const last = buf.getLine(y - 1)?.getCell?.(term.cols - 1);
-      if (last && last.getChars() === '' && last.getWidth() === 1) lines[lines.length - 1] = lines[lines.length - 1].slice(0, -1);
+      // a wide character (中文) that did not fit at the end of the row above went down whole: the cell it left
+      // there (empty in xterm, a space from the Windows console between two wide characters) is no space in the text
+      const above = buf.getLine(y - 1), last = above?.getCell?.(term.cols - 1);
+      if (last && last.getWidth() === 1 && (last.getChars() === '' ||
+          (last.getChars() === ' ' && above.getCell(term.cols - 2)?.getWidth() === 0 && line.getCell(0)?.getWidth() === 2))) {
+        lines[lines.length - 1] = lines[lines.length - 1].slice(0, -1);
+      }
       lines[lines.length - 1] += text;
     } else lines.push(text);
   }
