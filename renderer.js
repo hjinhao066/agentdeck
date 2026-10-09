@@ -3912,10 +3912,17 @@ function statusScreen(term) {
     const text = line ? line.translateToString(false) : '';
     if (line?.isWrapped && lines.length) {
       // a wide character (中文) that did not fit at the end of the row above went down whole: the cell it left
-      // there (empty in xterm, a space from the Windows console between two wide characters) is no space in the text
+      // there (empty in xterm, a space from the Windows console between two wide characters) is no space in the
+      // text; nor are the blank cells after it once the window has grown since (the console paints spaces to the
+      // new last column, xterm leaves them empty)
       const above = buf.getLine(y - 1), last = above?.getCell?.(term.cols - 1);
-      if (last && last.getWidth() === 1 && (last.getChars() === '' ||
-          (last.getChars() === ' ' && above.getCell(term.cols - 2)?.getWidth() === 0 && line.getCell(0)?.getWidth() === 2))) {
+      const blank = (c) => !!c && c.getWidth() === 1 && (c.getChars() === '' || c.getChars() === ' ');
+      let x = term.cols - 1;
+      while (x > 0 && blank(above?.getCell?.(x))) x--;
+      const run = term.cols - 1 - x;
+      if (run && above?.getCell?.(x)?.getWidth() === 0 && line.getCell?.(0)?.getWidth() === 2) {
+        lines[lines.length - 1] = lines[lines.length - 1].slice(0, -run);
+      } else if (last && last.getWidth() === 1 && last.getChars() === '') {
         lines[lines.length - 1] = lines[lines.length - 1].slice(0, -1);
       }
       lines[lines.length - 1] += text;

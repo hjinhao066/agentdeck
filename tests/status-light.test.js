@@ -150,6 +150,27 @@ test('a wide character wrapped whole to the next row leaves no space in the live
   assert.equal(statusScreen(wrapped('⏺ 星图卡片深浅两套已截图，正在跑 ', [wide, [' ', 1]], 'tests', ['t', 1])), '⏺ 星图卡片深浅两套已截图，正在跑 tests');
 });
 
+// The row a wide character went down from, once the window has grown: the Windows console paints it again with
+// spaces to the new last column (so the row below stays wrapped), xterm leaves the new cells empty. Between two
+// wide characters that whole run is no space; anywhere else the text keeps its space.
+test('a wide character wrapped before the window grew leaves no space either: the run of blank cells after it is padding', () => {
+  const wideChar = (c) => /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(c);
+  // a row of cols cells from its text, then fill ('' empty or ' ' a space) to the last column
+  const row = (text, cols, fill, isWrapped) => {
+    const cells = [];
+    for (const c of text) { if (wideChar(c)) cells.push([c, 2], ['', 0]); else cells.push([c, 1]); }
+    while (cells.length < cols) cells.push([fill, 1]);
+    return { isWrapped, translateToString: () => cells.map(([c, w]) => (w === 0 ? '' : c || ' ')).join(''), getCell: (x) => cells[x] && { getChars: () => cells[x][0], getWidth: () => cells[x][1] } };
+  };
+  const screen = (top, next, fill, cols = 48) => ({ rows: 2, cols, buffer: { active: { baseY: 0, getLine: (y) => [row(top, cols, fill, false), row(next, cols, '', true)][y] } } });
+  for (const fill of [' ', '']) {
+    assert.equal(statusScreen(screen('⏺ 星图卡片深浅两套已截图，正在对', '比', fill)), '⏺ 星图卡片深浅两套已截图，正在对比', `fill ${JSON.stringify(fill)}`);
+    // a word, or a wide character before a word: the space stays
+    assert.match(statusScreen(screen('⏺ Running the crew map', 'tests', fill)), /^⏺ Running the crew map +tests$/);
+    assert.match(statusScreen(screen('⏺ 星图卡片深浅两套已截图，正在跑', 'tests', fill)), /^⏺ 星图卡片深浅两套已截图，正在跑 +tests$/);
+  }
+});
+
 test('quiet Codex, Claude, Gemini/agy and Cursor busy rows stay working above a tall footer', () => {
   for (const marker of busy) {
     const term = terminal([marker, ...Array(45).fill(''), '❯', 'Claude Code']);
