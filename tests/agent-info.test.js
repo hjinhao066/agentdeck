@@ -343,3 +343,17 @@ test('Claude sidebar identity carries the pinned seat; Cursor Opus remains Curso
   assert.equal(AgentInfo.iconProviderFor('Flash 3.8', 'Cursor'), 'Antigravity');
   assert.equal(AgentInfo.iconProviderFor('Fake', 'Claude'), 'Claude');
 });
+
+test('dated model ids keep the real version, not the 8-digit date', () => {
+  assert.equal(AgentInfo.shortModelName('claude-sonnet-4-20250514'), 'Sonnet 4');
+  assert.equal(AgentInfo.shortModelName('claude-opus-4-20250514'), 'Opus 4');
+  assert.equal(AgentInfo.shortModelName('grok-4-0709'), 'Grok 4');
+  assert.equal(AgentInfo.shortModelName('claude-opus-4-1-20250805'), 'Opus 4.1');
+  assert.equal(AgentInfo.shortModelName('claude-sonnet-4-5-20250929'), 'Sonnet 4.5');
+  assert.equal(AgentInfo.shortModelName('claude-haiku-4-5-20251001'), 'Haiku 4.5');
+  assert.equal(AgentInfo.shortModelName('claude-opus-5-5'), 'Opus 5.5');
+  assert.equal(AgentInfo.shortModelName('claude-sonnet-4-6'), 'Sonnet 4.6');
+  const info = AgentInfo.resolveAgentInfo({ cmd: 'claude --model claude-sonnet-4-20250514' }, null, '');
+  assert.equal(info.shortModel, 'Sonnet 4');
+  assert.equal(info.tooltip, 'Claude · Claude Sonnet 4');
+});

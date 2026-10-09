@@ -149,16 +149,16 @@
     str = str.replace(/[-_]thinking$/i, '');
 
     // Claude / Opus / Sonnet / Haiku
-    let m = str.match(/opus[- ]?(\d+)[-.](\d+)/i);
-    if (m) return `Opus ${m[1]}.${m[2]}`;
-    m = str.match(/sonnet[- ]?(\d+)[-.](\d+)/i);
-    if (m) return `Sonnet ${m[1]}.${m[2]}`;
+    let m = str.match(/opus[- ]?(\d{1,2})(?:[-.](\d{1,2}))?(?!\d)/i);
+    if (m) return `Opus ${m[1]}${m[2] ? '.' + m[2] : ''}`;
+    m = str.match(/sonnet[- ]?(\d{1,2})(?:[-.](\d{1,2}))?(?!\d)/i);
+    if (m) return `Sonnet ${m[1]}${m[2] ? '.' + m[2] : ''}`;
     m = str.match(/(?:claude[- ])?(\d+)[-.](\d+)[- ]?sonnet/i);
     if (m) return `Sonnet ${m[1]}.${m[2]}`;
     m = str.match(/(?:claude[- ])?(\d+)[-.](\d+)[- ]?opus/i);
     if (m) return `Opus ${m[1]}.${m[2]}`;
-    m = str.match(/haiku[- ]?(\d+)[-.](\d+)/i);
-    if (m) return `Haiku ${m[1]}.${m[2]}`;
+    m = str.match(/haiku[- ]?(\d{1,2})(?:[-.](\d{1,2}))?(?!\d)/i);
+    if (m) return `Haiku ${m[1]}${m[2] ? '.' + m[2] : ''}`;
     m = str.match(/(?:claude[- ])?(\d+)[-.](\d+)[- ]?haiku/i);
     if (m) return `Haiku ${m[1]}.${m[2]}`;
 
@@ -175,8 +175,8 @@
     if (m) return `Gemini ${m[1]}.${m[2]}`;
 
     // Grok
-    m = str.match(/grok[- ]?(\d+)[-.](\d+)/i);
-    if (m) return `Grok ${m[1]}.${m[2]}`;
+    m = str.match(/grok[- ]?(\d{1,2})(?:[-.](\d{1,2}))?(?!\d)/i);
+    if (m) return `Grok ${m[1]}${m[2] ? '.' + m[2] : ''}`;
     if (/^grok/i.test(str)) return 'Grok';
 
     // OpenAI / Codex / o1 / o3
