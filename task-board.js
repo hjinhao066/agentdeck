@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const { resourceFailure } = require('./main-core');
 const AutoVerify = require('./auto-verify-core');
 const Worktree = require('./worktree-core');
@@ -162,25 +163,77 @@ class TaskStore {
       fs.renameSync(tmp, file);
     } finally { if (fd !== undefined) fs.closeSync(fd); if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
   }
-  tryRecoverLock() {
-    if (!fs.existsSync(this.lock)) return;
-    const ownerFile = path.join(this.lock, 'owner.json');
-    if (!fs.existsSync(ownerFile)) { fs.rmSync(this.lock, { recursive: true, force: true }); return; }
-    let owner;
-    try { owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8')); } catch (_) { fs.rmSync(this.lock, { recursive: true, force: true }); return; }
-    const createdTime = new Date(owner.created).getTime();
-    const now = Date.now();
-    const LOCK_TIMEOUT = 5 * 60 * 1000;
-    if (now - createdTime > LOCK_TIMEOUT) { fs.rmSync(this.lock, { recursive: true, force: true }); return; }
-    if (typeof owner.pid === 'number') {
-      try { process.kill(owner.pid, 0); } catch (err) { if (err.code === 'ESRCH') fs.rmSync(this.lock, { recursive: true, force: true }); }
+  // The lock is a directory: making it is atomic on every platform. Its owner
+  // record names the process, and writing that record exclusively ('wx') is what
+  // makes the lock ours, so a lock is never shared even if its directory is moved
+  // aside and made again while a writer is between the two steps.
+  lockBusy() { return new Error(`Task board is being written by another local process. Retry shortly; a lock whose process has exited is taken over automatically (${this.lock}).`); }
+  acquireLock() {
+    try { fs.mkdirSync(this.lock); } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      if (!this.reapLock()) throw this.lockBusy();
+      try { fs.mkdirSync(this.lock); } catch (again) { if (again.code === 'EEXIST') throw this.lockBusy(); throw again; }
     }
+    try { fs.writeFileSync(path.join(this.lock, 'owner.json'), JSON.stringify({ pid: process.pid, host: os.hostname(), created: new Date().toISOString() }), { flag: 'wx' }); }
+    catch (_) { throw this.lockBusy(); }
+  }
+  // Takes over a lock only when its owner process has exited (a crash mid-write).
+  // A live writer keeps its lock however long it holds it; a lock whose owner
+  // cannot be read (being made right now, or damaged) is never touched.
+  reapLock() {
+    let raw, owner;
+    try { raw = fs.readFileSync(path.join(this.lock, 'owner.json'), 'utf8'); owner = JSON.parse(raw); } catch (_) { return false; }
+    if (!owner || !Number.isInteger(owner.pid) || owner.pid <= 0 || !Number.isFinite(Date.parse(owner.created)) || this.ownerAlive(owner)) return false;
+    // Moved aside under a name fixed by that owner record, never deleted in place:
+    // of two processes acting on the same dead owner only one can move it, and the
+    // name stays taken so a lock made meanwhile by a new writer is never moved.
+    const grave = this.lock + '.stale-' + crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16);
+    try { fs.renameSync(this.lock, grave); } catch (_) { return false; }
+    let moved = null;
+    try { moved = fs.readFileSync(path.join(grave, 'owner.json'), 'utf8'); } catch (_) { /* compared below */ }
+    if (moved !== raw) {
+      // Not the lock that was judged (its record was cleared away long ago): put it back.
+      try { fs.renameSync(grave, this.lock); } catch (_) { /* A new lock already took the place; leave both alone. */ }
+      return false;
+    }
+    const now = new Date();
+    fs.utimesSync(grave, now, now);
+    const prefix = path.basename(this.lock) + '.stale-';
+    for (const name of fs.readdirSync(path.dirname(this.lock))) {
+      const old = path.join(path.dirname(this.lock), name);
+      try { if (name.startsWith(prefix) && old !== grave && now - fs.statSync(old).mtimeMs > 3600_000) fs.rmSync(old, { recursive: true, force: true }); } catch (_) { /* Another process cleared it. */ }
+    }
+    return true;
+  }
+  ownerAlive(owner) {
+    // The lock lives in this computer's temp folder; a record naming another host is not ours to judge.
+    if (owner.host !== undefined && owner.host !== os.hostname()) return true;
+    // Signal 0 only asks: ESRCH is gone (Windows too); EPERM is someone else's live process.
+    try { process.kill(owner.pid, 0); } catch (err) { return err.code !== 'ESRCH'; }
+    // A recent lock is in use. An older one may name a reused pid: its owner was
+    // already running when it wrote the record, a process started later is not it.
+    const created = Date.parse(owner.created);
+    if (Date.now() - created < 10_000) return true;
+    return !(this.processStart(owner.pid) > created + 2000);
+  }
+  // When a process started (ms), NaN when it cannot be read.
+  processStart(pid) {
+    try {
+      if (process.platform === 'win32') {
+        const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`], { encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        return Date.parse(out.trim());
+      }
+      // Elapsed time [[dd-]hh:]mm:ss works on macOS and Linux alike.
+      const out = execFileSync('ps', ['-o', 'etime=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      const match = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/.exec(out);
+      if (!match) return NaN;
+      const [, days = 0, hours = 0, minutes, seconds] = match;
+      return Date.now() - (((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000;
+    } catch (_) { return NaN; }
   }
   mutate(run) {
     fs.mkdirSync(this.dir, { recursive: true });
-    this.tryRecoverLock();
-    try { fs.mkdirSync(this.lock); } catch (err) { if (err.code === 'EEXIST') throw new Error('Task board is being written by another local process. Retry shortly; stale locks can be removed only after that process exits.'); throw err; }
-    fs.writeFileSync(path.join(this.lock, 'owner.json'), JSON.stringify({ pid: process.pid, created: new Date().toISOString() }));
+    this.acquireLock();
     try {
       for (let retry = 0; retry < 3; retry++) {
         const docs = this.read();
