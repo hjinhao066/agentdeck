@@ -88,7 +88,9 @@ async function launch(cards = CREW) {
   // (a busy machine can take well over five seconds to bring the page up)
   await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart), { timeout: 30000 }).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 30000 }).toBe(columnsIn(crew) + 1);
-  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code|OpenAI Codex/.test(t.lastScreen || '')).length), { timeout: 150000 }).toBe(columnsIn(crew) + 1);
+  // (a terminal that has not drawn its agent yet is named with the last rows it shows)
+  await expect.poll(() => page.evaluate(() => [...terms].filter(([, t]) => !/Claude Code|OpenAI Codex/.test(t.lastScreen || ''))
+    .map(([id, t]) => `${id}: ${(t.lastScreen || '').trim().split('\n').slice(-4).join(' / ')}`)), { timeout: 150000 }).toEqual([]);
 }
 test.afterEach(async () => {
   if (application) await closeElectron(application);

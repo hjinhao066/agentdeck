@@ -63,7 +63,9 @@ async function launch(crew) {
   page.on('pageerror', (e) => errors.push(e.message));
   await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart)).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(crew.length + 1);
-  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 120000 }).toBe(crew.length + 1);
+  // (a terminal that has not drawn its agent yet is named with the last rows it shows)
+  await expect.poll(() => page.evaluate(() => [...terms].filter(([, t]) => !/Claude Code/.test(t.lastScreen || ''))
+    .map(([id, t]) => `${id}: ${(t.lastScreen || '').trim().split('\n').slice(-4).join(' / ')}`)), { timeout: 120000 }).toEqual([]);
 }
 test.afterEach(async () => {
   if (application) await closeElectron(application);
