@@ -583,3 +583,12 @@ test('seat info carries the account and plan recorded in each directory, follows
     'jinhao.h.sub@example.com · 套餐 Pro · 席位 us2 · C:\\Users\\tester\\.claude-us2');
   assert.equal(S.seatDisplay({ ...win, configDir: '~\\.claude-us2' }, { loggedIn: false }).title, '未登录 · 席位 us2 · ~\\.claude-us2');
 });
+test('the account recorded in a seat directory is read without credentials, for naming an alert', (t) => {
+  const home = fixture(t), [cn, us] = S.normalize(); setup(home);
+  fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"hjinhao066us@example.com"}}');
+  assert.equal(M.recordedAccount(cn, home), 'hjinhao066us@example.com');
+  assert.equal(M.recordedAccount(us, home), '');                       // no account file content
+  fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), 'not json');
+  assert.equal(M.recordedAccount(us, home), '');
+  assert.equal(M.recordedAccount({ id: 'x', configDir: 'relative/dir' }, home), '');   // an invalid seat never throws
+});

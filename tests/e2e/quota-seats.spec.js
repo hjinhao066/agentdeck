@@ -78,10 +78,10 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   // releasing it so this wait cannot deadlock the replay race fixture.
   await expect(seat('us')).toHaveAttribute('aria-label', /^us（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
-  await expect(seat('us')).toHaveAttribute('data-detail', /us\*\*\*@example.com/);
+  await expect(seat('us')).toHaveAttribute('data-detail', /账号：us@example\.com/);   // 队长's text shows the address unmasked
   const text = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
-  expect(text).toMatch(/Claude \/ 🇨🇳 CN：已用尽[^\n]*上次采样：5h 65%/);
-  expect(text).toMatch(/Claude \/ 🇺🇸 US：19%[^\n]*5h 19%/);
+  expect(text).toMatch(/Claude \/ cn：已用尽[^\n]*账号：cn@example\.com[^\n]*上次采样：5h 65%/);
+  expect(text).toMatch(/Claude \/ us：19%[^\n]*账号：us@example\.com[^\n]*5h 19%/);
   // The Captain's own statusline is recorded under its seat's account only.
   await expect.poll(() => app.evaluate(({ app }) => typeof app.releaseQuotaReplay)).toBe('function');
   await page.evaluate(() => {
@@ -102,8 +102,8 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await expect(seat('us')).toHaveAttribute('data-detail', /会话状态行/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   const after = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
-  expect(after).toMatch(/Claude \/ 🇺🇸 US：59%[^\n]*5h 83%/);
-  expect(after).toMatch(/Claude \/ 🇨🇳 CN：已用尽[^\n]*上次采样：5h 65%/);
+  expect(after).toMatch(/Claude \/ us：59%[^\n]*5h 83%/);
+  expect(after).toMatch(/Claude \/ cn：已用尽[^\n]*上次采样：5h 65%/);
   // Top bar tooltip, keyboard popover and board-cli quota share one summary.
   for (const id of ['us', 'cn']) {
     const title = await seat(id).getAttribute('data-detail');

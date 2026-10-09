@@ -236,6 +236,14 @@ async function seatInfo(seat, home, platform = process.platform, keychain = cred
     authReason: typeof status === 'object' ? status.authReason ? `${seat.name}（${seat.id}）：${status.authReason}` : '' : '', usagePath: loc.usagePath };
 
 }
+// The address recorded in a seat directory's own account file; '' when there is none. Read only.
+function recordedAccount(seat, home) {
+  try {
+    const loc = credentialLocation(seat, home);
+    if (fs.statSync(loc.metadataPath).size > 8 * 1024 * 1024) return '';
+    return S.cleanEmail(JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount?.emailAddress);
+  } catch (_) { return ''; }
+}
 const USAGE_SOURCES = ['Claude /usage', 'Claude 会话状态行'];
 function sanitizeUsage(value) {
   if (!value || !Number.isFinite(value.at) || !Array.isArray(value.windows)) throw new Error('无效用量记录');
@@ -371,4 +379,4 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
 
   });
 }
-module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, seatEnvironment, credentialStatus, readAuthStatus, authStatusCache, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };
+module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, seatEnvironment, credentialStatus, readAuthStatus, authStatusCache, seatInfo, recordedAccount, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };

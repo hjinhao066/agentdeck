@@ -123,8 +123,8 @@ test('compact quota rows: header once, used-up / low / no-data cells, brand icon
     const colors = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#quotaBar .quota-item')].map((i) => [i.dataset.quotaKey, getComputedStyle(i.querySelector('.quota-icon')).color])));
     const rgb = (c) => c.match(/\d+/g).map(Number);
     const [cr, cg, cb] = rgb(colors['Claude:cn']), [gr, gg, gb] = rgb(colors.Codex);
-    expect(cr > cg && cg > cb).toBe(true);
-    expect(gg > gr && gg > gb).toBe(true);
+    expect(cr > cg && cg > cb, JSON.stringify({ theme, colors })).toBe(true);
+    expect(gg > gr && gg > gb, JSON.stringify({ theme, colors })).toBe(true);
     expect(await row('Antigravity').locator('.quota-icon path').evaluate((e) => getComputedStyle(e).fill)).toContain('quotaGeminiGradient');
     expect(colors.Cursor).toBe(await row('Cursor').evaluate((e) => getComputedStyle(e).color));
   }

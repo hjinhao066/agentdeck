@@ -24,7 +24,7 @@ const { createCodexLauncher } = require('./codex-launch');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
 const PerpetualCaptainCore = require('./perpetual-captain-core');
-const { seatEnvironment, credentialLocation, initializeOnboarding, trustWorktree: trustClaudeWorktree, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
+const { seatEnvironment, credentialLocation, initializeOnboarding, trustWorktree: trustClaudeWorktree, registerSeatsIpc, seatInfo, recordedAccount, readUsage } = require('./claude-seats-main');
 const { createWarmupService } = require('./quota-warmup-service');
 const { createQuotaWarmupRunner } = require('./quota-warmup-main');
 const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
@@ -1247,8 +1247,9 @@ app.whenReady().then(async () => {
     if (!seat) return;
     try {
       const key = sample.provider === 'Claude' ? QuotaCore.seatKey(seat.id) : sample.provider;
-      // A lost-login alert names the account that was signed in there, not the fixed seat name.
-      seatAuth.observe(sample.provider === 'Claude' ? { ...seat, account: seatConfig().quotas?.[key]?.account } : seat, sample);
+      // A lost-login alert names the account that was signed in there, not the fixed seat name:
+      // the directory's own account record, else the account the quota rows last saw.
+      seatAuth.observe(sample.provider === 'Claude' ? { ...seat, account: recordedAccount(seat, seatHome) || seatConfig().quotas?.[key]?.account } : seat, sample);
       if (!seatAuth.needsConfirmation(seat, sample.provider)) {
         clearTimeout(seatAuthChecks.get(key)); seatAuthChecks.delete(key);
       } else if (!tudArg && !seatAuthChecks.has(key)) {

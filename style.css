@@ -2800,6 +2800,8 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   background: color-mix(in srgb, var(--cm-text) 6%, transparent); border: 1px solid var(--cm-rim);
 }
 .cm-agent .cn-badge .agent-model-label { min-width: 0; max-width: 104px; font-weight: 550; color: var(--cm-text); }
+/* No room on a card for an account name: it is in the capsule's hover text (crew-map.js badge). */
+.cm-agent .agent-seat-label { display: none; }
 .cm-node.kind-captain .cm-agent { margin-left: 0; }
 .cm-more {
   position: absolute; top: 3px; right: 5px; z-index: 1; width: 32px; height: 32px; padding: 0; display: grid; place-items: center;

@@ -323,7 +323,11 @@ test('状态标签完整显示: every card status is whole at 1920, 1440, 980 an
     expect(got.filter((g) => g.cut || g.over || g.badgeOut), `${w} ${theme}: statuses cut or run into something`).toEqual([]);
     await shot(`map-status-${w}-${theme}`);
   }
-  // A real model name with its seat fits beside the longest status, whole.
+  // A card never shows a seat or account label (an account name does not fit beside the model, and a
+  // fixed seat name would point at the wrong account): the capsule's hover text names the account.
+  expect(await page.evaluate(() => [...document.querySelectorAll('.cm-agent .agent-seat-label')].every((n) => getComputedStyle(n).display === 'none'))).toBe(true);
+  expect(await page.evaluate(() => [...document.querySelectorAll('.cm-agent .agent-seat-label')].every((n) => n.closest('.cn-badge').title.includes(n.title)))).toBe(true);
+  // A real model name fits beside the longest status, whole.
   const rename = (name) => page.evaluate((n) => document.querySelectorAll('.cm-node:not(.kind-captain) .cm-agent .agent-model-label').forEach((l) => { l.textContent = n; }), name);
   await rename('Opus 5.5');
   expect((await statusLabels()).filter((g) => g.cut || g.over || g.badgeOut || g.badgeCut)).toEqual([]);
