@@ -368,11 +368,12 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
             entry.usage = usage; entry.failures = 0; entry.failure = null;
             try { write(entry.seat, home, usage); } catch (_) {}
           } else {
-            entry.failures++;
+            // An answer without numbers is not a failed query: it does not count up.
+            entry.failures = answered ? 0 : entry.failures + 1;
             const loggedOut = value?.authStatus === 'logged-out' && value.configDir === M.credentialLocation(entry.seat, home).dir;
             entry.failure = { provider: 'Claude', scope: 'claude', seatId: entry.seat.id, configDir: entry.seat.configDir,
               at: now(), failureOnly: true, failures: entry.failures, checkedAt: now(),
-              ...(loggedOut ? { authStatus: 'logged-out' } : {}),
+              ...(loggedOut ? { authStatus: 'logged-out' } : {}), ...(answered ? { answered: true } : {}),
               failure: answered ? '已登录，这个账号暂时没有额度数字（还没开始用）' : '用量查询失败，等待 Claude 刷新凭据或网络恢复' };
           }
           // Only actual polls are evidence; cached samples exposed by samples()
