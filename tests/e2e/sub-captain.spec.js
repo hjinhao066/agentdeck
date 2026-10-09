@@ -43,10 +43,22 @@ test('sub-captain: receipts, ledger, sidebar, restart and hand-back through the 
     columns: [{ id: 'captain', title: '队长', cmd: FAKE, cwd: profile, width: 460, role: 'manual', isMain: true }],
     mainSession: { colId: 'captain', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks: [] },
   }));
-  let app;
-  const controlOf = async (id) => {
+  let app, page;
+  const controlOf = async (id, timeout = 30000) => {
     const file = path.join(envDir, id + '.json');
-    await expect.poll(() => fs.existsSync(file), { timeout: 30000, message: `terminal ${id} holds a control capability` }).toBe(true);
+    try {
+      await expect.poll(() => fs.existsSync(file), { timeout, message: `terminal ${id} holds a control capability` }).toBe(true);
+    } catch (error) {
+      // What the terminal looked like, for a run on another machine.
+      const seen = await page?.evaluate((colId) => {
+        const col = columns.find((c) => c.id === colId), entry = terms.get(colId);
+        return { col: col && { cmd: col.cmd, subCaptain: col.subCaptain, captainCrew: col.captainCrew, isMain: col.isMain },
+          entry: entry && { alive: entry.alive, state: entry.state, launchPending: entry.launchPending, exitReason: entry.exitReason,
+            screen: String(entry.lastScreen || '').split('\n').slice(-15).join('\n') }, columns: columns.map((c) => c.id) };
+      }, id).catch((e) => ({ unavailable: e.message }));
+      console.log(`[sub-captain diag] ${id}: ${JSON.stringify(seen)}`);
+      throw error;
+    }
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   };
   const ok = async (env, args) => {
@@ -69,7 +81,7 @@ test('sub-captain: receipts, ledger, sidebar, restart and hand-back through the 
   });
   try {
     app = await launch();
-    let page = await app.firstWindow();
+    page = await app.firstWindow();
     let captain = await controlOf('captain');
 
     // The Captain opens a sub-captain. It finishes its first instruction at once (stand-in),
@@ -155,8 +167,8 @@ test('sub-captain: receipts, ledger, sidebar, restart and hand-back through the 
     for (const id of ['captain', subId]) fs.rmSync(path.join(envDir, id + '.json'), { force: true });
     app = await launch();
     page = await app.firstWindow();
-    captain = await controlOf('captain');
-    sub = await controlOf(subId);
+    captain = await controlOf('captain', 90000);
+    sub = await controlOf(subId, 90000);
     expect(await ok(sub, ['ledger'])).toContain(childId);
     const relaunched = (await ok(captain, ['ledger'])).split('\n');
     expect(relaunched.slice(relaunched.findIndex((l) => l.startsWith(subId)) + 1).find((l) => l.includes(childId))).toMatch(/^\s+└\s*c-board-/);

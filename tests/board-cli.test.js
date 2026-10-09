@@ -604,3 +604,35 @@ test('inbox help and the Captain briefing say a report is read once the user saw
   const M = require('../main-core');
   for (const platform of ['darwin', 'win32']) assert.match(M.instructions(platform, '', false, 30), /report（挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说）/);
 });
+
+// ---- 小队长 ----
+test('new --sub-captain needs a project and reaches the app as subCaptain; create-child leaves the model to the app', async () => {
+  const dir = controlDir('agentdeck-sub-captain-cli-');
+  const server = serve(dir, (request) => ({ done: true, result: request.action === 'create-child' ? '已开子会话 c-board-kid「子会话」' : '已开新会话 c-board-sub「小队长」' }));
+  const env = { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' };
+  try {
+    for (const args of [['--sub-captain'], ['--sub-captain', '--project', ''], ['--sub-captain=yes', '--project', '秋招']]) {
+      const refused = await runCli(['new', '--title', '小队长', '--task', '统筹', ...args], env);
+      assert.equal(refused.code, 1, args.join(' '));
+      assert.match(refused.stderr, /--sub-captain|--project requires a value/);
+    }
+    assert.equal(server.requests.length, 0);
+    const made = await runCli(['new', '--title', '小队长', '--task', '统筹', '--sub-captain', '--project', '秋招'], env);
+    assert.equal(made.code, 0);
+    assert.equal(server.requests[0].action, 'main-new');
+    assert.equal(server.requests[0].subCaptain, true);
+    assert.equal(server.requests[0].project, '秋招');
+    // An ordinary new carries no subCaptain field at all.
+    await runCli(['new', '--title', '散活', '--task', 'x'], env);
+    assert.equal('subCaptain' in server.requests[1], false);
+    // A 小队长's create-child returns at once; with no --agent the app picks its model.
+    const child = await runCli(['create-child', '--title', '子会话', '--task', '做一件事'], env);
+    assert.equal(child.code, 0);
+    assert.match(child.stdout, /已开子会话 c-board-kid/);
+    assert.equal(server.requests[2].action, 'create-child');
+    assert.equal(server.requests[2].agent, '');
+    await runCli(['create-child', '--title', '子会话', '--task', '做一件事', '--agent', 'codex'], env);
+    assert.equal(server.requests[3].agent, 'codex');
+    assert.match((await runCli(['help'], {})).stdout, /--sub-captain \(needs --project\)/);
+  } finally { server.stop(); }
+});
