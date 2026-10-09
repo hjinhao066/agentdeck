@@ -3910,8 +3910,13 @@ function statusScreen(term) {
   for (let y = buf.baseY; y < buf.baseY + term.rows; y++) {
     const line = buf.getLine(y);
     const text = line ? line.translateToString(false) : '';
-    if (line?.isWrapped && lines.length) lines[lines.length - 1] += text;
-    else lines.push(text);
+    if (line?.isWrapped && lines.length) {
+      // a wide character (中文) that did not fit at the end of the row above went down whole: the cell it
+      // left empty there is no space in the text
+      const last = buf.getLine(y - 1)?.getCell?.(term.cols - 1);
+      if (last && last.getChars() === '' && last.getWidth() === 1) lines[lines.length - 1] = lines[lines.length - 1].slice(0, -1);
+      lines[lines.length - 1] += text;
+    } else lines.push(text);
   }
   let text = lines.map((line) => line.trimEnd()).join('\n');
   const sep = Math.max(text.lastIndexOf('以上为上次会话的输出'), text.lastIndexOf('上次输出回放'));

@@ -130,6 +130,19 @@ function terminal(lines, baseY = 0, rows = lines.length - baseY) {
   } } } };
 }
 
+// The live screen joins a wrapped row back onto the row above. A wide character (中文) that did not fit in
+// the last column went down whole, and xterm leaves that last cell empty: no space in the text. A real space
+// that ended the row above stays.
+test('a wide character wrapped whole to the next row leaves no space in the live screen; a real space stays', () => {
+  const cell = (chars) => ({ getChars: () => chars, getWidth: () => 1 });
+  const wrapped = (top, last, next) => ({ rows: 2, cols: 21, buffer: { active: { baseY: 0, getLine: (y) => [
+    { isWrapped: false, translateToString: () => top, getCell: (x) => (x === 20 ? cell(last) : cell('x')) },
+    { isWrapped: true, translateToString: () => next, getCell: () => cell('') },
+  ][y] } } });
+  assert.equal(statusScreen(wrapped('⏺ 星图卡片深浅两套已截图，正在对 ', '', '比')), '⏺ 星图卡片深浅两套已截图，正在对比');
+  assert.equal(statusScreen(wrapped('⏺ Running the crew map ', ' ', 'tests')), '⏺ Running the crew map tests');
+});
+
 test('quiet Codex, Claude, Gemini/agy and Cursor busy rows stay working above a tall footer', () => {
   for (const marker of busy) {
     const term = terminal([marker, ...Array(45).fill(''), '❯', 'Claude Code']);
