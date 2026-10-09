@@ -9,7 +9,7 @@ const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 
 const JOB = path.join(__dirname, '..', 'scripts', 'e2e-remote-job.js');
-const { depsKey, safeRemove } = require(JOB);
+const { depsKey, safeRemove, withInstallLock, InstallWaitTimeout } = require(JOB);
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e.x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e.x' } }).trim();
 
 // A fake Playwright: reports what its working directory holds at the start and 2 s later.
@@ -434,6 +434,38 @@ test('an install lock whose owner process is gone is broken at once, not after 3
     assert.equal(job.code, 0, job.output);
     assert.match(job.output, /owner .* is gone/);
   } finally { env.done(); }
+});
+// Two waiters both find the owner of the lock gone. The first takes the lock over between the second one's
+// check and its own break-in; the second must then leave the first one's lock alone, or both install into
+// the same folder (seen with SLOTS=3: npm ci twice, or a folder removed under a job, exits 1/12/14).
+// Played in this process: right after this waiter finds the owner gone, the "other waiter" takes over.
+test('a stale install lock is taken over by one waiter only: a waiter that also saw it stale leaves the new holder alone', async () => {
+  const dead = spawn(process.execPath, ['-e', '0']); await new Promise((r) => dead.on('close', r));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-lock-race-'));
+  const lock = path.join(root, '0123456789abcdef.lock');
+  const otherWaiter = process.ppid;
+  const realKill = process.kill, waitMs = process.env.AGENTDECK_E2E_INSTALL_WAIT_MS;
+  let tookOver = false, ran = false;
+  try {
+    fs.mkdirSync(lock); fs.writeFileSync(path.join(lock, 'owner'), String(dead.pid));
+    process.kill = (pid, signal) => {
+      try { return realKill.call(process, pid, signal); } finally {
+        if (pid === dead.pid && !tookOver) {
+          tookOver = true;
+          fs.rmSync(path.join(lock, 'owner')); fs.rmdirSync(lock); fs.mkdirSync(lock); fs.writeFileSync(path.join(lock, 'owner'), String(otherWaiter));
+        }
+      }
+    };
+    process.env.AGENTDECK_E2E_INSTALL_WAIT_MS = '1';
+    assert.throws(() => withInstallLock(lock, () => { ran = true; }), InstallWaitTimeout);
+    assert.ok(tookOver, 'the other waiter took the lock over');
+    assert.equal(ran, false, 'this waiter must not install while the other one holds the lock');
+    assert.equal(fs.readFileSync(path.join(lock, 'owner'), 'utf8'), String(otherWaiter), 'the other waiter still holds its lock');
+  } finally {
+    process.kill = realKill;
+    if (waitMs === undefined) delete process.env.AGENTDECK_E2E_INSTALL_WAIT_MS; else process.env.AGENTDECK_E2E_INSTALL_WAIT_MS = waitMs;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 test('an install lock whose owner is alive is respected even when it is older than the stale limit', posix, async () => {
   const env = setup();

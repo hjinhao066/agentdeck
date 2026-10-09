@@ -121,6 +121,24 @@ function tryLock(lockDir) {
 }
 const unlock = (lockDir) => { try { fs.rmSync(path.join(lockDir, 'owner'), { force: true }); fs.rmdirSync(lockDir); } catch {} };
 
+// A stale lock is broken by one waiter at a time (holding `<lock>.break`), which checks again and takes the
+// lock itself. Two waiters that both saw it stale must not both remove it: the second would remove the
+// lock the first had just taken, and both would install into the same folder.
+function takeStale(lockDir) {
+  const breaker = `${lockDir}.break`;
+  try { fs.mkdirSync(breaker); } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    // Left by a waiter that died inside these few lines.
+    try { if (Date.now() - fs.statSync(breaker).mtimeMs > 60000) fs.rmdirSync(breaker); } catch {}
+    return false;
+  }
+  try {
+    if (!lockIsStale(lockDir)) return false;
+    unlock(lockDir);
+    return tryLock(lockDir);
+  } finally { try { fs.rmdirSync(breaker); } catch {} }
+}
+
 // One holder per lock. While another job holds it we log why we wait, every 30 s; a stale lock is taken
 // over; waiting longer than the wait limit gives up.
 function withInstallLock(lockDir, fn) {
@@ -128,7 +146,7 @@ function withInstallLock(lockDir, fn) {
   const started = Date.now();
   let lastNote = 0;
   while (!tryLock(lockDir)) {
-    try { if (lockIsStale(lockDir)) { unlock(lockDir); continue; } } catch { continue; }
+    try { if (lockIsStale(lockDir) && takeStale(lockDir)) break; } catch { continue; }
     const waited = Date.now() - started;
     if (waited > waitMs) throw new InstallWaitTimeout(`waited ${Math.round(waited / 1000)} s for another job's dependency install (${path.basename(lockDir)}); giving up`);
     if (Date.now() - lastNote > 30000) { say(`waiting for another job to finish installing dependencies (${Math.round(waited / 1000)} s so far)`); lastNote = Date.now(); }
@@ -306,4 +324,4 @@ function main(jobFile) {
 if (require.main === module) {
   try { process.exit(main(process.argv[2])); } catch (error) { console.error(`[remote-job] ${error.message}`); process.exit(14); }
 }
-module.exports = { checkJob, depsKey, safeRemove };
+module.exports = { checkJob, depsKey, safeRemove, withInstallLock, InstallWaitTimeout };
