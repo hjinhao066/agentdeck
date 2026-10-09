@@ -169,18 +169,29 @@ const realDeps = { say: defaultSay, isMacOnlySpec, isWindowsOnline, runOnWindows
 
 async function main(argv = process.argv.slice(2), overrides = {}) {
   const deps = { ...realDeps, ...overrides };
-  const say = deps.say;
   const args = parseArgs(argv);
   if (args.status) { const { main: queueMain } = require('./e2e-queue'); return queueMain(['--queue-status'], process.env); }
   if (!args.specs.length) {
     console.error('[e2e-auto] Usage: e2e-auto.js [--status] | tests/e2e/spec.js [spec.js...] [--host H] [-- playwright args]');
     return 2;
   }
+  // Ctrl-C ends the run. ssh stopped by a signal exits 255, like a lost connection: that must not
+  // start the specs on the Mac instead.
+  let interrupted = false;
+  const onInterrupt = () => { interrupted = true; };
+  process.on('SIGINT', onInterrupt);
+  // A Ctrl-C that ended a blocking ssh call reaches onInterrupt only on a later turn of the event loop.
+  const wasInterrupted = () => new Promise((resolve) => setTimeout(() => resolve(interrupted), 50));
+  try { return await route(args, deps, wasInterrupted); } finally { process.removeListener('SIGINT', onInterrupt); }
+}
 
+async function route(args, deps, wasInterrupted) {
+  const say = deps.say;
   const local = args.specs.filter((spec) => deps.isMacOnlySpec(path.resolve(ROOT, spec)));
   let windows = args.specs.filter((spec) => !local.includes(spec));
   if (local.length) say(`${local.length} Mac-only spec(s), running locally via queue`);
   if (windows.length && !deps.isWindowsOnline(args.host)) {
+    if (await wasInterrupted()) { say('interrupted'); return 130; }
     say('Windows offline, routing all cross-platform specs to local Mac queue');
     local.push(...windows); windows = [];
   }
@@ -191,6 +202,7 @@ async function main(argv = process.argv.slice(2), overrides = {}) {
     let code;
     try { code = await deps.runOnWindows(windows, args.playwrightArgs, args.host); }
     catch (error) { say(`Windows run could not be completed (${error.message})`); code = 255; }
+    if (code !== 0 && await wasInterrupted()) { say('interrupted, not running the Windows specs on the Mac'); return { code: 130, fallback: [] }; }
     if (INFRA_EXIT_CODES.has(code)) {
       say(`Windows could not run the specs (exit ${code}), falling back to the local Mac queue`);
       return { code: 0, fallback: windows };

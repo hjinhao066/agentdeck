@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const auto = require('../scripts/e2e-auto');
 const { isMacOnlySource, isMacOnlySpec, parseArgs, main, snapshotCommit, INFRA_EXIT_CODES } = auto;
 
@@ -117,6 +117,62 @@ test('a real test failure on Windows is a failure: no silent re-run on the Mac, 
   assert.equal(r.code, 1);
   assert.ok(r.lines.some((l) => /test\.skip\(process\.platform/.test(l)), 'hint how to mark a POSIX-only spec');
 });
+// ---- Ctrl-C ----------------------------------------------------------------------------
+// A real OpenSSH client stopped by a signal exits 255, the code of a lost connection, and e2e-remote-win
+// even sends that signal itself on Ctrl-C. Here ssh/scp are fakes on PATH that do the same; e2e-auto and
+// e2e-remote-win are real, in a child process group that gets the Ctrl-C the way a terminal sends it.
+async function interruptedRun(when, overrides) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-auto-int-'));
+  try {
+    const bin = path.join(dir, 'bin'); fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'ssh'), [
+      `#!${process.execPath}`,
+      'const cmd = process.argv[process.argv.length - 1];',
+      "for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => process.exit(255));",
+      "const hang = (mark) => { require('fs').writeFileSync(process.env.FAKE_MARK, mark); setInterval(() => {}, 1000); };",
+      "if (cmd === 'exit 0') { if (process.env.FAKE_HANG_CHECK) hang('checking'); else process.exit(0); }",
+      "else if (/echo %USERPROFILE%/.test(cmd)) { console.log('C:\\\\Users\\\\tester'); process.exit(0); }",
+      'else if (/for-each-ref/.test(cmd)) { console.log(process.env.FAKE_KNOWN_SHA); process.exit(0); }',
+      "else if (/e2e-queue\\.js/.test(cmd)) hang('windows-running');",
+      'else process.exit(0);',
+    ].join('\n'), { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, 'scp'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const mark = path.join(dir, 'mark');
+    const child = spawn(process.execPath, ['-e', `
+      const auto = require(${JSON.stringify(path.join(ROOT, 'scripts/e2e-auto.js'))});
+      const remote = require(${JSON.stringify(path.join(ROOT, 'scripts/e2e-remote-win.js'))});
+      auto.main(['tests/e2e/chat.spec.js'], {
+        isMacOnlySpec: () => false,
+        ${overrides}
+        runOnWindows: (specs, pw, host) => remote.main(['HEAD', ...specs, '--host', host, '--out', ${JSON.stringify(path.join(dir, 'out'))}]),
+        runLocal: async (specs) => { console.log('MAC-RUN-STARTED ' + specs.join(' ')); return 0; },
+      }).then((code) => { console.log('EXIT ' + code); process.exit(code); });
+    `], { cwd: ROOT, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+      FAKE_KNOWN_SHA: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim(), FAKE_MARK: mark, ...(when === 'checking' ? { FAKE_HANG_CHECK: '1' } : {}) } });
+    let text = '';
+    child.stdout.on('data', (d) => { text += d; }); child.stderr.on('data', (d) => { text += d; });
+    const exited = new Promise((resolve) => child.on('close', (code, signal) => resolve({ code, signal })));
+    for (let i = 0; i < 200 && !(fs.existsSync(mark) && fs.readFileSync(mark, 'utf8') === when); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(fs.readFileSync(mark, 'utf8'), when, text);
+    process.kill(-child.pid, 'SIGINT');
+    const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 20000);
+    const result = await exited;
+    clearTimeout(timer);
+    return { ...result, text };
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+const posixSsh = { skip: process.platform === 'win32' && 'the fake ssh is a POSIX script' };
+test('Ctrl-C while the Windows group runs stops e2e-auto: the specs are not started again on the Mac', posixSsh, async () => {
+  const r = await interruptedRun('windows-running', 'isWindowsOnline: () => true,');
+  assert.doesNotMatch(r.text, /MAC-RUN-STARTED/, `after Ctrl-C the Windows specs were started on the Mac:\n${r.text}`);
+  assert.equal(r.code, 130, r.text);
+});
+test('Ctrl-C during the Windows reachability check does not route the specs to the Mac', posixSsh, async () => {
+  const r = await interruptedRun('checking', '');
+  assert.doesNotMatch(r.text, /MAC-RUN-STARTED/, `after Ctrl-C the specs were started on the Mac:\n${r.text}`);
+  assert.equal(r.code, 130, r.text);
+});
+
 test('no specs: usage error, nothing runs', async () => {
   const r = await run([]);
   assert.equal(r.code, 2);
