@@ -794,7 +794,9 @@
     returnBtn.classList.toggle('on', showReturn);
     drawTray(map);
     hoverId = null;
-    const before = opts && opts.smooth && lay && !reduceMotion() ? places() : null;
+    // (a glide needs somewhere to glide from: the first arrangement lands at once)
+    const smooth = !!(opts && opts.smooth) && !!lay;
+    const before = smooth && !reduceMotion() ? places() : null;
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
     if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; projectsEl.innerHTML = ''; lay = null; closePop(); return; }
@@ -821,7 +823,7 @@
       nodesEl.appendChild(fold);
     }
     // fit on arrival and while the user has not moved the view; after that it stays put
-    if (!view || !userView) fit(!!(opts && opts.smooth)); else applyView();
+    if (!view || !userView) fit(smooth); else applyView();
     if (before) settle(before);
     if (popId) { fillPop(); placePop(); }
     syncFit();
@@ -1001,7 +1003,8 @@
     new ResizeObserver(() => {
       const ready = () => host.visible() && vpEl.clientWidth && !drag && vpEl.clientWidth + 'x' + vpEl.clientHeight !== drawnFor;
       clearTimeout(resizeT);
-      if (ready() && Date.now() - resizeAt > RESIZE_MS) render();
+      // a window that changes once (the sidebar folded, maximised, snapped) glides there as well as one dragged
+      if (ready() && Date.now() - resizeAt > RESIZE_MS) render({ smooth: true });
       resizeAt = Date.now();
       resizeT = setTimeout(() => { resizeAt = 0; if (ready()) render({ smooth: true }); }, RESIZE_MS);
     }).observe(vpEl);
