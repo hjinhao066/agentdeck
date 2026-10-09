@@ -1601,22 +1601,17 @@
     const result = await request(m, 'api/todos');
     m.todosAt = Date.now();
     // 404: a build without to-dos. Nothing to show from it, and nothing failed.
-    if (result.status === 200 && result.body) { m.todos = Core.cleanTodos(result.body); m.todosReady = true; }
+    if (result.status === 200 && result.body) { m.todos = Core.cleanTodos(result.body); m.todosReady = true; m.todoBaseKeys = Array.isArray(result.body.baseKeys) ? result.body.baseKeys : null; }
     else if (result.status === 404) { m.todos = null; m.todosReady = false; }
   }
   const todoSources = () => machines.filter((m) => Array.isArray(m.todos));
   const todoWriter = () => Core.todoWriter(machines, target);
-  // The computer's answer goes into its own copy at once; the next poll confirms it.
+  // The computer's answer (the item as its api/todos shows it) goes into its own
+  // copy at once; the next poll confirms it.
   function keepTodo(m, item) {
     const [clean] = Core.cleanTodos({ items: [item] });
     if (!clean || !Array.isArray(m.todos)) return;
     const at = m.todos.findIndex((t) => t.id === clean.id);
-    // A tick's answer has no AI fields: the copy it replaces keeps them.
-    const before = at >= 0 ? m.todos[at] : null;
-    if (before && !before.deleted && before.text === clean.text) {
-      if (before.textUpdated && !clean.textUpdated) clean.textUpdated = before.textUpdated;
-      if (before.ai && !clean.ai) clean.ai = before.ai;
-    }
     if (at >= 0) m.todos[at] = clean; else m.todos.push(clean);
   }
   let todoHintTimer = 0;
@@ -1668,8 +1663,8 @@
     if (!m || row.classList.contains('is-saving')) return;
     const done = !t.done;
     row.classList.add('is-saving'); row.classList.toggle('is-done', done); check.setAttribute('aria-checked', String(done));
-    // The base lets a computer tick an item the other one recorded less than a git sync ago.
-    const base = { text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated };
+    // The base lets a computer tick an item the other one recorded or edited less than a git sync ago.
+    const base = Core.todoBase(t, m.todoBaseKeys);
     const result = await post(m, 'api/todos', { op: 'update', id: t.id, done, base });
     if (result.status === 200 && result.body && result.body.item) {
       keepTodo(m, result.body.item);

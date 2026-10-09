@@ -463,7 +463,7 @@
   // ---- 随手记待办 ----------------------------------------------------------
   // Each computer answers api/todos with the list as it sees it (its own file
   // merged with what git brought from the other one). The same id can come from
-  // both: the copy updated last wins, and a deletion mark hides the item.
+  // both; mergeTodos joins them by the desktop's rules (todo-store merge).
   const TODO_ID = /^td-[A-Za-z0-9-]{8,64}$/;
   const time = (value) => typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value));
   // A 待办 handed to AI (@ai): its state, what 队长 said and the names of the files it handed back.
@@ -475,43 +475,76 @@
       files: ai.status !== 'done' || !Array.isArray(ai.files) ? [] : ai.files.filter((f) => typeof f === 'string').slice(0, 10)
         .map((f) => (f.split(/[\\/]/).filter(Boolean).pop() || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200)).filter(Boolean) };
   }
+  // The clocks of each part of a 待办 (see mergeTodos), kept when well-formed.
+  const TODO_CLOCKS = ['textUpdated', 'doneUpdated', 'deletedUpdated'];
+  const todoClocks = (item, keys = TODO_CLOCKS) => Object.fromEntries(keys.filter((key) => time(item[key])).map((key) => [key, item[key]]));
   function cleanTodos(body) {
     const items = body && Array.isArray(body.items) ? body.items : [];
     const out = [];
     for (const item of items) {
       if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !TODO_ID.test(item.id) || !time(item.updated)) continue;
-      if (item.deleted === true) { out.push({ id: item.id, deleted: true, updated: item.updated }); continue; }
+      if (item.deleted === true) { out.push({ id: item.id, deleted: true, updated: item.updated, ...todoClocks(item, ['deletedUpdated']) }); continue; }
       if (typeof item.text !== 'string' || !item.text.trim()) continue;
       out.push({ id: item.id, text: item.text.slice(0, 500), done: item.done === true, doneAt: item.done === true && time(item.doneAt) ? item.doneAt : null,
-        created: time(item.created) ? item.created : item.updated, updated: item.updated, ...(time(item.textUpdated) ? { textUpdated: item.textUpdated } : {}),
+        created: time(item.created) ? item.created : item.updated, updated: item.updated, ...todoClocks(item),
         ...(cleanTodoAi(item.ai) ? { ai: cleanTodoAi(item.ai) } : {}) });
     }
     return out;
   }
+  // The desktop's rules (todo-store merge), so both show the same thing: each
+  // part of a 待办 has its own clock. The text by textUpdated (the content
+  // version), the checkbox by doneUpdated, a deletion by deletedUpdated, and the
+  // AI state by its own time, only from copies of the winning content version.
+  // A tick on a stale copy keeps the newer text and never rolls back what 队长
+  // wrote. An older build sends no clocks: the same stand-ins as on the desktop.
+  const todoClock = {
+    text: (t) => t.textUpdated || t.created,
+    done: (t) => t.doneUpdated || t.updated,
+    deleted: (t) => t.deletedUpdated || (t.deleted ? t.updated : t.created),
+    ai: (t) => (t.ai && t.ai.updated) || '1970-01-01T00:00:00.000Z',
+    updated: (t) => t.updated,
+  };
+  // Latest by one clock; a tie goes to the copy changed last, then a fixed order.
+  function latestTodo(copies, clock) {
+    return copies.reduce((best, c) => {
+      const a = Date.parse(clock(c.item)), b = Date.parse(clock(best.item));
+      if (a !== b) return a > b ? c : best;
+      const x = Date.parse(c.item.updated), y = Date.parse(best.item.updated);
+      if (x !== y) return x > y ? c : best;
+      return JSON.stringify(c.item) > JSON.stringify(best.item) ? c : best;
+    });
+  }
   function mergeTodos(sources) {
-    const merged = new Map(), copies = new Map();
+    const copies = new Map();
     for (const source of sources) for (const item of source.todos || []) {
-      const kept = merged.get(item.id);
-      if (!kept || Date.parse(item.updated) > Date.parse(kept.item.updated)) merged.set(item.id, { item, from: source.id });
       if (!copies.has(item.id)) copies.set(item.id, []);
-      copies.get(item.id).push(item);
+      copies.get(item.id).push({ item, from: source.id });
     }
-    // AI state goes by its own time within one content version, as on the desktop
-    // (todo-store merge): a later tick on a stale copy never rolls back what 队长 wrote.
-    // A copy without textUpdated (a tick's answer, an older build) is matched by its text.
-    const sameVersion = (a, b) => !a.deleted && !b.deleted && a.text === b.text && (!a.textUpdated || !b.textUpdated || a.textUpdated === b.textUpdated);
-    for (const [id, entry] of merged) {
-      let ai = entry.item.ai;
-      for (const copy of copies.get(id)) {
-        if (!copy.ai || !copy.ai.updated || !sameVersion(copy, entry.item)) continue;
-        if (!ai || !ai.updated || Date.parse(copy.ai.updated) > Date.parse(ai.updated)) ai = copy.ai;
-      }
-      if (ai !== entry.item.ai) merged.set(id, { ...entry, item: { ...entry.item, ai } });
+    const live = [];
+    for (const list of copies.values()) {
+      if (latestTodo(list, todoClock.deleted).item.deleted) continue;
+      const shown = list.filter((c) => !c.item.deleted);
+      const whole = latestTodo(shown, todoClock.updated);
+      const content = latestTodo(shown, todoClock.text).item;
+      const version = shown.filter((c) => c.item.text === content.text && todoClock.text(c.item) === todoClock.text(content));
+      const ai = latestTodo(version, todoClock.ai).item.ai;
+      const check = latestTodo(shown, todoClock.done).item;
+      const { ai: _ai, ...rest } = whole.item;
+      live.push({ ...rest, text: content.text, textUpdated: todoClock.text(content), done: check.done, doneAt: check.doneAt, doneUpdated: todoClock.done(check),
+        ...(ai ? { ai } : {}), seenOn: whole.from });
     }
-    const live = [...merged.values()].filter(({ item }) => !item.deleted).map(({ item, from }) => ({ ...item, seenOn: from }));
     const open = live.filter((t) => !t.done).sort((a, b) => Date.parse(b.created) - Date.parse(a.created) || a.id.localeCompare(b.id));
     const done = live.filter((t) => t.done).sort((a, b) => Date.parse(b.doneAt || b.updated) - Date.parse(a.doneAt || a.updated) || a.id.localeCompare(b.id));
     return { open, done };
+  }
+  // What a tick carries so a computer can tick an item git has not brought it
+  // yet: the item as the phone saw it, with its content version. Only the keys
+  // that computer lists in api/todos go: an older build refuses any other.
+  const TODO_BASE_KEYS = ['text', 'done', 'doneAt', 'created', 'updated'];
+  function todoBase(t, keys) {
+    const base = { text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated, textUpdated: t.textUpdated };
+    const allowed = Array.isArray(keys) ? keys : TODO_BASE_KEYS;
+    return Object.fromEntries(Object.entries(base).filter(([key, value]) => value !== undefined && allowed.includes(key)));
   }
   // Where a new to-do or a tick goes: the computer the user picked, else the
   // default one (Mac), else any other that is online and has to-dos. Both
@@ -537,7 +570,7 @@
     return `${name} 没有记下这条（HTTP ${result.status}）。`;
   }
 
-  return { cleanTodos, mergeTodos, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
+  return { cleanTodos, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 

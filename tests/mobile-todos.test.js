@@ -16,11 +16,7 @@ const PROXY = { Host: new URL(PUBLIC_ORIGIN).host, 'X-Forwarded-Proto': 'https',
 function todoSources(store) {
   return {
     getTodos: () => store.phone(),
-    writeTodos: (input) => {
-      const item = input.op === 'add' ? store.add({ text: input.text, source: 'phone' })
-        : store.update({ id: input.id, done: input.done, ...(input.base ? { base: input.base } : {}), source: 'phone' });
-      return { id: item.id, text: item.text, done: item.done, doneAt: item.doneAt, created: item.created, updated: item.updated };
-    },
+    writeTodos: (input) => store.phoneWrite(input),
   };
 }
 async function start(t, { basePath = '/mac/', todos = true } = {}) {
@@ -83,7 +79,8 @@ test('a logged-in phone still needs the CSRF token, the exact origin and same-si
   assert.equal(ok.status, 200);
   const item = JSON.parse(ok.text).item;
   assert.equal(item.text, '买书');
-  assert.deepEqual(Object.keys(item).sort(), ['created', 'done', 'doneAt', 'id', 'text', 'updated']);
+  // The answer is the item as api/todos shows it, part clocks included.
+  assert.deepEqual(Object.keys(item).sort(), ['created', 'deletedUpdated', 'done', 'doneAt', 'doneUpdated', 'id', 'text', 'textUpdated', 'updated']);
   assert.equal(m.store.list()[0].source, 'phone');
 });
 
@@ -95,7 +92,8 @@ test('the phone can only record and tick: anything else in the body is refused b
   for (const body of [{}, { op: 'remove', id }, { op: 'add' }, { op: 'add', text: '' }, { op: 'add', text: '   ' }, { op: 'add', text: 'x'.repeat(2001) },
     { op: 'add', text: 'ok', ai: { state: 'requested' } }, { op: 'add', text: ['a'] }, { op: 'update', id, text: '改字' }, { op: 'update', id, done: 'yes' },
     { op: 'update', id, done: true, deleted: true }, { op: 'update', id: '../../etc/passwd', done: true }, { op: 'update', id: 'td-x', done: true },
-    { op: 'update', id, done: true, base: { text: 'a', updated, ai: 'x' } }, { op: 'update', id, done: true, base: { updated } }, { op: 'update', id, done: true, base: [] }]) {
+    { op: 'update', id, done: true, base: { text: 'a', updated, ai: 'x' } }, { op: 'update', id, done: true, base: { updated } }, { op: 'update', id, done: true, base: [] },
+    { op: 'update', id, done: true, base: { text: 'a', updated, textUpdated: 42 } }, { op: 'update', id, done: true, base: { text: 'a', updated, doneUpdated: updated } }]) {
     assert.equal((await post(m, 'api/todos', body, auth)).status, 400, JSON.stringify(body));
   }
   // Too long after the server's own limit (500 characters) is refused by the store.
@@ -111,11 +109,18 @@ test('ticking works for an item recorded on the other computer, and the list car
   const ticked = await post(m, 'api/todos', { op: 'update', id: 'td-from-windows-1', done: true, base }, auth);
   assert.equal(ticked.status, 200);
   assert.equal(JSON.parse(ticked.text).item.done, true);
+  // The content version the phone saw goes along when this build lists it.
+  const answer = JSON.parse((await get(m, 'api/todos', { Cookie: auth.Cookie })).text);
+  assert.ok(answer.baseKeys.includes('textUpdated'));
+  const edited = { ...base, text: 'Windows 上改过的', textUpdated: '2026-10-06T09:00:00.000Z', updated: '2026-10-06T09:00:00.000Z' };
+  const again = await post(m, 'api/todos', { op: 'update', id: 'td-from-windows-1', done: false, base: edited }, auth);
+  assert.equal(again.status, 200);
+  assert.deepEqual([JSON.parse(again.text).item.text, JSON.parse(again.text).item.textUpdated], ['Windows 上改过的', '2026-10-06T09:00:00.000Z']);
   const gone = m.store.add({ text: '删掉的' });
   m.store.remove({ id: gone.id });
   const list = JSON.parse((await get(m, 'api/todos', { Cookie: auth.Cookie })).text).items;
-  assert.deepEqual(list.find((x) => x.id === 'td-from-windows-1').done, true);
-  assert.deepEqual(Object.keys(list.find((x) => x.id === gone.id)).sort(), ['deleted', 'id', 'updated']);
+  assert.deepEqual(list.find((x) => x.id === 'td-from-windows-1').done, false);
+  assert.deepEqual(Object.keys(list.find((x) => x.id === gone.id)).sort(), ['deleted', 'deletedUpdated', 'id', 'updated']);
   assert.equal(JSON.stringify(list).includes('删掉的'), false);
   // Unknown items without a base are an answer in plain words, not a crash.
   const missing = await post(m, 'api/todos', { op: 'update', id: 'td-not-here-1', done: true }, auth);

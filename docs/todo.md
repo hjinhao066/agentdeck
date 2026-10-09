@@ -20,42 +20,59 @@
 
 - **每台电脑只写自己的文件**（设备 id 来自 `userData/device.json`），文件里是这台电脑看到的完整清单。
   两台都写同一个文件会让 git `pull --rebase` 冲突，而一冲突整个 `~/.agents` 同步都会停。
-- 读的时候合并目录里所有文件：同一 `id` 的用户字段取 `updated` 最新的那份；相同原文和 `textUpdated` 的 `ai` 单独按 `ai.updated` 合并，旧设备勾选不会回退 AI 状态/产物/确认标记；不同内容版本不继承旧 `ai`；`deleted: true` 的不显示（保留原文以便撤销，
-  也防止另一台的旧副本把它带回来）。写入是临时文件 + 改名；别的电脑的坏文件跳过，自己的坏文件不覆盖、拒绝写入。
+- 读的时候合并目录里所有文件。一条待办分四部分，各有各的时间，各自取最新，改一部分不会盖掉别处改的另一部分：
+  - 内容：`text` + `textUpdated`（合起来是「内容版本」），按 `textUpdated`；`textDevice` 是保存这个版本的电脑。
+  - 勾选：`done`、`doneAt`，按 `doneUpdated`。每次勾选/取消都盖新时间，哪怕本机副本已是这个状态（手机可能看到了另一台更新的取消）。
+  - 删除：`deleted`，按 `deletedUpdated`。只有明确的撤销能把删掉的带回来。
+  - AI：`ai`，按 `ai.updated`，只从「内容版本」和合并结果相同的副本里取；不同内容版本不继承旧 `ai`。
+
+  所以旧副本上的勾选不会把另一台改过的字改回去，也不会回退 AI 状态/产物/确认标记；AI 回填不会取消勾选、不会把删掉的带回来；晚到的离线电脑各部分按各自时间合并。
+  `updated` 是副本最后一次任何改动。时间相同时取 `updated` 新的副本，再按固定顺序，结果与读文件的先后无关。
+  旧版本写的副本没有这些时间：内容版本用 `created`，勾选用 `updated`，删除用 `updated`（删掉的）或 `created`（没删的）代替。
+  `deleted: true` 的不显示（保留原文以便撤销，也防止另一台的旧副本把它带回来）。写入是临时文件 + 改名；别的电脑的坏文件跳过，自己的坏文件不覆盖、拒绝写入。
 - 文件格式：
 
 ```json
 { "version": 1, "device": "dev-…", "host": "…", "updated": "…",
   "items": [ { "id": "td-…", "text": "一行字，最多 500 字", "done": false, "doneAt": null,
                "created": "ISO 时间", "updated": "ISO 时间", "deleted": false,
-               "source": "desktop | phone", "device": "dev-…", "ai": null } ] }
+               "source": "desktop | phone", "device": "dev-…",
+               "textUpdated": "ISO 时间", "textDevice": "dev-…", "doneUpdated": "ISO 时间", "deletedUpdated": "ISO 时间",
+               "ai": null } ] }
 ```
 
-- 个人待办 `ai: null`；AI 待办的 `ai` 数据字段见下文。新增 `textUpdated`、`textDevice` 记录内容版本的时间和保存设备，勾选和状态回填不会改变它们。以后的版本加的未知字段仍原样保留。
+- 个人待办 `ai: null`；AI 待办的 `ai` 数据字段见下文。`textUpdated`、`textDevice` 记录内容版本的时间和保存设备，勾选和状态回填不会改变它们；`doneUpdated`、`deletedUpdated` 同理只随勾选、删除改变。以后的版本加的未知字段仍原样保留。
 - 队长读取用 `todo list` 获取合并结果；直接读 `todos/*.json` 的工具需复用 `TodoStore` 合并规则，不自行按整条 `updated` 覆盖 `ai`，跳过 `deleted`。
   不要直接改这些文件；队长读写状态使用下面的 `board-cli todo` 命令。
 
 ## 手机接口
 
-`GET <前缀>api/todos` → `{ items }`：未删除的条目带 `id,text,done,doneAt,created,updated`，AI 待办另带 `ai`（已完成最多 200 条），
-删除的只给 `{id, deleted:true, updated}`，不带原文。
+`GET <前缀>api/todos` → `{ items, baseKeys }`：未删除的条目带 `id,text,done,doneAt,created,updated` 和各部分的时间
+`textUpdated,doneUpdated,deletedUpdated`，AI 待办另带 `ai`（已完成最多 200 条）；删除的只给 `{id, deleted:true, updated, deletedUpdated}`，不带原文。
+`baseKeys` 是这台电脑接受的 `base` 字段。
 
 `POST <前缀>api/todos`：
 
 - `{ "op": "add", "text": "…" }`
-- `{ "op": "update", "id": "td-…", "done": true|false, "base"?: { text, done, doneAt, created, updated } }`
-  ——`base` 让一台电脑能勾掉另一台刚记、还没通过 git 同步过来的那条。
+- `{ "op": "update", "id": "td-…", "done": true|false, "base"?: { text, done, doneAt, created, updated, textUpdated } }`
+  ——`base` 让一台电脑能勾掉另一台刚记或刚改、还没通过 git 同步过来的那条。只取它的内容版本（`text` + `textUpdated`）：
+  本机没有这条就照它建一份；`textUpdated` 比本机的新就整个换成它的内容版本，同时去掉旧内容的 `ai`（AI 状态由合并按 AI 自己的时间从同版本副本里取）。
+  这份副本不知道是哪台保存的这段字，标 `awaitingOrigin`，等原文件同步过来、合并认出同一内容版本的保存设备后才可能交给 AI。
+  没有 `textUpdated`（旧手机页面）时只用来新建本机没有的那条，`created` 当内容版本；已有的那条内容不动，另一台的新字同步过来后照样按时间胜出。
+  总台只发这台电脑 `baseKeys` 里列出的字段，旧版电脑不认 `textUpdated`。
+
+写入成功的回答是 `{ item }`，`item` 和 `api/todos` 里这条的样子一样，总台直接放进这台电脑的列表。
 
 和发消息给队长同一道门：未登录 401（在路由之前判断），精确 Origin、Fetch Metadata、设备 cookie、CSRF，
 读完请求体后再验一次登录。请求体是字段白名单，其他操作（删除、改字、`ai`）一律 400。`api/info` 的能力表里有 `todos`。
 
-总台同时读两台电脑并按 `updated` 合并；写入只发给一台：在别的标签里选过的那台（没选过就是默认的 Mac），它不在线才记到另一台。
+总台同时读两台电脑，按和桌面相同的规则合并（`mobile-web/hub/core.js` 的 `mergeTodos`：内容、勾选、删除、AI 各按各的时间）；写入只发给一台：在别的标签里选过的那台（没选过就是默认的 Mac），它不在线才记到另一台。
 两台本来就是同一份清单，所以这里允许换一台记（发给队长的消息仍然永远不改发）。发不出去时写明原因，草稿留在输入框。
 
 ## 测试
 
 ```
-node --test tests/todo-store.test.js tests/mobile-todos.test.js tests/mobile-hub-todo.test.js
+node --test tests/todo-store.test.js tests/mobile-todos.test.js tests/mobile-hub-todo.test.js tests/todo-phone-desktop.test.js
 AGENTDECK_TODO_SHOTS=<目录> npx playwright test tests/e2e/todo.spec.js
 AGENTDECK_HUB_SCREENSHOT_DIR=<目录> npx playwright test tests/e2e/mobile-hub-todo.spec.js
 ```
@@ -64,7 +81,7 @@ AGENTDECK_HUB_SCREENSHOT_DIR=<目录> npx playwright test tests/e2e/mobile-hub-t
 
 本地字面匹配 `@ai`，大小写、半角/全角 `@`、前后空格、`@ ai` 都认；标记后是中文字符、结尾、空白或标点都认（下划线不算），中文也可紧邻标记之前，例如 `@ai查火车`、`帮我@ai找本书`、`＠AI查资料`。标记后紧跟英文字母或数字不触发，例如 `@aiden`、`@air_france`、`@ai2`；英文/数字用户名邮箱 `me@ai.com`、`someone@ai中文.com` 也不触发。后文出现版本号、网址或点号不会排除中文句中的标记，例如 `帮我@ai查一下Python3.12的文档` 与句首写法同样触发；纯中文用户名如 `用户@ai中文.com` 按中文紧邻标记规则触发。建卡标题、任务正文和待办均保留原文。没有意图判断。不使用关键词推断或模型分类，保存事件、应用启动和每小时兜底扫描都没有模型调用。已勾掉、已删除及个人待办不投递。
 
-每个内容版本由保存/编辑它的设备投递，另一台只读取同步状态；这避免 Git 尚未同步时两台同时唤醒队长。手机用 base 在另一台勾选尚未同步的条目时，该副本以 awaitingOrigin 等待原始文件，合并后恢复内容归属和 AI 状态，不在另一台重复派单。原设备未开 AgentDeck 时等待该设备启动，不在另一台自动抢单。原文通过第一步的 Git 同步仍然存在两台。旧版数据以 `created` 和 `device` 作为内容版本/所有者；没有设备字段的旧记录由首次本地扫描认领。仅修改勾选或保存相同文字不重交；文字变化生成新任务卡，改回旧文字也算新版本。删除或去掉所有 AI 标记后不再投递，已派出的旧工作不会被强制中断；旧版本回填拒绝。
+每个内容版本由保存/编辑它的设备投递，另一台只读取同步状态；这避免 Git 尚未同步时两台同时唤醒队长。手机用 base 在另一台勾选尚未同步的条目时，该副本以 awaitingOrigin 等待原始文件；合并时同一内容版本里有知道保存设备的副本，就由它给出归属，AI 状态按 AI 自己的时间取，不在另一台重复派单。原设备未开 AgentDeck 时等待该设备启动，不在另一台自动抢单。原文通过第一步的 Git 同步仍然存在两台。旧版数据以 `created` 和 `device` 作为内容版本/所有者；没有设备字段的旧记录由首次本地扫描认领。仅修改勾选或保存相同文字不重交；文字变化生成新任务卡，改回旧文字也算新版本。删除或去掉所有 AI 标记后不再投递，已派出的旧工作不会被强制中断；旧版本回填拒绝。
 
 先原子写 `ai` 投递记录，再复用 `TaskStore.add` 建卡（项目 `todo`，确定性 `todo-<版本 SHA256>` id），最后将完整模板持久保存到会话之外的 `config.todoInbox`，经队长现有的 `mainSession.pending` 接收。没有队长时留在本地；创建队长、保存、文件变更、启动及每小时扫描会重试。队长用现有 `receipts --wait` 或原生 host snapshot/ack 接收，输入框不会被写入。未读通知在删除/重建队长、重启后补送；收件队列同步保存成功才确认 `deliveredAt`（接受时间，不代表已读）。只有 `receipts` 消费、原生 host ack 或旧注入模式成功完成该轮才清队列，并写 `todoDeliveries` 已读去重标记；snapshot 不清，保存失败回滚。崩溃在建卡/确认中间也不会重复建卡或排第二条通知。旧版仍在 pending 的通知会迁移；旧版已经删除且正文丢失的未读通知无法从旧接受标记判断是否读过。
 

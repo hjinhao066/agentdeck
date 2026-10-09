@@ -265,3 +265,60 @@ test('a 待办 handed to AI: its state under the item, and the answer on 待我�
   await expect.poll(() => hub.machines.mac.attentionWrites.find((w) => w.op === 'reply')).toMatchObject({ op: 'reply', text: '在 ~/Documents/体检' });
   expect(hub.machines.win.attentionWrites.filter((w) => w.op === 'reply')).toEqual([]);
 });
+
+// The review's case in the real page, against real stores that answer as this
+// build's mobile-web.js does: Windows still holds 「@ai 找第一本书」 queued; the
+// Mac changed it to 「@ai 找第二本书」 and 队长 finished it with book.epub. The
+// user picked Windows, which has not synced, and ticks it there. The text, the
+// AI result and its file stay, on the phone and on both desktops after the sync.
+test('a tick through a computer a sync behind keeps the newer text and the finished AI result', async ({ browser }) => {
+  const os = require('os');
+  const { TodoStore } = require('../../todo-store');
+  const { TodoAI, taskId } = require('../../todo-ai');
+  const { TaskStore } = require('../../task-board');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-hub-todo-sync-'));
+  try {
+    const store = (id) => new TodoStore(path.join(root, id, 'todos'), { deviceId: 'dev-' + id });
+    const mac = store('mac'), win = store('win');
+    const send = (from, to) => { fs.mkdirSync(to.dir, { recursive: true }); fs.copyFileSync(path.join(from.dir, from.deviceId + '.json'), path.join(to.dir, from.deviceId + '.json')); };
+    const ai = new TodoAI({ todos: mac, tasks: new TaskStore(path.join(root, 'mac', 'tasks')), deliver() {}, notify: async () => {} });
+    const { id } = mac.add({ text: '@ai 找第一本书' });
+    ai.scan();
+    send(mac, win);
+    mac.update({ id, text: '@ai 找第二本书' });
+    ai.scan();
+    const book = path.join(root, 'book.epub');
+    fs.writeFileSync(book, 'x');
+    const now = () => mac.list().find((t) => t.id === id);
+    await ai.status({ id, taskId: taskId(now()), status: 'working' });
+    await ai.status({ id, taskId: taskId(now()), status: 'done', files: [book] });
+    const list = machines();
+    list[0].todoStore = mac; list[1].todoStore = win;
+    await open(browser, { list });
+    await page.locator('#machine-bar').getByRole('button', { name: /^Windows/ }).click();
+    await nav('待办');
+    const row = rowFor('@ai 找第二本书');
+    await expect(row.locator('.todo-ai-chip')).toHaveText('AI 办完了');
+    await expect(row.locator('.todo-ai-files')).toHaveText('交回 1 个文件：book.epub（在「待我处理」打开）');
+    await expect(rowFor('第一本书')).toHaveCount(0);
+    await row.locator('.todo-check').click();
+    await expect(hint()).toHaveText('已勾掉（记在 Windows）');
+    expect(hub.machines.win.todoWrites).toEqual([{ op: 'update', id, done: true,
+      base: { text: '@ai 找第二本书', done: false, doneAt: null, created: now().created, updated: now().updated, textUpdated: now().textUpdated } }]);
+    expect(hub.machines.mac.todoWrites).toEqual([]);
+    await page.locator('.todo-done-toggle').click();
+    const ticked = page.locator('.todo-list-done .todo-row', { hasText: '@ai 找第二本书' });
+    await expect(ticked.locator('.todo-ai-chip')).toHaveText('AI 办完了');
+    await expect(ticked.locator('.todo-ai-files')).toHaveText('交回 1 个文件：book.epub（在「待我处理」打开）');
+    // The next poll of both computers says the same.
+    await page.getByRole('button', { name: '刷新全部电脑', exact: true }).click();
+    await expect(ticked.locator('.todo-ai-chip')).toHaveText('AI 办完了');
+    await expect(openRows()).toHaveCount(0);
+    // The desktops after git brings the files across agree with the phone.
+    send(mac, win); send(win, mac);
+    for (const side of [mac, win]) {
+      const seen = side.list().find((t) => t.id === id);
+      expect([seen.text, seen.done, seen.ai.status, seen.ai.files]).toEqual(['@ai 找第二本书', true, 'done', [book]]);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

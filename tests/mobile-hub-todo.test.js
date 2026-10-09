@@ -39,6 +39,13 @@ test('mergeTodos: the copy updated last wins, a later deletion hides the item, o
   assert.deepEqual(Core.mergeTodos([]), { open: [], done: [] });
 });
 
+test('todoBase sends the content version only to a computer that lists it; an older build gets the fields it knows', () => {
+  const t = { ...item('base-item-001', '买书', 5), textUpdated: at(4), doneUpdated: at(3), ai: { status: 'done' }, seenOn: 'mac' };
+  const old = { text: '买书', done: false, doneAt: null, created: at(5), updated: at(5) };
+  assert.deepEqual(Core.todoBase(t), old);
+  assert.deepEqual(Core.todoBase(t, ['text', 'done', 'doneAt', 'created', 'updated', 'textUpdated']), { ...old, textUpdated: at(4) });
+});
+
 test('todoWriter prefers the chosen computer, then the default one, and only ever an online one that has to-dos', () => {
   const m = (id, extra = {}) => ({ id, state: 'online', todosReady: true, csrf: 'c', ...extra });
   assert.equal(Core.todoWriter([m('mac', { default: true }), m('win')], '').id, 'mac');

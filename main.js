@@ -1038,10 +1038,9 @@ app.whenReady().then(async () => {
     // The phone records, reads and ticks to-dos; it never edits text or deletes.
     getTodos: () => todoStore.phone(),
     writeTodos: (input) => {
-      const item = input.op === 'add' ? todoStore.add({ text: input.text, source: 'phone' })
-        : todoStore.update({ id: input.id, done: input.done, ...(input.base ? { base: input.base } : {}), source: 'phone' });
+      const item = todoStore.phoneWrite(input);
       todosChanged();
-      return { id: item.id, text: item.text, done: item.done, doneAt: item.doneAt, created: item.created, updated: item.updated };
+      return item;
     },
     getOutput: (id) => requestMobile('output', { id }),
     getCaptain: async () => {

@@ -201,7 +201,9 @@ test('an unsynced phone checkbox base waits for original ownership, avoiding a s
   todos.update({ id: original.id, done: false, source: 'phone' });
   ai.scan(); assert.equal(deliveries.length, 0);
   fs.writeFileSync(path.join(todos.dir, 'dev-win.json'), staleCopy);
-  ai.scan(); assert.equal(todos.list()[0].awaitingOrigin, true, 'a stale original cannot erase the newer AI state');
+  // A stale original already names the owner of this version (Windows): this
+  // computer still hands nothing to AI, and its own copy holds no AI state to lose.
+  ai.scan(); assert.equal(todos.list()[0].textDevice, 'dev-win'); assert.equal(deliveries.length, 0);
   fs.copyFileSync(path.join(remote.dir, 'dev-win.json'), path.join(todos.dir, 'dev-win.json'));
   ai.scan();
   const seen = todos.list()[0];
