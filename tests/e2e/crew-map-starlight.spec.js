@@ -13,6 +13,8 @@ const path = require('path');
 // only the stand-in TUI. Set AGENTDECK_CREW_MAP_SHOTS to keep PNGs.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const shots = process.env.AGENTDECK_CREW_MAP_SHOTS;
+// Up to nineteen stand-in terminals start with each test: on a busy Windows PC (ConPTY) that alone can take over a minute.
+test.describe.configure({ timeout: 180000 });
 let application, page, profile;
 const errors = [];
 
@@ -61,11 +63,13 @@ async function launch(crew) {
   page.on('pageerror', (e) => errors.push(e.message));
   await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart)).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(crew.length + 1);
-  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 40000 }).toBe(crew.length + 1);
+  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 120000 }).toBe(crew.length + 1);
 }
 test.afterEach(async () => {
   if (application) await closeElectron(application);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  // A force-closed Electron's helpers can still hold files in the profile for a few seconds (EPERM on Windows):
+  // a temporary folder left behind is reported, it does not fail a test that passed.
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
   application = null;
 });
 

@@ -75,7 +75,7 @@ const nodes = () => page.locator('.cm-node:not(.kind-captain)');
 
 test.afterAll(async () => {
   if (application) await closeElectron(application);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true });
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
 });
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(launch);
