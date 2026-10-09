@@ -1538,7 +1538,8 @@
   function maybeArchive(col, entry) {
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
-    if (isSubCaptain(col) && childrenOf(col).length) return;   // its children still report to it
+    // its children, live or still queued for a slot, report to it
+    if (isSubCaptain(col) && (childrenOf(col).length || s.waitlist.some((w) => w.metadata?.subCaptainId === col.id))) return;
     if (entry && entry.alive && (!['done', 'plain'].includes(entry.state) || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd) || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) return;
     // The status dot and lastScreen are a few seconds old: look at the terminal itself
     // once more before ending it.

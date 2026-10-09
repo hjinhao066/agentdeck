@@ -425,3 +425,22 @@ test('a sub-captain\'s stage report still replaces an unread automatic notice, a
   assert.match(later, /做完了/);
   assert.doesNotMatch(later, /用哪个模板/);
 });
+
+// A child queued for a slot (memory, concurrency or quota) is the sub-captain's too: its ledger lists
+// it under 排队等空位, and the queued request carries its subCaptainId. After a restart nothing on
+// the sub-captain's screen keeps it busy (its receipts --wait is gone) and no child receipt waits yet.
+test('D: a sub-captain whose only child still waits in the queue is not archived automatically', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  r.h.memory = 4; // critical memory: new sessions queue
+  assert.match(await r.text('create-child', sub, { title: '排队子会话', task: 'x' }), /排队/);
+  await r.api.submit({ action: 'complete', result: '阶段一：拆好了，子会话排队中', files: [] }, sub);
+  await r.text('main-receipts', r.captain);
+  r.state().inflight = []; // the Captain finished the turn that read it
+  const task = r.state().tasks.findLast((t) => t.colId === sub.id);
+  task.doneAt = task.sentAt = Date.now() - 60 * MIN;
+  const entry = Object.assign(r.terms.get(sub.id), { state: 'done', lastOutputAt: Date.now() - 60 * MIN });
+  r.api.onTick(sub.id, entry);
+  assert.ok(r.columns.includes(sub), 'archived while its child waits for a slot');
+  assert.equal(r.state().waitlist.find((w) => w.title === '排队子会话')?.metadata?.subCaptainId, sub.id, 'the queued child is still its own');
+});
