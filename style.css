@@ -2651,7 +2651,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 :root[data-theme="light"] .cm-trail:not(.core) { stroke: hsl(var(--project-hue) 88% 34%); }
 @keyframes cm-trail { from { stroke-dashoffset: 32; } to { stroke-dashoffset: -228; } }
 .cm-bus { stroke: var(--cm-wire); stroke-width: 1.6; opacity: 0.8; }
-.cm-bus.active { stroke: var(--cm-wire-hi); stroke-width: 2; opacity: 0.85; }
+.cm-bus.active { stroke: var(--cm-wire-hi); stroke-width: 2; opacity: 0.62; }
 .cm-hub { fill: var(--cm-space); stroke: var(--cm-wire-hi); stroke-width: 1.8; }
 .cm-hub.active { fill: var(--cm-wire-hi); }
 .cm-hub-ring { fill: color-mix(in srgb, var(--cm-wire-hi) 6%, transparent); stroke: color-mix(in srgb, var(--cm-wire-hi) 30%, transparent); stroke-width: 1; }
