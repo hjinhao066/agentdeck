@@ -36,7 +36,7 @@ function terminal(cmd = 'claude') {
     beginTurn: () => ({ id: 't' }),
   });
   vm.runInContext(sendSource, context);
-  return { typed, saved, send: (text, opts) => context.sendPrompt({ id: 'col', cmd }, text, null, opts || { silent: true }) };
+  return { entry, typed, saved, send: (text, opts) => context.sendPrompt({ id: 'col', cmd }, text, null, opts || { silent: true }) };
 }
 // A briefing that has grown to `length` characters; the closing paragraph and
 // the token saver's resume line are still the last thing in it.
@@ -58,11 +58,17 @@ test('the Captain core prompt stays within 2500 characters; a briefing send may 
   }
 });
 
-test('no briefing line passes the line-reading limit, so a terminal that takes plain keys still gets it whole', () => {
+test('no briefing line passes the line-reading limit, so a terminal that takes plain keys still gets it whole', async () => {
   for (const platform of PLATFORMS) for (const legacy of [false, true]) for (const cap of [5, 30, 50]) {
     const longest = ChatCore.longestLineBytes(M.instructions(platform, '', legacy, cap));
     assert.ok(longest <= ChatCore.LINE_MODE_BYTES,
       `${platform}${legacy ? ' legacy' : ''}：队长提示词有一行 ${longest} 字节，超过行模式上限 ${ChatCore.LINE_MODE_BYTES}，会变成文件指针。把长规则拆成几行，不要删内容`);
+    // and a terminal without bracketed paste is typed it whole, then one Enter
+    const text = M.instructions(platform, '', legacy, cap) + M.SAVER_RESUME, t = terminal();
+    t.entry.term.modes.bracketedPasteMode = false;
+    assert.ok(await t.send(text, BRIEFING), platform);
+    assert.deepEqual(t.saved, [], platform + ': nothing goes to a file');
+    assert.deepEqual(t.typed, [text.replace(/\r?\n/g, '\r'), '\r'], platform);
   }
 });
 

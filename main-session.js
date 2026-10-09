@@ -641,7 +641,10 @@
       if (fresh) s.briefed = briefedMark(col, text);
       if (attempt || fresh) save();
       done();
-      if (note && !notice) host.sendWhenReady(col, note, { silent: true, guardUserInput: true });
+      // A terminal that reads lines gets the briefing typed. Through ConPTY the agent can
+      // still be reading it while its screen looks idle, and a note sent then joins the
+      // briefing as one prompt: the note waits until the agent has drawn something since.
+      if (note && !notice) host.sendWhenReady(col, note, { silent: true, guardUserInput: true, outputSince: Date.now() });
     };
     host.sendWhenReady(col, text, {
       silent: true, onSent: sent, guardUserInput: true, inlineLimit: M.BRIEFING_LIMIT,

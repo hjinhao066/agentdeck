@@ -1404,10 +1404,15 @@
       const pastedAt = Date.now();
       const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
       const minWait = isCursor ? 700 : (bracketed ? 500 : 80);
+      // Windows: the paste reaches the agent through ConPTY 0.1-0.5s after it is written
+      // (measured on Windows 11), so the minimum wait alone can end before the agent has it.
+      // Wait until it has drawn something since the paste, within the same 3s.
+      const viaConpty = host.platform === 'win32';
       do {
         await new Promise((resolve) => setTimeout(resolve, bracketed ? 50 : 60));
         if (host.terms.get(col.id) !== entry || !entry.alive || (o.cancelled && o.cancelled())) return false;
       } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)
+        || (viaConpty && (entry.lastOutputAt || 0) <= pastedAt && Date.now() - pastedAt < 3000)
         || (Date.now() - pastedAt < PASTE_READ_MAX && C.pasteBusy(host.dumpScreen(entry.term, 6)))));
       if (!o.silent && window.MainSession) window.MainSession.onContextCommandSent(col, text);
       window.deck.ptyInput(col.id, '\r');

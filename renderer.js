@@ -2899,6 +2899,9 @@ function sendWhenReady(col, text, opts) {
       // 1000 bytes. Never type into it; a caller that can report it is told once the limit
       // for a silent start has passed (see MainCore.startupLimit).
       const silent = MainCore.launchEchoOnly(entry.lastScreen);
+      // outputSince: what was sent before has to have reached the agent, shown by anything it
+      // drew after that time; after a minute without that, send anyway.
+      const caughtUp = !o.outputSince || (entry.lastOutputAt || 0) > o.outputSince || Date.now() - o.outputSince > 60_000;
       if (silent && o.onStartupFailed) {
         // Awake time only: a computer asleep through the first seconds of a start must not read as
         // a hang. This loop wakes up first after a sleep, so let the clock see the gap before reading it.
@@ -2911,7 +2914,7 @@ function sendWhenReady(col, text, opts) {
           return;
         }
       }
-      if (!silent && idle && ready && settled && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
+      if (!silent && idle && ready && settled && caughtUp && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
         if (o.cancelled && o.cancelled()) return;
         // A draft blocks this attempt, but must not skip the timeout below.
         if (!(o.guardUserInput && userComposing(col.id))) {

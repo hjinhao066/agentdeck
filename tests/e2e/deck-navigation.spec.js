@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -19,11 +20,13 @@ test('column navigation preserves native center and nearest scrolling, including
       args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
     });
     const page = await app.firstWindow();
-    await expect(page.locator('.column')).toHaveCount(3);
+    // Windows starts each ConPTY synchronously in the main process; on a cold machine three
+    // of them can hold the page's first frames for several seconds.
+    await expect(page.locator('.column')).toHaveCount(3, { timeout: 20000 });
     // Columns enter the DOM before their terminals mount on the next frame.
     await expect.poll(() => page.evaluate(() =>
       ['before', 'target', 'after'].every((id) => terms.get(id)?.wrap?.isConnected)
-    )).toBe(true);
+    ), { timeout: 20000 }).toBe(true);
     const cases = await page.evaluate(() => {
       isUserScrollingDeck = true;
       const target = terms.get('target').wrap;
@@ -62,7 +65,7 @@ test('column navigation preserves native center and nearest scrolling, including
     const covering = cases.find((result) => result.name === 'wide-both');
     expect(covering.actual).toBe(covering.start);
   } finally {
-    if (app) await app.close();
-    fs.rmSync(profile, { recursive: true, force: true });
+    if (app) await closeElectron(app);
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });
