@@ -122,6 +122,9 @@ test.afterEach(async () => {
 });
 
 for (const scenario of ['A', 'B']) test(`${scenario}: default layout at both window sizes and themes, with real pointer interactions`, async () => {
+  // B's ten sessions have five running: one card wide, ten rows, taller than every window here, so each of
+  // the six sizes also scrolls to the end and checks the last card there
+  test.setTimeout(120000);
   await launch(scenario);
   const evidence = [];
   for (const [width, height] of [[1280, 800], [1440, 900], [1920, 1080]]) for (const theme of ['dark', 'light']) {
