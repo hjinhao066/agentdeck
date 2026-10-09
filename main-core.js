@@ -1009,6 +1009,26 @@
     const label = { auth: '未登录', rate_limit: '请求被限流' }[resourceFailure(reason, 'quota')] || '额度用尽';
     return { failed: label + (reason ? '：' + reason : '，agent 无法继续当前任务'), source: 'quota' };
   }
+  // Which resource error holds the screen ('auth' | 'rate_limit' | 'quota'), or ''.
+  function resourceKind(screen, cmd) {
+    const receipt = resourceReceipt(screen, cmd);
+    return receipt ? resourceFailure(receipt.failed, 'quota') : '';
+  }
+  // After AgentDeck typed `marker` (its 「接着做」 nudge) into a session: is a login error on screen
+  // newer than it? The error the nudge answered stays above it; one below it, or one still on
+  // screen after the nudge has scrolled away, is a new report. The marker may wrap onto a second row.
+  function loginErrorAfter(screen, cmd, marker) {
+    const lines = codexStatusScreen(screen, cmd).split('\n');
+    const flat = (text) => String(text || '').replace(/\s+/g, '');
+    const mark = flat(marker);
+    let nudge = -1, error = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (mark && flat(lines[i] + (lines[i + 1] || '')).includes(mark)) nudge = i;
+      const row = resourceRow(lines, i);
+      if (row && resourceFailure(row.text, 'automatic') === 'auth') error = i;
+    }
+    return error > nudge;
+  }
 
   // Conservative silence windows: status spinners may stay busy during deep thinking.
   function silenceTimeout(cmd) {
@@ -1103,7 +1123,7 @@
 
   return {
     RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
-    receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
+    receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, resourceKind, loginErrorAfter, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };
 });

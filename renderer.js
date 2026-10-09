@@ -2797,7 +2797,11 @@ function sendWhenReady(col, text, opts) {
       return;
     }
     if (entry && entry.alive) {
-      const idle = !entry.sendingPrompt && entry.state !== 'input' && !MainCore.workingForSend(entry) && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd);
+      // overLoginError: MainSession's one 「接着做」 after a login blip on a signed-in seat. The error
+      // row it answers would otherwise hold the column as a resource wait; any other wait still does.
+      const loginRowOnly = !!o.overLoginError && MainCore.resourceKind(entry.lastScreen, col.cmd) === 'auth';
+      const idle = !entry.sendingPrompt && entry.state !== 'input' && !MainCore.workingForSend(entry) &&
+        (loginRowOnly || entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd));
       const quiet = Date.now() - (entry.lastOutputAt || 0);
       const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
       // Cursor CLI initializes its TUI asynchronously and enables bracketed paste mode (?2004h)

@@ -151,6 +151,16 @@ function answer() {
     } else process.stdout.write('\n  ⎿  API Error: Your computer went to sleep mid-response. Try again.\n');
     box(); return;
   }
+  if (process.argv.includes('--login-blip') || process.argv.includes('--login-blip-twice')) {
+    // Claude Code's own login error ends the task turn; the 「接着做（登录已恢复）」 nudge gets through,
+    // or with --login-blip-twice gets the same error again.
+    process.stdout.write('\x1b[2J\x1b[H> ' + first + '\n');
+    if (first.startsWith('接着做（登录已恢复）') && !process.argv.includes('--login-blip-twice')) {
+      process.stdout.write('\n⏺ GOT carry on after login blip\n');
+      require('child_process').execFile(process.execPath, [process.env.AGENTDECK_BOARD_CLI, 'complete', '--result', 'carried on after login blip'], () => {});
+    } else process.stdout.write('  ⎿  Not logged in · Please run /login\n\n✻ Baked for 1s · done 6:03 PM\n');
+    box(); return;
+  }
   if (first === 'gemini confirmation regression') {
     process.stdout.write('\x1b[2J\x1b[HThinking: waiting for confirmation\n⠋ Working\nAntigravity\n');
     setTimeout(() => {
@@ -274,11 +284,23 @@ function listen() {
     // cooked echo otherwise scrolls long Captain briefings through the screen
     // and leaves them in later replies even after the stand-in redraws.
     // No output stream: readline handles raw editing keys without echoing them.
+    // --swallow-first-enter: the first task's Enter is lost while the TUI is busy, so its text stays in
+    // the input box; the next Enter submits it.
+    let swallowed = process.argv.includes('--swallow-first-enter') ? null : undefined;
     readline.createInterface({ input: process.stdin, terminal: true }).on('line', (line) => {
+      if (swallowed && !line.trim() && !lines.length) { lines = swallowed; swallowed = undefined; answer(); return; }
       if (!line.trim() && !lines.length) return;
       lines.push(line);
       clearTimeout(timer);
-      timer = setTimeout(answer, 250);
+      timer = setTimeout(() => {
+        if (swallowed === null && lines.join('\n').includes('AgentDeck 约定')) {
+          swallowed = lines; lines = [];
+          const w = Math.max(20, Math.min(60, (process.stdout.columns || 80) - 2));
+          process.stdout.write('\x1b[2J\x1b[H⏺ earlier reply\n\n' + '─'.repeat(w) + '\n> ' + swallowed.join('\n') + '\n' + '─'.repeat(w) + '\n\x1b[35m⏵⏵ bypass permissions on\x1b[0m (shift+tab to cycle)\n' + provider + '\n');
+          return;
+        }
+        answer();
+      }, 250);
     }).on('SIGINT', () => process.exit(0));
   }
 }

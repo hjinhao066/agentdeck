@@ -169,3 +169,41 @@ test('a signed-out seat starts nothing when restored by hand or after an app res
   expect(launches(id)).toHaveLength(1);
   expect(records('seat-env.jsonl').filter((r) => r.colId !== 'cap').every((r) => r.configDir === us2Dir)).toBe(true);
 });
+
+const NUDGE = '接着做（登录已恢复）';
+test('a "Not logged in" on a seat that is signed in gets one 接着做 after about a minute, and the task goes on', async () => {
+  test.setTimeout(150000);
+  const id = await openOnUs2(' --login-blip');
+  await expect.poll(() => screen(id).then(flat), { timeout: 20000 }).toContain(flat('Not logged in · Please run /login'));
+  await page.waitForTimeout(30000);
+  expect((await lastTask(id)).status).toBe('working');   // not filed as 未登录
+  expect(prompts(id).filter((p) => p.startsWith(NUDGE))).toHaveLength(0);
+  await expect.poll(() => prompts(id).filter((p) => p.startsWith(NUDGE)).length, { timeout: 60000 }).toBe(1);
+  await expect.poll(() => lastTask(id).then((t) => t?.status), { timeout: 20000 }).toBe('done');
+  expect((await lastTask(id)).receipt.summary).toContain('carried on after login blip');
+  expect(prompts(id).filter((p) => p.startsWith(NUDGE))).toHaveLength(1);
+});
+
+test('the same "Not logged in" after that 接着做 is a failure receipt', async () => {
+  test.setTimeout(150000);
+  const id = await openOnUs2(' --login-blip-twice');
+  await expect.poll(() => lastTask(id).then((t) => t?.status), { timeout: 100000 }).toBe('failed');
+  const task = await lastTask(id);
+  expect(task.receipt.failed).toMatch(/^未登录：/);
+  expect(task.receipt.failed).toContain('接着做');
+  expect(prompts(id).filter((p) => p.startsWith(NUDGE))).toHaveLength(1);
+});
+
+test('an instruction whose Enter was lost while the session was busy gets one more Enter and goes through', async () => {
+  test.setTimeout(90000);
+  const result = await captain({ action: 'main-new', id: 'swallow-' + Date.now(), title: 'Swallow probe', task: 'swallowed task', command: FAKE + ' --swallow-first-enter', cwd: profile });
+  expect(result.error).toBeUndefined();
+  const id = await page.evaluate(() => columns.find((c) => c.displayTitle === 'Swallow probe').id);
+  await expect.poll(() => prompts(id).some((p) => p.startsWith('swallowed task')), { timeout: 30000 }).toBe(true);
+  await expect.poll(() => lastTask(id).then((t) => t?.status), { timeout: 20000 }).toBe('done');
+  expect(prompts(id).filter((p) => p.startsWith('swallowed task'))).toHaveLength(1);
+  // the diagnostic log names the column, never the instruction
+  const log = fs.readFileSync(path.join(os.tmpdir(), 'agentdeck-notify.log'), 'utf8').split('\n').filter((l) => l.includes(`col=${id} `));
+  expect(log.filter((l) => l.includes('sent->enter-again'))).toHaveLength(1);
+  expect(log.join('\n')).not.toContain('swallowed task');
+});

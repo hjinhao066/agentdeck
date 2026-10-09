@@ -2122,18 +2122,17 @@
     if (!sr || !rec || !rec.lastAt || sleepSending.has(task.id)) return;
     if (Date.now() - rec.lastAt >= sr.RECOVER_MS && !sr.interruption(entry.lastScreen)) { delete task.sleepResume; save(); }
   }
-  function sendSleepNudge(col, task, rec) {
-    const sr = window.SleepResume;
+  function sendSleepNudge(col, task, rec, text = window.SleepResume.message(), extra = {}) {
     sleepSending.set(task.id, Date.now());
     const done = () => sleepSending.delete(task.id);
-    host.sendWhenReady(col, sr.message(), {
-      silent: true, guardUserInput: true, requireIdle: true, timeout: 90_000,
+    host.sendWhenReady(col, text, {
+      silent: true, guardUserInput: true, requireIdle: true, timeout: 90_000, ...extra,
       cancelled: () => { const gone = task.status !== 'working'; if (gone) done(); return gone; },
       onSent: () => {
         done();
         rec.attempts++; rec.lastAt = Date.now();
         task.sleepNudges = (task.sleepNudges || 0) + 1;
-        if (rec.evidence !== 'screen') delete task.sleptAt;
+        if (rec.evidence === 'event') delete task.sleptAt;
         task.endedAt = 0;
         save();
       },
@@ -2167,6 +2166,42 @@
     // Only the sleep event suggested it and the nudge changed nothing: the ordinary rule decides.
     delete task.sleptAt; delete task.sleepResume;
     return false;
+  }
+  // ---- "Not logged in" on a seat whose login checks out ----
+  // A credential blip (10-08 18:02-18:03: three US2 sessions within 40 s, one went on by itself).
+  // Only for a working Claude task. The seat is checked once per episode, fresh. Signed in: the
+  // sleep rules carry it as evidence 'login' (about a minute, then one 「接着做」); the same error
+  // below that nudge is a failure receipt. Not signed in, or no answer: the ordinary 未登录 receipt.
+  const loginChecks = new Map(); // task id -> 'pending' | true | false (never saved)
+  function loginBlipStep(col, entry, task) {
+    const sr = window.SleepResume;
+    if (!sr || !col || task.status !== 'working' || task.processEnded || task.pendingInstall) return false;
+    if (!window.ClaudeSeatsCore?.claudeLaunch(col.cmd) || M.resourceKind(entry.lastScreen, col.cmd) !== 'auth') return false;
+    const blip = task.loginBlip;
+    if (blip?.attempts) {
+      if (!M.loginErrorAfter(entry.lastScreen, col.cmd, sr.LOGIN_MARK)) return true;   // the error it answered, above it
+      settle(task, { summary: '', files: [], images: [], failed: M.resourceReceipt(entry.lastScreen, col.cmd).failed + '\n' + sr.failure(blip), explicit: true, source: 'quota' });
+      return true;
+    }
+    const signedIn = loginChecks.get(task.id);
+    if (signedIn === undefined) {
+      loginChecks.set(task.id, 'pending');
+      Promise.resolve(window.deck.claudeSeats?.(true)).then((infos) => {
+        loginChecks.set(task.id, (infos || []).find((s) => s.id === col.claudeSeatId)?.loggedIn === true);
+      }, () => loginChecks.set(task.id, false));
+      return true;
+    }
+    if (signedIn === 'pending') return true;
+    if (signedIn !== true) { loginChecks.delete(task.id); return false; }
+    const now = Date.now();
+    const rec = task.loginBlip ||= { firstSeenAt: now, attempts: 0, lastAt: 0, evidence: 'login' };
+    const began = sleepSending.get(task.id);
+    if (began && now - began < 3 * 60_000) return true;
+    const online = sr.online(typeof navigator === 'undefined' ? null : navigator);
+    const step = sr.decide(rec, { now, clock: sr.clock.snapshot(), online, lifetime: task.sleepNudges || 0 });
+    if (step.action === 'wait') return true;
+    if (step.action === 'send') { sendSleepNudge(col, task, rec, sr.message('login'), { requireIdle: false, overLoginError: true }); return true; }
+    return false;   // no nudge left for this task: the ordinary receipt
   }
   function onTick(id, entry) {
     const s = state();
@@ -2236,6 +2271,7 @@
         // Follow-ups queued after the failure still wait for the provider to
         // resume; a brand-new session exhausted at startup fails its first task.
         if (task.status === 'queued' && (task.supplement || col?.lastReceipt?.source === 'quota')) continue;
+        if (loginBlipStep(col, entry, task)) continue;
         if (task.status === 'asking') task.status = 'working';
         settle(task, { summary: '', files: [], images: [], failed: '额度用尽，agent 无法继续当前任务', explicit: true, source: 'quota', ...M.resourceReceipt(entry.lastScreen, col?.cmd) });
         continue;
@@ -2274,6 +2310,9 @@
       // the prompt is gone (answered here or in the column): back to work
       if (task.status === 'input') { task.status = 'working'; update(task); }
       if (task.sleepResume && (entry.state === 'working' || activity === 'working')) sleepResumeRecovered(task, entry);
+      if (task.loginBlip?.lastAt && (entry.state === 'working' || activity === 'working') && Date.now() - task.loginBlip.lastAt >= window.SleepResume.RECOVER_MS) {
+        delete task.loginBlip; loginChecks.delete(task.id); save();   // it worked again: a later blip starts afresh
+      }
       if (!task.processEnded && (entry.state === 'working' || activity === 'working' || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) { task.endedAt = 0; continue; }
       if (sleepResumeStep(col, entry, task)) continue;
       // A finished turn that asked in prose, without `ask`, is a question receipt.
