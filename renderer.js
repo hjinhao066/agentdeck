@@ -3922,15 +3922,18 @@ function statusScreen(term) {
   return text.trimEnd();
 }
 // Check if the PTY has real child processes (not just the shell itself).
-// This is called from maybeArchive to avoid archiving sessions with background tasks
-// that are not showing output on screen (e.g., long-running E2E tests, video rendering).
-// TODO: Implement actual child process detection via IPC to main.js's process tree check.
-// For now, returns false (stub implementation - does not prevent archiving).
+// Uses a cache to provide synchronous results (updated asynchronously from main.js).
+const childProcessCache = new Map(); // termId -> hasChildren boolean
 function hasChildProcesses(term) {
-  // Stub: Future implementation will check the actual process tree via IPC.
-  // In main.js, enumerate child processes of the PTY's pid to detect activity.
-  // macOS: ps -o ppid,pid,comm -p <pid> and check for children
-  // Windows: Get-Process | where {$_.Parent.Id -eq <pid>}
+  if (!term || !term.id) return false;
+  // Return cached result if available (might be slightly stale, but safe)
+  if (childProcessCache.has(term.id)) return childProcessCache.get(term.id);
+  // Update cache in background (fire and forget)
+  window.deck.ptyHasChildWork(term.id).then(
+    (result) => { childProcessCache.set(term.id, result); },
+    (err) => { childProcessCache.set(term.id, false); }  // On error, assume no children
+  ).catch(() => {});
+  // Return false initially (conservative: allows archiving if unsure)
   return false;
 }
 // Format elapsed ms compactly: 42s → 3m 12s → 1h 05m.

@@ -909,11 +909,16 @@
     if (prompt < 0 || /^\s*[│┃]?\s*❯\s*\d+\./.test(lines[prompt])) return false;
     if (claudeStatusRowRunning(lines.slice(0, prompt))) return true;
     const footer = lines.slice(prompt + 1);
+    // Match "N tasks/shells/monitors/agents still running" (complete words)
     if (footer.some((line) => /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(line))) return true;
+    // Match "Waiting for N background agent(s) to finish" pattern
+    if (footer.some((line) => /\bWaiting\s+for\s+[1-9]\d*\s+background\s+agents?/i.test(line))) return true;
+    // Match truncated indicators in narrow columns: "1 she" "2 mon" etc
+    if (footer.some((line) => /\b[1-9]\d*\s+(?:shells?|she|monitors?|mon|tasks?|agents?|age)/i.test(line))) return true;
     // A narrow column drops the tail of the footer ("· 1 monitor ·", "still running"
     // cut off), so a bare "N monitors" segment of the footer counts as well.
     return footer.some((line) => line.split(/[·,]/).some((part) =>
-      /^[\s│┃]*[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)(?:\s+still\s+running)?[\s.…│┃]*$/i.test(part)));
+      /^[\s│┃]*[1-9]\d*\s+(?:shells?|she|monitors?|mon|tasks?|agents?|age)(?:\s+still\s+running)?[\s.…│┃]*$/i.test(part)));
   }
   // A quota failure receipt is provisional: Claude and Codex continue by themselves
   // once the limit resets. True while the terminal is alive, no longer shows the
