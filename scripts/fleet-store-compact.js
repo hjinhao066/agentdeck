@@ -3,8 +3,8 @@
 // Compact a fleet hub file too large for the hub to load (Node reads at most
 // 0x1fffffe8 characters into one string; the live hub reached 608 MB on
 // 2026-10-09). The file is read as bytes and walked entry by entry, so no part
-// of it has to fit in one string. Each upload receipt that copied a whole
-// transcript becomes a receipt naming it, transcript copies kept only because a
+// of it has to fit in one string. Each receipt that copied a whole transcript or
+// card becomes one naming it, transcript copies kept only because a
 // dispatch card's state moved are dropped, and a version a later save rewrote keeps
 // only the turns rewritten: the same rules the hub applies when it loads a file it
 // can read (shared-store.js). Cards, devices and transcripts are kept as they are.
@@ -13,7 +13,7 @@
 //   node scripts/fleet-store-compact.js <old store.json> <new store.json>
 const fs = require('fs');
 const path = require('path');
-const { SharedStore, historyReceipt, compactHistory } = require('../shared-store');
+const { SharedStore, compactReceipt, compactHistory } = require('../shared-store');
 
 const QUOTE = 0x22, SLASH = 0x5c, OPEN = 0x7b, CLOSE = 0x7d, LIST = 0x5b, LIST_END = 0x5d, COLON = 0x3a, COMMA = 0x2c;
 const space = (byte) => byte === 0x20 || byte === 0x0a || byte === 0x0d || byte === 0x09;
@@ -83,12 +83,9 @@ function compact(buf, now = Date.now()) {
       for (const [id, a, b] of members(buf, from, to)) {
         const saved = parse(buf, a, b);
         stats.ops++;
-        if (saved && typeof saved === 'object') {
-          const record = saved.body && saved.body.record;
-          if (record && typeof record === 'object') { saved.body = historyReceipt(record, saved.body.duplicate); stats.receiptsShrunk++; }
-          if (typeof saved.at !== 'string') saved.at = at;
-        }
-        ops[id] = saved;
+        const body = saved && saved.body;
+        if (body && (body.record || body.card)) stats.receiptsShrunk++;
+        ops[id] = compactReceipt(saved, at);
       }
       data.ops = ops;
     } else if (key === 'history') {

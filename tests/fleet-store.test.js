@@ -158,7 +158,9 @@ test('a late operation replay remains idempotent after more than two thousand ot
   for (let i = 0; i < 2000; i++) hub.data.ops['op-other-' + i] = { status: 200, body: {} };
   hub.pushTask({ opId: 'op-next-change', cardId: 'card-1', expectedRevision: 1, deviceId: 'dev-win', set: { title: 'newer' } });
   const reloaded = new SharedStore({ file: hub.file });
-  assert.deepEqual(reloaded.pushTask(input), first);
+  const again = reloaded.pushTask(input);
+  assert.equal(again.status, first.status);
+  assert.equal(again.body.card.revision, 2, 'answered with the card as the hub has it now, not applied again');
   assert.equal(reloaded.snapshot().cards[0].title, 'newer');
   assert.equal(reloaded.snapshot().cards[0].revision, 2);
   assert.deepEqual(reloaded.snapshot().cards[0].conflicts, []);

@@ -114,6 +114,20 @@ function compactHistory(record) {
 function historyReceipt(record, duplicate) {
   return { sessionId: record.sessionId, deviceId: record.deviceId, contentHash: record.contentHash, updatedAt: record.updatedAt || null, duplicate: !!duplicate };
 }
+// A receipt as this hub keeps it, from one an older hub kept (a whole transcript or
+// a whole card) or from a new answer: a card answer keeps the card's id; a replay
+// answers with the card as it is then (_replay). Undated receipts take `at`.
+function compactReceipt(saved, at) {
+  if (!saved || typeof saved !== 'object') return saved;
+  const body = saved.body;
+  if (body && body.record && typeof body.record === 'object') saved.body = historyReceipt(body.record, body.duplicate);
+  else if (body && body.card && typeof body.card === 'object' && typeof body.card.id === 'string') {
+    const { card, ...rest } = body;
+    saved.body = { cardId: card.id, ...rest };
+  }
+  if (typeof saved.at !== 'string') saved.at = at;
+  return saved;
+}
 
 function publicCard(card) {
   const { trail, ...rest } = card;
@@ -185,14 +199,9 @@ class SharedStore {
     // IDs are untrusted keys, including __proto__ and inherited method names.
     // JSON.parse restores ordinary objects, so rebuild every index on load too.
     for (const key of ['devices', 'cards', 'ops', 'history']) data[key] = Object.assign(Object.create(null), data[key]);
-    // Older hubs kept the whole transcript in each upload's receipt, and no time.
+    // Older hubs kept the whole transcript or card in each receipt, and no time.
     const at = new Date(this.now()).toISOString();
-    for (const saved of Object.values(data.ops)) {
-      if (!saved || typeof saved !== 'object') continue;
-      const record = saved.body && saved.body.record;
-      if (record && typeof record === 'object') saved.body = historyReceipt(record, saved.body.duplicate);
-      if (typeof saved.at !== 'string') saved.at = at;
-    }
+    for (const saved of Object.values(data.ops)) compactReceipt(saved, at);
     for (const [key, record] of Object.entries(data.history)) if (record && typeof record === 'object') data.history[key] = compactHistory(record);
     data.seq = Number.isInteger(data.seq) ? data.seq : 0;
     return data;
@@ -209,9 +218,17 @@ class SharedStore {
         if (!(now - Date.parse(saved && saved.at) < RECEIPT_KEEP_MS)) delete this.data.ops[id];
       }
     }
-    const saved = { status, body: clone(body), at: new Date(now).toISOString() };
-    this.data.ops[opId] = saved;
-    return saved;
+    this.data.ops[opId] = compactReceipt({ status, body: clone(body) }, new Date(now).toISOString());
+    return { status, body: clone(body) };
+  }
+  // The answer to an operation already applied: its outcome, with the card as the
+  // hub has it now (what the client takes as its base).
+  _replay(opId) {
+    const saved = this.data.ops[opId];
+    const { cardId, ...rest } = (saved && saved.body) || {};
+    if (typeof cardId !== 'string') return { status: saved.status, body: clone(saved.body) };
+    const card = this.data.cards[cardId];
+    return { status: saved.status, body: { card: card ? publicCard(card) : null, ...clone(rest) } };
   }
   devices() {
     const now = this.now();
@@ -263,7 +280,7 @@ class SharedStore {
     if (!isDeviceId(deviceId)) throw reject(400, 'Invalid device id.');
     if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw reject(400, 'Invalid revision.');
     if (!set || typeof set !== 'object' || Array.isArray(set)) throw reject(400, 'Invalid field set.');
-    if (this.data.ops[opId]) return this.data.ops[opId];
+    if (this.data.ops[opId]) return this._replay(opId);
     const clean = {};
     for (const key of MUTABLE_KEYS) if (key in set) clean[key] = clone(set[key]);
     for (const [key, value] of Object.entries(clean)) checkValue(key, value);
@@ -317,7 +334,7 @@ class SharedStore {
     if (typeof opId !== 'string' || !/^[A-Za-z0-9_-]{8,160}$/.test(opId)) throw reject(400, 'Invalid opId.');
     if (!isSessionId(sessionId) || !isDeviceId(deviceId)) throw reject(400, 'Invalid history identity.');
     if (typeof contentHash !== 'string' || !/^[a-f0-9]{64}$/.test(contentHash)) throw reject(400, 'Invalid history hash.');
-    if (this.data.ops[opId]) return this.data.ops[opId];
+    if (this.data.ops[opId]) return this._replay(opId);
     const key = sessionId + '@' + deviceId;
     const existing = this.data.history[key];
     if (existing && existing.contentHash === contentHash) {
@@ -373,4 +390,4 @@ class SharedStore {
   }
 }
 
-module.exports = { SharedStore, LEASE_MS, MUTABLE_KEYS, isDeviceId, isSessionId, stripSecrets, publicCard, historyReceipt, compactHistory };
+module.exports = { SharedStore, LEASE_MS, MUTABLE_KEYS, isDeviceId, isSessionId, stripSecrets, publicCard, compactReceipt, compactHistory };

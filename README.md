@@ -1403,8 +1403,11 @@ Older revisioned task snapshots restored by Git keep their older revision when
 submitted, so they cannot silently replace newer server edits.
 Repeated operations do not increment a card revision or add a second conflict.
 The hub answers a replayed operation from its receipt for 30 days. A transcript
-upload's receipt names the record (hash and time) instead of copying it; a hub
-file written by an older hub has its whole-record receipts shrunk when it loads.
+upload's receipt names the record (hash and time) instead of copying it; a card
+operation's receipt keeps its outcome and the card's id, and a replay is answered
+with the card as the hub has it then (what the client takes as its base). A hub
+file written by an older hub has its whole-transcript and whole-card receipts
+shrunk when it loads.
 (Copies per save of a growing chat took the live hub file to 608 MB, past what
 Node can read, on 2026-10-09.)
 All conflicting alternatives and captain turns are retained. Older transcript

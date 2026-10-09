@@ -83,6 +83,6 @@ test('a hub file from an older hub has its whole-record receipts shrunk when it 
   const receipt = store.data.ops['op-hist-0001-x'];
   assert.equal(receipt.body.record, undefined);
   assert.deepEqual({ ...receipt.body }, { sessionId: 'cap-1', deviceId: 'dev-mac', contentHash: 'a'.repeat(64), updatedAt: '2026-10-09T01:00:00.000Z', duplicate: false });
-  assert.deepEqual(store.data.ops['op-task-0001-x'].body.card, { id: 't-1' }, 'a card receipt keeps the card its client reads back');
+  assert.deepEqual({ ...store.data.ops['op-task-0001-x'].body }, { cardId: 't-1', merged: false, conflict: false }, 'a card receipt names its card');
   assert.equal(store.snapshot().history[0].turns.length, 1, 'the transcript itself is untouched');
 });
