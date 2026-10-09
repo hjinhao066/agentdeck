@@ -5,8 +5,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const vm = require('vm');
+const { spawn } = require('child_process');
 const B = require('../board-core');
 const M = require('../main-core');
 
@@ -50,7 +52,7 @@ function runtime() {
     config, platform: 'darwin', columns: () => columns, terms,
     saveConfig() {}, flushConfig() {}, showToast() {}, columnLabel: (c) => c.displayTitle || c.title || c.id,
     userComposing: () => false, isBackstage: (c) => !!c.captainCrew && !c.isMain, focusedId: () => '',
-    lastTurnTs: () => 0, dumpScreen: (term) => term.screen || '', agentInForeground: async () => true,
+    lastTurnTs: () => 0, dumpScreen: (term) => term.screen || '', agentInForeground: async () => true, quotaText: () => 'Claude 剩余 80%',
     createMain: (c) => { const col = { ...c, id: 'captain' }; return col; },
     createSession: (c) => {
       if (h.failOpen && c.title === h.failOpen) throw new Error('开不出来');
@@ -471,4 +473,49 @@ test('a sub-captain whose column was respawned with a new id still leads its chi
   assert.match(subView, /A 第二轮/);
   assert.match(await r.text('main-ledger', sub), new RegExp(kid.id), 'its ledger still lists the child');
   assert.match(await r.text('main-tell', sub, { to: kid.id, message: '第三轮' }), /已发给|待补充/, 'it can still tell its child');
+});
+
+// The real board-cli against a stand-in app whose requests the real MainSession answers, by token.
+function boardApp(controlDir, callers, r) {
+  fs.mkdirSync(path.join(controlDir, 'requests'), { recursive: true });
+  fs.mkdirSync(path.join(controlDir, 'responses'), { recursive: true });
+  const timer = setInterval(() => {
+    for (const name of fs.readdirSync(path.join(controlDir, 'requests')).filter((n) => n.endsWith('.json'))) {
+      const file = path.join(controlDir, 'requests', name);
+      let request;
+      try { request = JSON.parse(fs.readFileSync(file, 'utf8')); fs.unlinkSync(file); } catch (_) { continue; }
+      const { token, ...message } = request;
+      const caller = callers.get(token);
+      const reply = (payload) => fs.writeFileSync(path.join(controlDir, 'responses', `${request.id}.json`), JSON.stringify(payload));
+      if (!caller) { reply({ done: true, error: 'Control request rejected: terminal is not conductor-managed.' }); continue; }
+      Promise.resolve().then(() => r.api.handle({ ...message, callerId: caller.id }, caller)).then(reply, (error) => reply({ done: true, error: error.message }));
+    }
+  }, 20);
+  return () => clearInterval(timer);
+}
+function boardCli(args, env) {
+  return new Promise((resolve) => {
+    const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AGENTDECK_')));
+    const child = spawn(process.execPath, [path.resolve(__dirname, '../board-cli.js'), ...args], { env: { ...clean, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('close', (code) => resolve({ code, out, err }));
+  });
+}
+
+test('discuss is the Captain\'s only: a sub-captain\'s token is refused', async (t) => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-discuss-test-sub-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(profile, 'test-profile.json'), '{}');
+  const controlDir = path.join(profile, 'board-control');
+  t.after(boardApp(controlDir, new Map([['captain-token', r.captain], ['sub-token', sub]]), r));
+  const env = (token) => ({ AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: token, AGENTDECK_DISCUSS_TEST_PROFILE: profile });
+  const captain = await boardCli(['discuss', 'status'], env('captain-token'));
+  assert.equal(captain.code, 0, captain.err);
+  const fromSub = await boardCli(['discuss', 'status'], env('sub-token'));
+  assert.notEqual(fromSub.code, 0, `discuss ran for the sub-captain: ${fromSub.out.trim()}`);
+  assert.match(fromSub.err, /只有队长能用/);
 });

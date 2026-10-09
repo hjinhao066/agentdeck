@@ -68,7 +68,7 @@ test.beforeEach(async () => {
       fs.unlinkSync(path.join(controlDir, 'requests', file));
       requests.push(request);
       const answer = request.token === env.AGENTDECK_CONTROL_TOKEN
-        ? { done: true, result: request.action === 'main-ledger' ? 'captain 队长 空闲' : 'Discussion receipt recorded.' }
+        ? { done: true, result: request.action === 'main-quota' ? 'Claude 剩余 80%' : 'Discussion receipt recorded.' }
         : { done: true, error: 'Captain capability required.' };
       fs.writeFileSync(path.join(controlDir, 'responses', file), JSON.stringify(answer));
     }
@@ -110,7 +110,7 @@ test('authenticated Captain completes independent answers, frozen anonymous revi
   const waited = await command(['wait', '--id', run.id]);
   expect(waited).toContain(path.join(run.directory, 'final.md'));
   expect(await command(['status'])).toContain(run.id);
-  expect(requests.some((request) => request.action === 'main-ledger')).toBe(true);
+  expect(requests.some((request) => request.action === 'main-quota')).toBe(true);
 });
 
 test('--gemini adds the configured third model and completes two rounds with seven calls', async () => {
