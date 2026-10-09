@@ -9,7 +9,7 @@ const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 
 const JOB = path.join(__dirname, '..', 'scripts', 'e2e-remote-job.js');
-const { depsKey } = require(JOB);
+const { depsKey, safeRemove } = require(JOB);
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e.x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e.x' } }).trim();
 
 // A fake Playwright: reports what its working directory holds at the start and 2 s later.
@@ -19,7 +19,7 @@ const read = () => fs.readFileSync('marker.txt', 'utf8');
 const first = read();
 setTimeout(() => {
   fs.writeFileSync(path.join(path.dirname(process.env.PLAYWRIGHT_JSON_OUTPUT_NAME), 'seen.txt'), first + ',' + read() + ',' + path.basename(process.cwd()));
-}, 2000);
+}, Number(process.env.FAKE_SLEEP_MS || 2000));
 `;
 
 function setup() {
@@ -267,4 +267,143 @@ EOJ
     assert.equal(fs.readFileSync(downloads, 'utf8').trim().split('\n').length, 1, 'one download for three jobs');
     assert.ok(jobs.some((j) => /electron starts \(try 1\)/.test(j.output)));
   } finally { env.done(); }
+});
+
+// ---- reviewer's findings: disk growth, delete safety, lock owner, sweep --------------------------
+
+const lockfile = (extra = {}) => JSON.stringify({ name: 'x', version: '1.0.0', lockfileVersion: 3, packages: { '': { name: 'x', version: '1.0.0', dependencies: { a: '1' } }, 'node_modules/a': { version: '1.0.0' } }, ...extra }, null, 2);
+
+test('the dependency key ignores the root version (a release bump must not trigger a new 545 MB install) but not real dependency changes', () => {
+  const base = JSON.parse(lockfile());
+  const bumped = JSON.parse(lockfile()); bumped.version = '2.0.0'; bumped.packages[''].version = '2.0.0';
+  const changed = JSON.parse(lockfile()); changed.packages['node_modules/a'].version = '1.0.1';
+  const bytes = (o) => Buffer.from(JSON.stringify(o, null, 2));
+  assert.equal(depsKey(bytes(base)), depsKey(bytes(bumped)));
+  assert.notEqual(depsKey(bytes(base)), depsKey(bytes(changed)));
+  assert.equal(depsKey(Buffer.from('not json')), depsKey(Buffer.from('not json')), 'unparseable lockfile still gets a stable key');
+  assert.notEqual(depsKey(Buffer.from('not json')), depsKey(Buffer.from('other')));
+});
+
+// commits whose lockfile differs in a dependency, so each needs its own install
+function commitLock(env, name) {
+  const src = path.join(env.root, 'src');
+  const o = JSON.parse(lockfile()); o.packages['node_modules/a'].version = `9.${name.charCodeAt(0)}.0`;
+  fs.writeFileSync(path.join(src, 'package-lock.json'), JSON.stringify(o, null, 2)); fs.writeFileSync(path.join(src, 'marker.txt'), name);
+  git(src, 'add', '-A'); git(src, 'commit', '-qm', name, '--no-verify');
+  const sha = git(src, 'rev-parse', 'HEAD'); git(env.hub, 'fetch', '-q', src, `${sha}:refs/e2e/${name.toLowerCase()}`);
+  return sha;
+}
+const depsDirs = (env) => (fs.existsSync(path.join(env.root, 'deps')) ? fs.readdirSync(path.join(env.root, 'deps')).filter((n) => /^[0-9a-f]{16}$/.test(n)).sort() : []);
+const keyOfCommit = (env, sha) => depsKey(Buffer.from(git(env.hub, 'show', `${sha}:package-lock.json`)));
+
+test('old dependency folders are removed automatically: only the 2 most recently used stay', posix, async () => {
+  const env = setup();
+  try {
+    const fake = fakeNpm(env);
+    const shas = ['C', 'D', 'E', 'F'].map((n) => commitLock(env, n));
+    for (const [i, sha] of shas.entries()) {
+      const job = await startJob(env, `r${i}`, sha, { install: 'auto', extraEnv: { PATH: fake.PATH } });
+      assert.equal(job.code, 0, job.output);
+    }
+    const keys = shas.map((sha) => keyOfCommit(env, sha));
+    assert.deepEqual(depsDirs(env), [keys[2], keys[3]].sort());
+  } finally { env.done(); }
+});
+
+test('a dependency folder a running job uses is never removed, however old', posix, async () => {
+  const env = setup();
+  try {
+    const fake = fakeNpm(env);
+    const [c, d, e, f] = ['C', 'D', 'E', 'F'].map((n) => commitLock(env, n));
+    const slow = startJob(env, 'slow', c, { install: 'auto', extraEnv: { PATH: fake.PATH, FAKE_SLEEP_MS: '16000' } });
+    await new Promise((resolve) => setTimeout(resolve, 3500)); // installed and running
+    for (const [i, sha] of [d, e, f].entries()) {
+      const job = await startJob(env, `r${i}`, sha, { install: 'auto', extraEnv: { PATH: fake.PATH } });
+      assert.equal(job.code, 0, job.output);
+    }
+    assert.ok(depsDirs(env).includes(keyOfCommit(env, c)), 'folder of the running job survives');
+    const done = await slow;
+    assert.equal(done.code, 0, done.output); assert.match(seen(done), /^C,C,/);
+  } finally { env.done(); }
+});
+
+test('not enough free disk for a new install: exit 16 with a clear message, npm is not started', posix, async () => {
+  const env = setup();
+  try {
+    const fake = fakeNpm(env);
+    const job = await startJob(env, 'r1', env.shas.A, { install: 'auto', extraEnv: { PATH: fake.PATH, AGENTDECK_E2E_MIN_FREE_BYTES: String(2 ** 60) } });
+    assert.equal(job.code, 16, job.output);
+    assert.match(job.output, /not enough free disk space/);
+    assert.equal(installs(fake).length, 0);
+    assert.deepEqual(depsDirs(env), []);
+  } finally { env.done(); }
+});
+
+test('leftover checkouts of killed jobs are swept at the start of the next job; a fresh one is left alone', posix, async () => {
+  const env = setup();
+  try {
+    const fake = fakeNpm(env);
+    const co = path.join(env.root, 'checkouts'); fs.mkdirSync(path.join(co, 'old-run'), { recursive: true }); fs.mkdirSync(path.join(co, 'fresh-run'), { recursive: true });
+    const old = new Date(Date.now() - 6 * 3600 * 1000); fs.utimesSync(path.join(co, 'old-run'), old, old);
+    const job = await startJob(env, 'r1', env.shas.A, { install: 'auto', extraEnv: { PATH: fake.PATH } });
+    assert.equal(job.code, 0, job.output);
+    assert.deepEqual(fs.readdirSync(co).sort(), ['fresh-run']);
+  } finally { env.done(); }
+});
+
+test('--no-install reuses the most recently used complete install (there is no hub\\node_modules any more)', posix, async () => {
+  const env = setup();
+  try {
+    const fake = fakeNpm(env);
+    const first = await startJob(env, 'r1', env.shas.A, { install: 'auto', extraEnv: { PATH: fake.PATH } });
+    assert.equal(first.code, 0, first.output);
+    const skip = await startJob(env, 'r2', env.shas.B, { install: 'skip' });
+    assert.equal(skip.code, 0, skip.output);
+    assert.match(seen(skip), /^B,B,/);
+    assert.equal(installs(fake).length, 1);
+  } finally { env.done(); }
+});
+
+const holdLockBy = (env, pid, ageMs) => {
+  const lock = holdLock(env, ageMs);
+  fs.writeFileSync(path.join(lock, 'owner'), String(pid));
+  const t = new Date(Date.now() - ageMs); fs.utimesSync(lock, t, t);
+  return lock;
+};
+test('an install lock whose owner process is gone is broken at once, not after 30 minutes', posix, async () => {
+  const env = setup();
+  try {
+    const fake = fakeNpm(env);
+    const dead = spawn(process.execPath, ['-e', '0']); await new Promise((r) => dead.on('close', r));
+    holdLockBy(env, dead.pid, 0);
+    const job = await startJob(env, 'r1', env.shas.A, { install: 'auto', extraEnv: { PATH: fake.PATH, AGENTDECK_E2E_INSTALL_WAIT_MS: '5000' } });
+    assert.equal(job.code, 0, job.output);
+    assert.match(job.output, /owner .* is gone/);
+  } finally { env.done(); }
+});
+test('an install lock whose owner is alive is respected even when it is older than the stale limit', posix, async () => {
+  const env = setup();
+  try {
+    const fake = fakeNpm(env);
+    holdLockBy(env, process.pid, 2 * 3600 * 1000);
+    const job = await startJob(env, 'r1', env.shas.A, { install: 'auto', extraEnv: { PATH: fake.PATH, AGENTDECK_E2E_INSTALL_WAIT_MS: '1500' } });
+    assert.equal(job.code, 15, job.output);
+    assert.equal(installs(fake).length, 0);
+  } finally { env.done(); }
+});
+
+test('safeRemove only deletes direct children of the folder it is given, with ids it recognises', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'safe remove ')); // a space in the path, like a home folder could have
+  try {
+    const base = path.join(root, 'deps'); fs.mkdirSync(path.join(base, 'abc123'), { recursive: true });
+    const outside = path.join(root, 'precious'); fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, 'f'), 'x');
+    assert.throws(() => safeRemove(base, outside), /outside/);
+    assert.throws(() => safeRemove(base, path.join(base, '..', 'precious')), /outside/);
+    assert.throws(() => safeRemove(base, base), /outside/);
+    assert.throws(() => safeRemove(base, 'relative/path'), /outside/);
+    assert.throws(() => safeRemove(base, path.join(base, 'abc123', 'deeper')), /outside/);
+    assert.ok(fs.existsSync(path.join(outside, 'f')));
+    safeRemove(base, path.join(base, 'abc123'));
+    assert.ok(!fs.existsSync(path.join(base, 'abc123')));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

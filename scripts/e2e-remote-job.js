@@ -47,10 +47,35 @@ function retry(label, attempt, times = 8) {
   return code;
 }
 
-// One folder of dependencies per lockfile (and platform, CPU, Node version).
-const depsKey = (lockfileBytes) => crypto.createHash('sha256').update(lockfileBytes).update(`-${process.platform}-${process.arch}-${process.version}`).digest('hex').slice(0, 16);
+// One folder of dependencies per lockfile (and platform, CPU, Node version). The root `version` is
+// left out: every release bump changes it and must not trigger a new 545 MB install.
+function depsKey(lockfileBytes) {
+  let material = lockfileBytes;
+  try {
+    const lock = JSON.parse(String(lockfileBytes));
+    delete lock.version;
+    if (lock.packages && lock.packages['']) delete lock.packages[''].version;
+    material = JSON.stringify(lock);
+  } catch { /* unparseable: key on the raw bytes */ }
+  return crypto.createHash('sha256').update(material).update(`-${process.platform}-${process.arch}-${process.version}`).digest('hex').slice(0, 16);
+}
 
 class InstallWaitTimeout extends Error {}
+
+// The only way this file deletes a folder: a direct child of `base`, absolute, with a plain name.
+function safeRemove(base, target) {
+  const root = path.resolve(base), t = path.resolve(String(target));
+  if (!path.isAbsolute(String(target)) || path.dirname(t) !== root) throw new Error(`refusing to remove ${target}: outside ${base}`);
+  if (!/^[\w.-]+$/.test(path.basename(t))) throw new Error(`refusing to remove ${target}: odd folder name`);
+  fs.rmSync(t, { recursive: true, force: true });
+}
+
+// A worktree folder (checkout or install): git forgets it, then the folder goes.
+function removeWorktree(workDir, base, dir) {
+  spawnSync('git', ['-C', workDir, 'worktree', 'remove', '--force', dir], { stdio: 'ignore' });
+  try { safeRemove(base, dir); } catch (error) { say(`could not remove ${dir}: ${error.message}`); }
+  spawnSync('git', ['-C', workDir, 'worktree', 'prune'], { stdio: 'ignore' });
+}
 
 // Right after npm ci (and its binary download) the Electron binary is often still locked by the virus scanner ("the file is in
 // use by another process") and the first launch fails. Start it until it answers, before any job
@@ -74,52 +99,125 @@ function warmElectron(modules) {
   say('warning: electron did not start after install; the first tests may fail to launch it');
 }
 
-// One installer per lock. While another job holds it we log why we wait, every 30 s. A lock older
-// than the stale limit (a crashed job) is broken; waiting longer than the wait limit gives up.
-function withInstallLock(lockDir, fn) {
-  const waitMs = envMs('AGENTDECK_E2E_INSTALL_WAIT_MS', 25 * 60000), staleMs = envMs('AGENTDECK_E2E_INSTALL_STALE_MS', 30 * 60000);
-  const started = Date.now();
-  let lastNote = 0;
-  for (;;) {
-    try { fs.mkdirSync(lockDir); break; } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      try { if (Date.now() - fs.statSync(lockDir).mtimeMs > staleMs) { say(`breaking a stale install lock (${path.basename(lockDir)})`); fs.rmdirSync(lockDir); continue; } } catch {}
-      const waited = Date.now() - started;
-      if (waited > waitMs) throw new InstallWaitTimeout(`waited ${Math.round(waited / 1000)} s for another job's dependency install (${path.basename(lockDir)}); giving up`);
-      if (Date.now() - lastNote > 30000) { say(`waiting for another job to finish installing dependencies (${Math.round(waited / 1000)} s so far)`); lastNote = Date.now(); }
-      sleep(1000);
-    }
+const processAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+const readOwner = (lockDir) => { try { const pid = Number(fs.readFileSync(path.join(lockDir, 'owner'), 'utf8')); return pid > 0 ? pid : null; } catch { return null; } };
+
+// A lock is stale when its owner process is gone, or (owner unknown) after 30 minutes, or after 3 hours whatever.
+function lockIsStale(lockDir) {
+  const age = Date.now() - fs.statSync(lockDir).mtimeMs;
+  const owner = readOwner(lockDir);
+  if (owner) {
+    if (!processAlive(owner)) { say(`install lock ${path.basename(lockDir)}: owner ${owner} is gone, taking it over`); return true; }
+    return age > envMs('AGENTDECK_E2E_INSTALL_HARD_STALE_MS', 3 * 3600000);
   }
-  try { return fn(); } finally { try { fs.rmdirSync(lockDir); } catch {} }
+  return age > envMs('AGENTDECK_E2E_INSTALL_STALE_MS', 30 * 60000);
 }
 
-// The node_modules of this lockfile: reused when complete, otherwise installed here exactly once.
-// Installing needs the commit's whole tree (postinstall runs a repo script), so the folder is a
-// checkout of this commit; only its node_modules is used afterwards. Returns { modules } or { failed, code }.
-function ensureDeps({ workDir, sha, lockfile, install }) {
-  if (install === 'skip') return { modules: path.join(workDir, 'node_modules') };
-  const key = depsKey(fs.readFileSync(lockfile));
-  const base = path.join(path.dirname(workDir), 'deps');
-  const dir = path.join(base, key), done = path.join(dir, '.e2e-deps-done');
-  if (fs.existsSync(done)) { say(`dependencies already installed (${key})`); return { modules: path.join(dir, 'node_modules') }; }
+function tryLock(lockDir) {
+  try { fs.mkdirSync(lockDir); fs.writeFileSync(path.join(lockDir, 'owner'), String(process.pid)); return true; } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    return false;
+  }
+}
+const unlock = (lockDir) => { try { fs.rmSync(path.join(lockDir, 'owner'), { force: true }); fs.rmdirSync(lockDir); } catch {} };
+
+// One holder per lock. While another job holds it we log why we wait, every 30 s; a stale lock is taken
+// over; waiting longer than the wait limit gives up.
+function withInstallLock(lockDir, fn) {
+  const waitMs = envMs('AGENTDECK_E2E_INSTALL_WAIT_MS', 25 * 60000);
+  const started = Date.now();
+  let lastNote = 0;
+  while (!tryLock(lockDir)) {
+    try { if (lockIsStale(lockDir)) { unlock(lockDir); continue; } } catch { continue; }
+    const waited = Date.now() - started;
+    if (waited > waitMs) throw new InstallWaitTimeout(`waited ${Math.round(waited / 1000)} s for another job's dependency install (${path.basename(lockDir)}); giving up`);
+    if (Date.now() - lastNote > 30000) { say(`waiting for another job to finish installing dependencies (${Math.round(waited / 1000)} s so far)`); lastNote = Date.now(); }
+    sleep(1000);
+  }
+  try { return fn(); } finally { unlock(lockDir); }
+}
+
+// ---- the dependency folders: deps/<key>/{node_modules, .e2e-deps-done, .e2e-deps-used, .users/<run>} ----
+const DONE = '.e2e-deps-done', USED = '.e2e-deps-used', USERS = '.users';
+const depsBase = (workDir) => path.join(path.dirname(workDir), 'deps');
+const KEY = /^[0-9a-f]{16}$/;
+
+function registerUser(dir, runId) {
+  fs.mkdirSync(path.join(dir, USERS), { recursive: true });
+  fs.writeFileSync(path.join(dir, USERS, runId), String(process.pid));
+  fs.writeFileSync(path.join(dir, USED), new Date().toISOString());
+}
+function releaseUser(dir, runId) {
+  try { fs.rmSync(path.join(dir, USERS, runId), { force: true }); fs.writeFileSync(path.join(dir, USED), new Date().toISOString()); } catch {}
+}
+// A running job re-registers nothing, so a user marker older than a job can last (queue limit 45 min) is a leftover.
+const inUse = (dir) => { try { return fs.readdirSync(path.join(dir, USERS)).some((n) => Date.now() - fs.statSync(path.join(dir, USERS, n)).mtimeMs < 2 * 3600000); } catch { return false; } };
+const lastUsed = (dir) => { try { return fs.statSync(path.join(dir, USED)).mtimeMs; } catch { try { return fs.statSync(dir).mtimeMs; } catch { return 0; } } };
+
+// Remove old install folders, keeping the `keep` most recently used and every one a job is using or
+// installing. Each folder is taken under its own lock, so it cannot be removed while a job joins it.
+function pruneDeps(workDir, keep) {
+  const base = depsBase(workDir);
+  let names = [];
+  try { names = fs.readdirSync(base).filter((n) => KEY.test(n)); } catch { return 0; }
+  const ranked = names.map((n) => ({ n, dir: path.join(base, n), used: lastUsed(path.join(base, n)) })).sort((a, b) => b.used - a.used);
+  let removed = 0;
+  for (const { n, dir } of ranked.slice(keep)) {
+    const lock = path.join(base, `${n}.lock`);
+    if (!tryLock(lock)) continue;
+    try {
+      if (inUse(dir)) continue;
+      removeWorktree(workDir, base, dir);
+      say(`removed old dependency folder ${n}`);
+      removed++;
+    } finally { unlock(lock); }
+  }
+  return removed;
+}
+
+const freeBytes = (dir) => { try { const s = fs.statfsSync(dir); return Number(s.bavail) * Number(s.bsize); } catch { return Infinity; } };
+
+// Joins (installing first, once, if needed) the node_modules of this lockfile and registers the job as a
+// user of it. Returns { modules, release } or { failed, code }.
+function ensureDeps({ workDir, sha, lockfile, install, runId }) {
+  const base = depsBase(workDir);
   fs.mkdirSync(base, { recursive: true });
+  if (install === 'skip') {
+    // Existing install, nothing new: the legacy hub\node_modules if there is one, else the most recently used folder.
+    const legacy = path.join(workDir, 'node_modules');
+    if (fs.existsSync(legacy)) return { modules: legacy, release() {} };
+    const newest = fs.readdirSync(base).filter((n) => KEY.test(n) && fs.existsSync(path.join(base, n, DONE)))
+      .map((n) => path.join(base, n)).sort((a, b) => lastUsed(b) - lastUsed(a))[0];
+    if (!newest) return { failed: 'nothing installed to reuse (--no-install)', code: 13 };
+    registerUser(newest, runId);
+    return { modules: path.join(newest, 'node_modules'), release: () => releaseUser(newest, runId) };
+  }
+  const key = depsKey(fs.readFileSync(lockfile));
+  const dir = path.join(base, key), done = path.join(dir, DONE);
+  const join = () => { registerUser(dir, runId); return { modules: path.join(dir, 'node_modules'), release: () => releaseUser(dir, runId) }; };
   try {
     return withInstallLock(path.join(base, `${key}.lock`), () => {
-      if (fs.existsSync(done)) { say(`dependencies already installed (${key})`); return { modules: path.join(dir, 'node_modules') }; }
+      if (fs.existsSync(done)) { say(`dependencies already installed (${key})`); return join(); }
       // A folder without the done marker is the leftover of a failed or crashed install.
-      spawnSync('git', ['-C', workDir, 'worktree', 'remove', '--force', dir], { stdio: 'ignore' });
-      fs.rmSync(dir, { recursive: true, force: true });
-      spawnSync('git', ['-C', workDir, 'worktree', 'prune'], { stdio: 'ignore' });
+      removeWorktree(workDir, base, dir);
+      const need = envMs('AGENTDECK_E2E_MIN_FREE_BYTES', 2 * 1024 ** 3);
+      if (freeBytes(base) < need) {
+        pruneDeps(workDir, 0);
+        if (freeBytes(base) < need) {
+          const gb = (n) => (n / 1024 ** 3).toFixed(1);
+          say(`not enough free disk space for a new install (${gb(freeBytes(base))} GB free, ${gb(need)} GB needed)`);
+          return { failed: 'not enough free disk space', code: 16 };
+        }
+      }
       say(`npm ci (no install for this lockfile yet, ${key})`);
       if (spawnSync('git', ['-C', workDir, 'worktree', 'add', '-q', '--detach', '--force', dir, sha], { stdio: 'inherit' }).status) return { failed: 'git worktree add (deps)', code: 12 };
       if (run(npm, ['ci', '--no-audit', '--no-fund'], { cwd: dir, shell: process.platform === 'win32' })) {
-        spawnSync('git', ['-C', workDir, 'worktree', 'remove', '--force', dir], { stdio: 'ignore' });
-        fs.rmSync(dir, { recursive: true, force: true });
+        removeWorktree(workDir, base, dir);
         return { failed: 'npm ci', code: 13 };
       }
       warmElectron(path.join(dir, 'node_modules'));
       fs.writeFileSync(done, new Date().toISOString());
-      return { modules: path.join(dir, 'node_modules') };
+      return join();
     });
   } catch (error) {
     if (error instanceof InstallWaitTimeout) { say(error.message); return { failed: 'waiting for the dependency install lock', code: 15 }; }
@@ -127,12 +225,21 @@ function ensureDeps({ workDir, sha, lockfile, install }) {
   }
 }
 
+// Checkouts of jobs that were killed (their finally never ran) are left behind: sweep the old ones.
+function sweepCheckouts(workDir) {
+  const base = path.join(path.dirname(workDir), 'checkouts');
+  let names = [];
+  try { names = fs.readdirSync(base); } catch { return; }
+  for (const n of names) {
+    const dir = path.join(base, n);
+    try { if (Date.now() - fs.statSync(dir).mtimeMs > 3 * 3600000) removeWorktree(workDir, base, dir); } catch {}
+  }
+}
+
 function removeCheckout(workDir, checkout) {
   // The junction goes first: removing the checkout must never reach into the shared node_modules.
   try { fs.unlinkSync(path.join(checkout, 'node_modules')); } catch { try { fs.rmdirSync(path.join(checkout, 'node_modules')); } catch {} }
-  spawnSync('git', ['-C', workDir, 'worktree', 'remove', '--force', checkout], { stdio: 'ignore' });
-  try { fs.rmSync(checkout, { recursive: true, force: true }); } catch (error) { say(`could not remove ${checkout}: ${error.message}`); }
-  spawnSync('git', ['-C', workDir, 'worktree', 'prune'], { stdio: 'ignore' });
+  removeWorktree(workDir, path.join(path.dirname(workDir), 'checkouts'), checkout);
 }
 
 function main(jobFile) {
@@ -162,14 +269,16 @@ function main(jobFile) {
 
   // 2. This job's own checkout; node_modules is shared through a link.
   const checkout = path.join(path.dirname(workDir), 'checkouts', job.runId);
+  let deps = null;
   try {
     fs.mkdirSync(path.dirname(checkout), { recursive: true });
+    sweepCheckouts(workDir);
     if (retry('git worktree add', () => { removeCheckout(workDir, checkout); return git('worktree', 'add', '-q', '--detach', '--force', checkout, job.sha); })) {
       return finish(12, { failed: 'git worktree add' });
     }
 
     // 3. Dependencies of this commit's lockfile (installed once, shared read-only).
-    const deps = ensureDeps({ workDir, sha: job.sha, lockfile: path.join(checkout, 'package-lock.json'), install: job.install });
+    deps = ensureDeps({ workDir, sha: job.sha, lockfile: path.join(checkout, 'package-lock.json'), install: job.install, runId: job.runId });
     if (deps.failed) return finish(deps.code, { failed: deps.failed });
     fs.symlinkSync(deps.modules, path.join(checkout, 'node_modules'), 'junction');
 
@@ -182,10 +291,13 @@ function main(jobFile) {
     delete env.ELECTRON_RUN_AS_NODE;
     const code = run(process.execPath, args, { cwd: checkout, env });
     return finish(code, { seconds: Math.round((Date.now() - started) / 1000) });
-  } finally { removeCheckout(workDir, checkout); }
+  } finally {
+    removeCheckout(workDir, checkout);
+    if (deps && deps.release) { deps.release(); try { pruneDeps(workDir, envMs('AGENTDECK_E2E_DEPS_KEEP', 2)); } catch (error) { say(`cleanup of old dependency folders failed: ${error.message}`); } }
+  }
 }
 
 if (require.main === module) {
   try { process.exit(main(process.argv[2])); } catch (error) { console.error(`[remote-job] ${error.message}`); process.exit(14); }
 }
-module.exports = { checkJob, depsKey };
+module.exports = { checkJob, depsKey, safeRemove };

@@ -18,9 +18,9 @@ const ROOT = path.resolve(__dirname, '..');
 const defaultSay = (message) => console.log(`[e2e-auto] ${message}`);
 
 // Exit codes of e2e-remote-win that mean "Windows could not run it", not "a test failed":
-// 255 ssh lost, 75 queue wait timed out, 10-15 setup (git init/fetch/checkout, npm ci, job file,
-// waiting for another job's dependency install).
-const INFRA_EXIT_CODES = new Set([255, 75, 10, 11, 12, 13, 14, 15]);
+// 255 ssh lost, 75 queue wait timed out, 10-16 setup (git init/fetch/checkout, npm ci, job file,
+// waiting for another job's dependency install, 16 not enough free disk for an install).
+const INFRA_EXIT_CODES = new Set([255, 75, 10, 11, 12, 13, 14, 15, 16]);
 
 // Check if Windows PC is reachable via SSH
 function isWindowsOnline(host = 'winpc', timeoutSecs = 5) {
@@ -175,7 +175,7 @@ async function main(argv = process.argv.slice(2), overrides = {}) {
     return 2;
   }
 
-  const local = args.specs.filter((spec) => deps.isMacOnlySpec(path.join(ROOT, spec)));
+  const local = args.specs.filter((spec) => deps.isMacOnlySpec(path.resolve(ROOT, spec)));
   let windows = args.specs.filter((spec) => !local.includes(spec));
   if (local.length) say(`${local.length} Mac-only spec(s), running locally via queue`);
   if (windows.length && !deps.isWindowsOnline(args.host)) {
@@ -183,22 +183,24 @@ async function main(argv = process.argv.slice(2), overrides = {}) {
     local.push(...windows); windows = [];
   }
 
-  let exitCode = 0;
-  if (windows.length) {
+  // Both groups at the same time: the Mac-only specs do not wait for the Windows group.
+  const onWindows = windows.length ? (async () => {
     say(`${windows.length} cross-platform spec(s), sending to Windows`);
     let code;
     try { code = await deps.runOnWindows(windows, args.playwrightArgs, args.host); }
     catch (error) { say(`Windows run could not be completed (${error.message})`); code = 255; }
     if (INFRA_EXIT_CODES.has(code)) {
       say(`Windows could not run the specs (exit ${code}), falling back to the local Mac queue`);
-      local.push(...windows);
-    } else if (code !== 0) {
-      exitCode = code;
-      say(`Windows run failed (exit ${code}). If a spec only works on macOS/POSIX, mark it with test.skip(process.platform === 'win32', 'reason') so it routes to the Mac`);
+      return { code: 0, fallback: windows };
     }
-  }
-  if (local.length) {
-    const code = await deps.runLocal(local, args.playwrightArgs);
+    if (code !== 0) say(`Windows run failed (exit ${code}). If a spec only works on macOS/POSIX, mark it with test.skip(process.platform === 'win32', 'reason') so it routes to the Mac`);
+    return { code, fallback: [] };
+  })() : Promise.resolve({ code: 0, fallback: [] });
+  const onMac = local.length ? deps.runLocal(local, args.playwrightArgs) : Promise.resolve(0);
+  const [win, macCode] = await Promise.all([onWindows, onMac]);
+  let exitCode = win.code || macCode || 0;
+  if (win.fallback.length) {
+    const code = await deps.runLocal(win.fallback, args.playwrightArgs);
     if (code !== 0) exitCode = code;
   }
   return exitCode;

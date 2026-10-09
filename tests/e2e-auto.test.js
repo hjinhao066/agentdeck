@@ -98,7 +98,7 @@ test('Windows offline: everything runs on the Mac queue and Windows is never cal
   assert.equal(r.win.length, 0);
   assert.deepEqual(r.local[0].specs.sort(), ['tests/e2e/a.spec.js', 'tests/e2e/mac.spec.js']);
 });
-for (const code of [255, 75, 10, 11, 12, 13, 14, 15]) {
+for (const code of [255, 75, 10, 11, 12, 13, 14, 15, 16]) {
   test(`Windows setup/connection failure (exit ${code}) falls back to the Mac queue`, async () => {
     assert.ok(INFRA_EXIT_CODES.has(code));
     const r = await run(['tests/e2e/a.spec.js'], { runOnWindows: async () => code });
@@ -150,4 +150,24 @@ test('snapshotCommit: clean tree uses HEAD; dirty tree (modified + new file) bec
 test('e2e-auto calls main() of e2e-remote-win and e2e-queue: both modules export it', () => {
   assert.equal(typeof require('../scripts/e2e-remote-win').main, 'function');
   assert.equal(typeof require('../scripts/e2e-queue').main, 'function');
+});
+
+test('Mac-only and Windows groups run at the same time, not one after the other', async () => {
+  let release;
+  const winStarted = new Promise((resolve) => { release = resolve; });
+  const order = [];
+  const f = fakeDeps({
+    runOnWindows: async () => { order.push('win:start'); await new Promise((r) => setTimeout(r, 50)); order.push('win:end'); return 0; },
+    runLocal: async () => { order.push('local:start'); await new Promise((r) => setTimeout(r, 10)); order.push('local:end'); return 0; },
+  });
+  const code = await main(['tests/e2e/a.spec.js', 'tests/e2e/mac.spec.js'], f.deps);
+  assert.equal(code, 0);
+  assert.deepEqual(order.slice(0, 2).sort(), ['local:start', 'win:start']);
+  assert.ok(order.indexOf('local:start') < order.indexOf('win:end'));
+});
+test('a spec given as an absolute path or from another folder is judged by the file it names', async () => {
+  const seenPaths = [];
+  const f = fakeDeps({ isMacOnlySpec: (p) => { seenPaths.push(p); return false; } });
+  await main([path.join(ROOT, 'tests/e2e/a.spec.js')], f.deps);
+  assert.deepEqual(seenPaths, [path.join(ROOT, 'tests/e2e/a.spec.js')]);
 });

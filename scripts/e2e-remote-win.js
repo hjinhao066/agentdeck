@@ -54,15 +54,36 @@ const ssh = (host, command, options = {}) =>
   execFileSync('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', host, command], { encoding: 'utf8', ...options });
 const scp = (...args) => execFileSync('scp', ['-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', ...args], { stdio: ['ignore', 'inherit', 'inherit'] });
 
+// Every Windows path that goes into a cmd.exe command line is quoted, and every command that deletes
+// something is built here from a validated base folder and run id. An unquoted `rmdir /s /q C:\Users\John Smith\...`
+// would delete C:\Users\John.
+const checkHome = (home) => {
+  if (!/^[A-Za-z]:\\[\w.\\-]+$/.test(home) || home.includes('..')) throw new Error(`Unexpected Windows home: ${home}`);
+  return home;
+};
+const q = (p) => { if (/["%^&|<>]/.test(p)) throw new Error(`Refusing odd path: ${p}`); return `"${p}"`; };
+const checkBase = (winBase) => {
+  if (!winBase.endsWith(`\\${BASE}`) || winBase.includes('..') || /["%^&|<>]/.test(winBase)) throw new Error(`Windows folder must be a clean path ending in \\${BASE}: ${winBase}`);
+  return winBase;
+};
+const checkRunId = (runId) => {
+  if (!/^[\w.-]+$/.test(runId) || /^\.+$/.test(runId)) throw new Error(`Odd run id: ${runId}`);
+  return runId;
+};
+const prepareCommand = (winBase, runId) =>
+  `mkdir ${q(`${checkBase(winBase)}\\inbox\\${checkRunId(runId)}\\tools`)} 2>nul & mkdir ${q(`${winBase}\\runs`)} 2>nul & exit /b 0`;
+const removeRunCommand = (winBase, runId) =>
+  `rmdir /s /q ${q(`${checkBase(winBase)}\\inbox\\${checkRunId(runId)}`)} & rmdir /s /q ${q(`${winBase}\\runs\\${runId}`)}`;
+
 // The remote command: the same queue as everywhere, running the uploaded job inside a slot.
 function queueCommand(home, runId, o) {
   const base = `${home}\\${BASE}`;
   // Tools are uploaded per run, so overlapping runs never overwrite a file another run is loading.
   const tools = `${base}\\inbox\\${runId}\\tools`;
-  return `node ${tools}\\e2e-queue.js --queue-wait-timeout ${o.waitMinutes} --queue-run-timeout ${o.runMinutes} -- node ${tools}\\e2e-remote-job.js ${base}\\inbox\\${runId}\\job.json`;
+  return `node ${q(`${tools}\\e2e-queue.js`)} --queue-wait-timeout ${o.waitMinutes} --queue-run-timeout ${o.runMinutes} -- node ${q(`${tools}\\e2e-remote-job.js`)} ${q(`${base}\\inbox\\${runId}\\job.json`)}`;
 }
 
-const knownBasesCommand = (base) => `git -C %USERPROFILE%\\${base}\\${HUB} for-each-ref refs/e2e --format=%(objectname)`;
+const knownBasesCommand = (base) => `git -C "%USERPROFILE%\\${base}\\${HUB}" for-each-ref refs/e2e --format=%(objectname)`;
 
 function makeJob({ runId, sha, ref, winBase, needBundle, specs, playwrightArgs, install }) {
   return { runId, sha, ref, bundle: needBundle ? `${winBase}\\inbox\\${runId}\\commit.bundle` : null,
@@ -95,10 +116,10 @@ async function main(argv = process.argv.slice(2)) {
   say(`commit ${sha.slice(0, 8)} (${o.ref}) -> ${o.host}, run ${runId}`);
 
   const home = ssh(o.host, 'echo %USERPROFILE%').trim();
-  if (!/^[A-Za-z]:\\[\w .\\-]+$/.test(home)) throw new Error(`Unexpected Windows home: ${home}`);
+  checkHome(home);
   const winBase = `${home}\\${BASE}`;
   // mkdir makes parents; errors for "already exists" are expected and ignored. (`if ... & ...` would skip the rest.)
-  ssh(o.host, [`inbox\\${runId}\\tools`, 'runs'].map((d) => `mkdir ${winBase}\\${d} 2>nul`).join(' & ') + ' & exit /b 0');
+  ssh(o.host, prepareCommand(winBase, runId));
 
   // Ship the commit as a bundle (no GitHub login needed, unpushed commits work).
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-e2e-remote-'));
@@ -133,9 +154,7 @@ async function main(argv = process.argv.slice(2)) {
 
   const pulled = pull(o.host, runId, out);
   // Remove only what this run created on Windows (full path, validated run id).
-  if (/^[\w.-]+$/.test(runId)) {
-    try { ssh(o.host, `rmdir /s /q ${winBase}\\inbox\\${runId} & rmdir /s /q ${winBase}\\runs\\${runId}`); } catch {}
-  }
+  try { ssh(o.host, removeRunCommand(winBase, runId)); } catch {}
   let summary = null;
   try { summary = JSON.parse(fs.readFileSync(path.join(out, 'summary.json'), 'utf8')); } catch {}
   say(`exit ${code}${summary ? `, playwright exit ${summary.exitCode}, ${summary.seconds ?? '?'} s` : ''}; results in ${out}${pulled ? '' : ' (incomplete)'}`);
@@ -146,4 +165,4 @@ if (require.main === module) {
   main().then((code) => process.exit(code), (error) => { console.error(`[e2e-remote-win] ${error.message}`); process.exit(2); });
 }
 
-module.exports = { main, parseArgs, makeRunId, queueCommand, makeJob, knownBasesCommand, HUB };
+module.exports = { main, parseArgs, makeRunId, queueCommand, makeJob, knownBasesCommand, HUB, checkHome, removeRunCommand, prepareCommand };
