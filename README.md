@@ -1064,7 +1064,7 @@ node scripts/e2e-remote-win.js <分支或提交> tests/e2e/foo.spec.js [tests/e2
 ```
 
 - 只测**已提交**的代码：脚本把这个提交打成 git bundle 传过去（不需要先 push，也不需要 Windows 登录 GitHub），所以先 `git commit`。工作区里没提交的改动不会被带过去，脚本会提醒。
-- Windows 上一切都在自己的目录 `C:\Users\hjinh\agentdeck-e2e-win\`：`work\` 是独立检出和依赖（只在 `package-lock.json` 变了才重装，首次要下载 Electron，约几分钟），`tools\` 是本次上传的排队脚本，`inbox\`、`runs\` 是每次运行的临时目录，跑完自动只删本次的。**不碰** Windows 上已安装的 AgentDeck、别的会话目录和用户目录里别的东西。
+- Windows 上一切都在自己的目录 `C:\Users\hjinh\agentdeck-e2e-win\`：`work\` 是独立检出和依赖（只在 `package-lock.json` 变了才重装，首次要下载 Electron，约几分钟），`inbox\<运行号>\`（含本次上传的排队脚本）和 `runs\<运行号>\` 是每次运行的临时目录，跑完自动只删本次的。**不碰** Windows 上已安装的 AgentDeck、别的会话目录和用户目录里别的东西。
 - Windows 上同样走 `e2e-queue`，同一时间只跑 1 组，后来的排队。
 - 结果拉回 Mac：`~/reports/agentdeck-e2e-remote/<运行号>/`，内含 `console.log`（完整输出）、`results.json`（Playwright JSON 报告）、`summary.json`（提交、spec、退出码、耗时）、`test-results/`（失败时的 trace 等）。脚本退出码等于 Windows 上的结果（0 通过，75 排队超时，124 跑太久，其余为失败）。
 

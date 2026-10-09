@@ -37,7 +37,7 @@ test('run ids are unique, filename-safe and name the commit', () => {
 
 test('the Windows command runs the uploaded job through the same queue, with the chosen timeouts', () => {
   const cmd = queueCommand('C:\\Users\\x', 'run1', { waitMinutes: 7, runMinutes: 9 });
-  assert.equal(cmd, 'node C:\\Users\\x\\agentdeck-e2e-win\\tools\\e2e-queue.js --queue-wait-timeout 7 --queue-run-timeout 9 -- node C:\\Users\\x\\agentdeck-e2e-win\\tools\\e2e-remote-job.js C:\\Users\\x\\agentdeck-e2e-win\\inbox\\run1\\job.json');
+  assert.equal(cmd, 'node C:\\Users\\x\\agentdeck-e2e-win\\inbox\\run1\\tools\\e2e-queue.js --queue-wait-timeout 7 --queue-run-timeout 9 -- node C:\\Users\\x\\agentdeck-e2e-win\\inbox\\run1\\tools\\e2e-remote-job.js C:\\Users\\x\\agentdeck-e2e-win\\inbox\\run1\\job.json');
 });
 
 test('job files are validated before anything runs', () => {

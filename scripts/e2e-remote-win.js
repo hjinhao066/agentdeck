@@ -54,7 +54,9 @@ const scp = (...args) => execFileSync('scp', ['-q', '-o', 'BatchMode=yes', '-o',
 // The remote command: the same queue as everywhere, running the uploaded job inside a slot.
 function queueCommand(home, runId, o) {
   const base = `${home}\\${BASE}`;
-  return `node ${base}\\tools\\e2e-queue.js --queue-wait-timeout ${o.waitMinutes} --queue-run-timeout ${o.runMinutes} -- node ${base}\\tools\\e2e-remote-job.js ${base}\\inbox\\${runId}\\job.json`;
+  // Tools are uploaded per run, so overlapping runs never overwrite a file another run is loading.
+  const tools = `${base}\\inbox\\${runId}\\tools`;
+  return `node ${tools}\\e2e-queue.js --queue-wait-timeout ${o.waitMinutes} --queue-run-timeout ${o.runMinutes} -- node ${tools}\\e2e-remote-job.js ${base}\\inbox\\${runId}\\job.json`;
 }
 
 // Commits Windows already has, so the bundle only carries what is new.
@@ -86,7 +88,7 @@ async function main(argv = process.argv.slice(2)) {
   if (!/^[A-Za-z]:\\[\w .\\-]+$/.test(home)) throw new Error(`Unexpected Windows home: ${home}`);
   const winBase = `${home}\\${BASE}`;
   // mkdir makes parents; errors for "already exists" are expected and ignored. (`if ... & ...` would skip the rest.)
-  ssh(o.host, ['tools', `inbox\\${runId}`, 'runs'].map((d) => `mkdir ${winBase}\\${d} 2>nul`).join(' & ') + ' & exit /b 0');
+  ssh(o.host, [`inbox\\${runId}\\tools`, 'runs'].map((d) => `mkdir ${winBase}\\${d} 2>nul`).join(' & ') + ' & exit /b 0');
 
   // Ship the commit as a bundle (no GitHub login needed, unpushed commits work).
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-e2e-remote-'));
@@ -101,7 +103,7 @@ async function main(argv = process.argv.slice(2)) {
       workDir: `${winBase}\\work`, runDir: `${winBase}\\runs\\${runId}`, specs: o.specs,
       playwrightArgs: o.playwrightArgs, install: o.install };
     fs.writeFileSync(path.join(tmp, 'job.json'), JSON.stringify(job, null, 2));
-    for (const file of TOOLS) scp(path.join(__dirname, file), `${o.host}:${BASE}/tools/${file}`);
+    for (const file of TOOLS) scp(path.join(__dirname, file), `${o.host}:${BASE}/inbox/${runId}/tools/${file}`);
     const inbox = `${o.host}:${BASE}/inbox/${runId}`;
     if (needBundle) scp(bundle, `${inbox}/commit.bundle`);
     scp(path.join(tmp, 'job.json'), `${inbox}/job.json`);
