@@ -147,14 +147,25 @@
     $('send-status').textContent = message;
     if (message && !sticky) statusTimer = setTimeout(() => { $('send-status').textContent = ''; }, 6000);
   }
+  // A half-open network can hold a request forever: after 15 seconds without an
+  // answer it fails with `timedOut`, like an unreachable computer.
+  const TIMEOUT_MS = 15000;
   async function api(url, options) {
     if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, 'X-CSRF-Token': csrfToken } };
-    const response = await fetch(url, { credentials: 'same-origin', ...options });
-    if (response.status === 401) { window.location.reload(); throw new Error('登录已过期。'); }
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '请求失败，请稍后刷新。');
-    return result;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { credentials: 'same-origin', ...options, signal: controller.signal });
+      if (response.status === 401) { window.location.reload(); throw new Error('登录已过期。'); }
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '请求失败，请稍后刷新。');
+      return result;
+    } catch (err) {
+      if (!controller.signal.aborted) throw err;
+      const late = new Error('没连上电脑：15 秒没有回音。'); late.timedOut = true; throw late;
+    } finally { clearTimeout(timer); }
   }
+  const unreachable = (err) => err instanceof TypeError || err.timedOut === true;
   function iconButton(name, label, onClick) {
     const button = node('button', 'icon-button');
     button.type = 'button'; button.title = label; button.setAttribute('aria-label', label);
@@ -610,7 +621,7 @@
       const result = await api('/api/relay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seatId: seat.id, ...(relay.currentId ? { expectCurrent: relay.currentId } : {}) }) });
       if (result.started === true && typeof result.id === 'string') { if (relayJob === job) { job.id = result.id; watchJob(); } return; }
       refusal = '电脑没有接受这次切换。';
-    } catch (err) { lost = err instanceof TypeError; refusal = lost ? '手机连不上电脑，不确定切换的请求有没有送到。' : err.message; }
+    } catch (err) { lost = unreachable(err); refusal = lost ? '手机连不上电脑，不确定切换的请求有没有送到。' : err.message; }
     if (relayJob !== job) return;
     // No confirmation: the computer's own record says whether a switch is running.
     const latest = await loadRelay();
@@ -925,6 +936,9 @@
         box.value = box.value ? box.value + '\n' + item.draft : item.draft;
         attachments = [...attachments, ...item.images.map((id, i) => ({ state: 'done', id, thumb: item.thumbs[i] }))].slice(0, MAX_IMAGES);
         sendStatus(''); renderAttachments(); renderCaptain(); fitComposer(); box.focus();
+      }), iconButton('close', '关掉这条没发出的消息', () => {
+        outbox.splice(outbox.indexOf(item), 1);
+        sendStatus(''); renderCaptain();
       }));
       bubble.append(foot);
     } else {
@@ -1033,7 +1047,7 @@
     } catch (err) {
       // fetch rejects with a TypeError when the desktop or tunnel is unreachable.
       offline = true;
-      notice(err instanceof TypeError ? '暂时连不上桌面端，正在自动重连…' : err.message + ' 正在自动重试…', true);
+      notice(unreachable(err) ? '暂时连不上桌面端，正在自动重连…' : err.message + ' 正在自动重试…', true);
       quotaFailed = true;
       renderSessions(); renderCaptain(); renderQuota(); renderSwitchEntries(); updateHeading();
     }
@@ -1166,6 +1180,8 @@
   });
   const outbox = [], arrived = [];
   let outboxId = 0, repeatAsked = null;
+  // Made once per message and reused by its retries (the computer's deduplicationKey).
+  const sendKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   // One message, one request. The box is not locked meanwhile (locking it would
   // fold the phone's keyboard on every send); only the send button waits.
   async function deliver(item) {
@@ -1175,15 +1191,18 @@
     sending = true; sendStatus('正在发送…', true);
     renderCaptain(); toBottom($('captain-turns'));
     try {
-      const result = await api('/api/captain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item.images.length ? { message: item.text, images: item.images } : { message: item.text }) });
+      const body = { message: item.text, deduplicationKey: item.key };
+      if (item.images.length) body.images = item.images;
+      const result = await api('/api/captain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (!result.queued) throw new Error('消息未加入队列。');
       item.state = 'sent';
       sendStatus(item.forWorker ? '已转给队长，等待处理。' : '已排队，等待队长处理。');
       refresh();
     } catch (err) {
       // No answer at all: it may have arrived. If it shows up in the conversation, this bubble gives way to it.
-      item.state = 'failed'; item.unsure = err instanceof TypeError;
-      item.reason = item.unsure ? '手机没连上电脑，不确定这条有没有送到。先看一眼对话，再决定要不要重发。' : err.message;
+      // A retry carries the same key, so the computer never types it in twice.
+      item.state = 'failed'; item.unsure = unreachable(err);
+      item.reason = err.timedOut ? '没连上电脑（15 秒没有回音）。点右边的重试，队长不会收到两遍。' : item.unsure ? '手机没连上电脑。点右边的重试，队长不会收到两遍。' : err.message;
       sendStatus('这条没有发出，原文留在对话里，可重试。', true);
     }
     finally { sending = false; renderCaptain(); }
@@ -1207,7 +1226,7 @@
       return;
     }
     repeatAsked = null;
-    const item = { id: ++outboxId, text, draft, images, thumbs: attachments.map((a) => a.thumb), forWorker, state: 'sending', reason: '', known: [], at: now };
+    const item = { id: ++outboxId, key: sendKey(), text, draft, images, thumbs: attachments.map((a) => a.thumb), forWorker, state: 'sending', reason: '', known: [], at: now };
     outbox.push(item);
     $('message').value = ''; fitComposer(); attachments = []; renderAttachments();
     deliver(item);

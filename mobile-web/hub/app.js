@@ -219,7 +219,7 @@
     } catch (_) { return controller.signal.aborted ? { timedOut: true } : { failed: true }; }
     finally { clearTimeout(timer); }
   }
-  const post = (m, path, body) => request(m, path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': m.csrf }, body: JSON.stringify(body) });
+  const post = (m, path, body, options = {}) => request(m, path, { ...options, method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': m.csrf }, body: JSON.stringify(body) });
   function saveMeta() {
     store(KEYS.meta, JSON.stringify(Object.fromEntries(machines.map((m) => [m.id, m.meta]))));
   }
@@ -240,7 +240,7 @@
     // until a snapshot fails again.
     if (!m.current) {
       const info = Core.classifyInfo(await request(m, 'api/info'));
-      if (info.current) m.current = true; else settle(m, null, info);
+      if (info.current) { m.current = true; m.dedupe = info.dedupe; } else settle(m, null, info);
     }
     const result = m.current ? await request(m, 'api/snapshot') : null;
     if (m.current && settle(m, result).state !== 'online') m.current = false;
@@ -993,7 +993,9 @@
             box.value = box.value ? box.value + '\n' + item.text : item.text;
             sendStatus = ''; render(); fitComposer(); box.focus();
           });
-          foot.append(node('p', 'bubble-reason', item.reason), resend, edit); bubble.append(foot);
+          const close = iconButton('close', '关掉这条没发出的消息');
+          close.addEventListener('click', () => { outbox.splice(outbox.indexOf(item), 1); sendStatus = ''; render(); });
+          foot.append(node('p', 'bubble-reason', item.reason), resend, edit, close); bubble.append(foot);
         } else {
           // Under the bubble, like a delivery receipt: on its way, then waiting for the Captain to take it.
           const state = node('p', 'bubble-meta'), mark = node('span', 'meta-mark'); mark.setAttribute('aria-hidden', 'true');
@@ -1143,6 +1145,9 @@
     if (!files.length) return;
     event.preventDefault(); addImages(files);
   });
+  const SEND_TIMEOUT = 15000;
+  // Made once per message and reused by its retries (the computer's deduplicationKey).
+  const sendKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   // One message, one request. The box is not locked meanwhile (locking it would
   // fold the phone's keyboard on every send); only the send button waits.
   async function deliver(m, item) {
@@ -1152,14 +1157,18 @@
     sending = true; sendStatus = '';
     render(); fitComposer();
     $('captain-turns').scrollTop = $('captain-turns').scrollHeight;
-    const result = await post(m, 'api/captain', item.images.length ? { message: item.text, images: item.images } : { message: item.text });
+    // A computer that takes keys gets this message's key on every try, and 15 seconds to answer.
+    const body = { message: item.text };
+    if (item.images.length) body.images = item.images;
+    if (m.dedupe) body.deduplicationKey = item.key;
+    const result = await post(m, 'api/captain', body, m.dedupe ? { timeout: SEND_TIMEOUT } : {});
     sending = false;
     if (result.status === 200 && result.body && result.body.queued) {
       item.state = 'sent';
       sendStatus = `已排队到 ${m.label} 队长。`;
     } else {
       // No answer at all: it may have arrived. If it shows up in the conversation, this bubble gives way to it.
-      item.state = 'failed'; item.unsure = !!(result.timedOut || result.failed); item.reason = Core.sendFailure(result, m.label);
+      item.state = 'failed'; item.unsure = !!(result.timedOut || result.failed); item.reason = Core.sendFailure(result, m.label, !!body.deduplicationKey);
     }
     render(); poll(m);
   }
@@ -1179,7 +1188,7 @@
       return;
     }
     repeatAsked = null;
-    const item = { id: ++outboxId, machineId: m.id, text, images, state: 'sending', reason: '', known: [], at: now };
+    const item = { id: ++outboxId, key: sendKey(), machineId: m.id, text, images, state: 'sending', reason: '', known: [], at: now };
     outbox.push(item); $('message').value = ''; attachments = []; renderAttachments();
     deliver(m, item);
   });

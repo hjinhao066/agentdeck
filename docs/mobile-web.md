@@ -100,10 +100,13 @@ AgentDeck 更新后，点标题栏右上角「重新加载页面」图标（带�
 （对话接口只返回手机上传图片的 id，不返回桌面附件路径）。
 
 消息只送当前队长，复用桌面 `sendWhenReady`，等待空闲、agent 前台并保护桌面未发草稿。
-点发送后自己的气泡立刻出现并一直留着（发送中 → 已发出等队长接收 → 被桌面端的对话记录原位接替；失败的变红，可重发或放回输入框），
+点发送后自己的气泡立刻出现并一直留着（发送中 → 已发出等队长接收 → 被桌面端的对话记录原位接替；失败的变红，可重发、放回输入框或关掉，三个都是图标按钮），
 同样内容紧接着再发会先提示「刚才那条已发出」；规则与总台相同，见 [mobile-hub.md](mobile-hub.md)。
 「已排队」表示本实例接受，待发消息在本地配置按序持久化，重启/单次等待超时后继续；
 不是模型已完成。最多 20 条等待消息，单条 1–8000 字符。队长没有启动时拒绝发送。
+页面的每个请求 15 秒没有回音就算失败；发给队长的那条显示「没连上……点右边的重试」。每条消息在手机上生成一个
+`deduplicationKey`，重试沿用同一个，电脑按「设备 + key」只收一次（重复的直接回第一次的结果，记一天，桌面重启后忘掉），
+所以不管是第一次其实已经到了、还是第一次比重试晚到，队长都只收到一遍。
 
 ## 发图片
 
@@ -136,7 +139,7 @@ AgentDeck 更新后，点标题栏右上角「重新加载页面」图标（带�
 | GET | `/api/tasks` | `{cards}` 只读看板 |
 | GET | `/api/output?id=…` | `{id,title,text}` 队员最近输出 |
 | GET | `/api/quota` | `{rows,version,now}` 只读额度行：服务端按白名单重建字段，账号统一打码为 `h***@example.com`，带 `source` 来源说明（至多 60 字，如 `Claude OAuth usage`），不含配置目录、token 或原始明细 |
-| POST | `/api/captain` | `{message, images?}` + CSRF，`images` 为至多 6 个上传 id，接受后 `{queued:true}` |
+| POST | `/api/captain` | `{message, images?, deduplicationKey?}` + CSRF，`images` 为至多 6 个上传 id，接受后 `{queued:true}`。`deduplicationKey` 为 16–64 位字母数字 `_-`：同一设备同一 key 只交给队长一次，重复请求回第一次的结果（第一次还在排队就等它），第一次失败的 key 会被忘掉以便重试；同一 key 换了内容回 409。`api/info` 的 capabilities 带 `send-dedupe` |
 | POST | `/api/upload` | 原始图片字节 + CSRF，返回 `{id}` |
 | GET | `/api/relay` | `{captainId,currentId,switching,seats,job,now}` 队长所在账号和可换的账号。`seats[]` 只有 `id,name,provider,account(已打码),current,selectable,reason,weekly,recoveryAt,cells`；`reason` 为 `current/login/onboarding/exhausted/low/unknown/''`，只有 `''` 和 `unknown` 可选。`job` 是手机发起的最近一次切换 `{id,status:switching|done|failed,fromId,fromName,targetId,targetName,startedAt,finishedAt,error}`，只在内存里，应用重启后为 `null` |
 | POST | `/api/relay` | `{seatId, expectCurrent?}` + CSRF，发起手动切换（桌面端 Relay 的同一条路径）。立即返回 `{started:true,id}`，结果轮询 GET。桌面端拒绝时 409 `{started:false,error}`，`error` 是可直接给用户看的原因，队长不变 |
@@ -191,7 +194,7 @@ AgentDeck 更新后，点标题栏右上角「重新加载页面」图标（带�
 | --- | --- | --- |
 | GET | `api/snapshot` | `{apiVersion:2, machine:{id,label,platform,hostname,appVersion}, now, csrfToken, captain:{id,title,status,turns}, sessions, boardVersion}`；一次返回手机总台每 5 秒需要的数据 |
 
-| GET | `api/info` | **无需登录**的能力探测：`{app:'agentdeck', apiVersion:2, capabilities:['snapshot','basePath'], machine:{id,label,platform}}`；不含 hostname、精确版本号、token 或任何会话数据（需要版本号请在登录后读 `api/snapshot`）。只响应 GET，HEAD 不当探测处理 |
+| GET | `api/info` | **无需登录**的能力探测：`{app:'agentdeck', apiVersion:2, capabilities:['snapshot','basePath','send-dedupe',…], machine:{id,label,platform}}`；不含 hostname、精确版本号、token 或任何会话数据（需要版本号请在登录后读 `api/snapshot`）。只响应 GET，HEAD 不当探测处理 |
 
 手机总台的判定：先请求 `api/info`。200＝新版（再请求 `api/snapshot`，401 即需要登录）；401 或 404＝旧版，
 旧版对前缀路径一律回 401，所以应显示「需要升级 AgentDeck」而不是登录框。`api/info` 仍受前缀、Host、

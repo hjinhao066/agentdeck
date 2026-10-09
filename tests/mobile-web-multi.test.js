@@ -385,7 +385,7 @@ test('api/info is an unauthenticated, fixed, non-sensitive probe that respects p
   assert.equal(response.headers['cache-control'], 'no-store');
   assert.equal(response.headers['set-cookie'], undefined);
   const body = JSON.parse(response.text);
-  assert.deepEqual(body, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath'],
+  assert.deepEqual(body, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath', 'send-dedupe'],
     machine: { id: 'win', label: 'Windows', platform: 'win32' } });
   for (const secret of [m.status.token, 'OWENJH', '1.1.4', 'captain']) assert.ok(!response.text.includes(secret), secret);
   // Same answer with a cookie, and the probe ignores query-free credentials entirely.
