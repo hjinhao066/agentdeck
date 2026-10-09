@@ -2671,13 +2671,15 @@
     if (!text) throw new Error('tell 需要 --message。');
     let col = findTarget(message.to);
     let restored = false;
+    let archived = null;
     if (!col) {
       const old = archivedCrew(message.to);
       if (old) {
         // Back on its own seat or not at all: a seat that is gone or signed out restores nothing.
         const blocked = window.ClaudeSeatsCore.launchBlock(old, host.config, await Promise.resolve(window.deck.claudeSeats?.()).catch(() => []));
         if (blocked) throw new Error(`「${host.columnLabel(old)}」没有恢复：${blocked}，不会换到别的席位。请用户先登录这个席位（席位设置里有复制登录命令的图标）再 tell；急的话用 new --task-id … --seat 另一个已登录席位 改派。`);
-        col = host.restoreArchived(old.id, false, true); restored = true;
+        // Restored once its card is bound: a bind the board refuses (a stale automatic rework) brings nothing back.
+        col = old; archived = old;
       }
     }
     if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
@@ -2685,7 +2687,7 @@
     // Refuse before rebinding. bind() consumes a pending automatic rework, so a
     // prompt or a bare shell must not mark that rework delivered when nothing was sent.
     const entry = host.terms.get(col.id);
-    if (!restored) {
+    if (!archived) {
       if (entry && entry.state === 'input' && !message.now) throw new Error(`「${host.columnLabel(col)}」停在确认提示上：有把握就用 answer 回答它，没把握就请用户去那一列处理。`);
       if (!col.cmd && !(await host.agentInForeground(col, false))) {
         throw new Error(`「${host.columnLabel(col)}」里只有 shell，没有在运行的 agent，不能把活发进去。请用 new 开一个新会话来做。`);
@@ -2700,7 +2702,7 @@
       // is ended (bind names it). A tell to a reviewer is only more words for its review.
       const reviewer = !!(col.reviews && col.reviews.length) || (card?.review_session === true && card.session_id === col.id);
       const takeBack = !!card && !reviewer && (card.status === 'done' || card.archived || card.flag === 'held' || card.status === 'review' || card.review_session === true);
-      if (card && (takeBack || (card.attempt_closed || !card.session_id) && (!restored || card.status === 'doing' && card.flag !== 'held'))) {
+      if (card && (takeBack || (card.attempt_closed || !card.session_id) && (!archived || card.status === 'doing' && card.flag !== 'held'))) {
         const bound = await boardRequest('bind', { id: card.id, project: card.project, session_id: col.id, attempt_id: message.id, ...(reviewer ? {} : { tell: true }),
           ...(message.reworkKey ? { rework_key: message.reworkKey } : {}),
           assignee: { agent: window.BoardCore.inferAgentType(col.cmd), model: col.cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
@@ -2714,6 +2716,9 @@
         }
       }
     }
+    // (restored by hand meanwhile: the live column takes it)
+    if (archived) { col = host.restoreArchived(archived.id, false, true) || findTarget(archived.id); restored = true; }
+    if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
     const endedNote = !replaced ? '' : replaced.error
       ? `旧审查会话 ${replaced.id} 没能结束（${replaced.error.message}），请用 archive --id ${replaced.id} 结束它；卡片已回到进行中。`
       : `旧审查会话「${host.columnLabel(replaced.col)}」(${replaced.col.id})已结束并归档，卡片回到进行中。`;
