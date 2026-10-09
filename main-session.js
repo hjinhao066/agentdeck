@@ -1289,11 +1289,7 @@
         ...(metadata.worktree ? { worktree: metadata.worktree } : {}),
         assignee: { agent: window.BoardCore.inferAgentType(cmd), model: cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
     }
-    let taskPrompt = text;
-    if (metadata.subCaptain === true) {
-      taskPrompt = text + '\n\n---\n\n你是这个项目的小队长。详见 sub-captain-instructions.md（同目录）或以下简明版：\n\n**核心职责**：协调本项目的多个工作线条，开子会话（≤4个），子会话的回执和待补充只给你，需要总队长决策才用 ask 上报。\n\n**派活规则**：多线条间需要协调的活、需要独立审查的交付、需要用户汇总的问题才经过你；普通零散小活（≤1小时）直接派下去。\n\n**管理规则**：子会话占用并发名额；你被归档时，进行中的子会话交回总队长并提示。\n\n详细规则见同目录的 sub-captain-instructions.md。';
-    }
-    col = host.createSession({ ...metadata, taskPrompt, captainTaskPrompt: taskPrompt, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
+    col = host.createSession({ ...metadata, taskPrompt: text, captainTaskPrompt: text, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
     if (waiting) { waiting.boardId = metadata.boardId || ''; waiting.boardAttempt = requestId; }
     dispatch(col, text, title, waiting);
     return col;
@@ -1498,16 +1494,7 @@
     const anomaly = M.exceptionReason(item);
     // Input/exit/quota events are deduplicated by task status/blockedAsked.
     // Never suppress a new task's failure or a decision the new Captain needs.
-    const col = host.columns().find((c) => c.id === task.colId);
-    const pendingItem = { ...(anomaly ? { anomaly } : {}), taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item };
-    // If this task comes from a child session (has a parent), find the parent's column and store reference
-    if (col && col.parentTaskId) {
-      const parentCol = host.columns().find((c) => c.taskId === col.parentTaskId);
-      if (parentCol) {
-        pendingItem.parentColId = parentCol.id; // Mark this as a child's receipt
-      }
-    }
-    s.pending.push(pendingItem);
+    s.pending.push({ ...(anomaly ? { anomaly } : {}), taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
     return true;
   }
   // Hand every pending receipt to 队长's model as text; they count as in
@@ -2653,33 +2640,7 @@
           t.receipt = { summary: archive ? '队长已结束终端并归档。' : '队长已请求中断当前操作。', files: [], images: [], failed: '', explicit: true, source: archive ? 'captain-archive' : 'captain-stop' };
           update(t);
         });
-        // When archiving a sub-captain, transfer child session receipts back to main captain
-        const childSessions = archive && col.parentTaskId === undefined ? host.columns().filter((c) => c.parentTaskId === col.taskId) : [];
-        const childReceipts = s.pending.filter((p) => {
-          const session = host.columns().find((c) => c.id === p.colId);
-          return session && session.parentTaskId === col.taskId;
-        });
-        // Remove sub-captain's receipt and all child receipts (which have parentColId pointing to this sub-captain)
-        const childReceiptIds = new Set(childReceipts.map((r) => r.receiptId));
-        s.pending = s.pending.filter((p) => p.colId !== id && !childReceiptIds.has(p.receiptId));
-        // Re-add child receipts without the parent reference if sub-captain is being archived
-        if (archive && childReceipts.length > 0) {
-          const transferredReceipts = childReceipts.map((r) => {
-            const { parentColId, ...rest } = r;
-            return rest; // Remove parentColId to route back to main
-          });
-          s.pending.push(...transferredReceipts);
-          if (childSessions.length > 0) {
-            s.pending.push({
-              taskId: 'sub-captain-handoff-' + Date.now(),
-              colId: s.colId,
-              title: '小队长已结束',
-              ts: Date.now(),
-              summary: `「${host.columnLabel(col)}」已结束，下属 ${childSessions.length} 个工作线条已转移回你；${childSessions.map((c) => `「${host.columnLabel(c)}」`).join('、')}。`,
-              source: 'captain-handoff'
-            });
-          }
-        }
+        s.pending = s.pending.filter((p) => p.colId !== id);
         if (col.executor === 'chatgpt-web') {
           try { await window.deck.chatgptWebCancel(id); }
           finally { if (entry) entry.webExecutorStopping = false; }
@@ -2690,7 +2651,7 @@
         save();
         const settled = archive && col.worktree ? await settleArchivedWorktree(col) : null;
         const note = settled?.reason ? ' ' + settled.reason : '';
-        return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。${note}` + (childSessions.length > 0 ? `下属 ${childSessions.length} 个会话已转移。` : '') : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
+        return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。${note}` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
       }
       case 'main-ledger': {
         const archived = (host.config.archived || []).length;
@@ -2698,50 +2659,12 @@
         const waiting = s.waitlist.map((w) => `${isHigh(w) ? M.PRIORITY_MARK : ''}「${w.title}」`).join('、');
         const crew = (host.config.archived || []).filter((a) => a.captainCrew).slice(0, 10)
           .map((a) => `${a.id}「${host.columnLabel(a)}」`).join('、');
-
-        // Build hierarchical ledger with indentation for sub-captain's children
-        const rows = ledgerRows();
-        const columns = host.columns().filter((c) => !c.isMain);
-        const ledgerLines = [];
-        const seen = new Set();
-
-        function addRowWithIndent(row, depth = 0) {
-          const formatted = M.ledgerText([row]);
-          const indent = '  '.repeat(depth);
-          // Add indentation to each line of the formatted row
-          return formatted.split('\n').map((line) => indent + line).join('\n');
-        }
-
-        for (const row of rows) {
-          if (seen.has(row.id)) continue;
-          seen.add(row.id);
-          const col = columns.find((c) => c.id === row.id);
-          ledgerLines.push(addRowWithIndent(row));
-
-          // Add children of sub-captain if any
-          if (col && col.subCaptain) {
-            const children = columns.filter((c) => c.parentTaskId === col.taskId);
-            for (const child of children) {
-              const childRow = rows.find((r) => r.id === child.id);
-              if (childRow && !seen.has(childRow.id)) {
-                seen.add(childRow.id);
-                ledgerLines.push(addRowWithIndent(childRow, 1));
-              }
-            }
-          }
-        }
-
-        const ledgerOutput = ledgerLines.length ? ledgerLines.join('\n') : '还没有别的会话。';
-        return { done: true, result: ledgerOutput + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '')
+        return { done: true, result: M.ledgerText(ledgerRows()) + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '')
           + (crew ? `\n已归档的队员（tell 会先自动恢复）：${crew}` : '')
           + (waiting ? `\n排队等空位：${waiting}` : '') + batteryLine() + (history ? '\n' + history : '') };
       }
       case 'main-receipts-snapshot': {
-        // Filter receipts based on caller hierarchy (same as main-receipts)
-        const filteredPending = caller && caller.parentTaskId
-          ? s.pending.filter((r) => r.parentColId === caller.id)
-          : s.pending.filter((r) => !r.parentColId);
-        for (const item of filteredPending) {
+        for (const item of s.pending) {
           if (!item.receiptId) {
             s.receiptSeq = (Number.isSafeInteger(s.receiptSeq) ? s.receiptSeq : 0) + 1;
             item.receiptId = 'r-' + Date.now().toString(36) + '-' + s.receiptSeq.toString(36);
@@ -2749,20 +2672,13 @@
         }
         save();
         host.flushConfig?.();
-        return { done: true, result: JSON.stringify({ receipts: filteredPending.slice(0, 50) }) };
+        return { done: true, result: JSON.stringify({ receipts: s.pending.slice(0, 50) }) };
       }
       case 'main-receipts-ack': {
         if (!Array.isArray(message.receiptIds) || message.receiptIds.length > 50 || message.receiptIds.some((id) => typeof id !== 'string' || !/^[a-z0-9-]{1,100}$/.test(id))) throw new Error('Invalid receipt ids.');
-        // Filter ack receipts based on caller hierarchy
-        const filteredPending = caller && caller.parentTaskId
-          ? s.pending.filter((r) => r.parentColId === caller.id)
-          : s.pending.filter((r) => !r.parentColId);
         const ids = new Set(message.receiptIds);
-        const count = filteredPending.length;
-        s.pending = s.pending.filter((p) => !(ids.has(p.receiptId) && (
-          (caller && caller.parentTaskId && p.parentColId === caller.id) ||
-          (!caller || !caller.parentTaskId) && !p.parentColId
-        )));
+        const count = s.pending.length;
+        s.pending = s.pending.filter((p) => !ids.has(p.receiptId));
         save();
         host.flushConfig?.();
         return { done: true, result: JSON.stringify({ acknowledged: count - s.pending.length }) };
@@ -2786,23 +2702,11 @@
           if (current && current.id !== message.watcher && current.seq > seq) return { done: true, result: M.LISTENER_SUPERSEDED };
           listener = { id: message.watcher, seq, at: now, colId: s.colId };
         }
-        // Filter receipts based on caller hierarchy
-        // Main captain sees receipts with no parentColId (root-level receipts)
-        // Sub-captain sees receipts where parentColId === their colId (receipts from their children)
-        const filteredPending = caller && caller.parentTaskId
-          ? s.pending.filter((r) => r.parentColId === caller.id)
-          : s.pending.filter((r) => !r.parentColId);
-        if (!filteredPending.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
+        if (!s.pending.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
         // The CLI has the text once this returns. Record that before the copy
         // into inflight so the same config save survives relaunch and Relay.
-        rememberReceiptsSeen(filteredPending);
-        const text = M.receiptsForModel(filteredPending);
-        // Remove filtered receipts from pending
-        const filteredSet = new Set(filteredPending.map((p) => p.receiptId));
-        const turnId = window.ChatUI.turnsOf(s.colId).findLast((t) => t.kind !== 'task' && !t.done)?.id || '';
-        s.inflight = [...s.inflight, ...filteredPending.map(({ viaChannel: old, ...p }) => ({ ...p, deliveryTurnId: turnId, takenAt: Date.now(), ...(true ? { viaChannel: true } : {}) }))];
-        s.pending = s.pending.filter((p) => !filteredSet.has(p.receiptId));
-        save();
+        rememberReceiptsSeen(s.pending);
+        const text = takePending(false, undefined, true);
         return { done: true, result: text || '没有新的回执。' };
       }
       case 'main-peek': {
@@ -2857,11 +2761,6 @@
           if (!sessions.some((c) => c.id === id && !c.isMain)) throw new Error(`找不到可审查的会话：${id}。先用 ledger 看 id；不能审查队长。`);
         }
         const metadata = { project, reviews, boardId: typeof message.boardId === 'string' ? message.boardId : '' };
-        if (message.subCaptain === true) {
-          if (!isMain(caller)) throw new Error('--sub-captain 只有队长可以用。');
-          if (!project) throw new Error('--sub-captain 需要指定 --project。');
-          metadata.subCaptain = true;
-        }
         if (message.priority !== undefined && (!['high', 'normal'].includes(message.priority) || !isMain(caller))) throw new Error('--priority 只能是 high 或 normal，且只有队长可以标。');
         if (metadata.boardId && reviews.length) {
           const card = await findCard(metadata.boardId);
