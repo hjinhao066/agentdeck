@@ -41,6 +41,7 @@ const Worktree = require('./worktree-core');
 const { prepareWorkspaceTrust } = require('./workspace-trust-main');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
+const { watchDir } = require('./dir-watch');
 const { createRefresh: createClaudeQuotaRefresh, createSeatGate, readSeat: readClaudeSeat, readCredentials: readClaudeCredentials } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
@@ -121,11 +122,9 @@ function queueTodoReceipt(command) {
 // The other computer's file arrives through git; tell the page so an open list refreshes.
 function watchTodos() {
   if (todoWatch) return;
-  try {
-    fs.mkdirSync(todoStore.dir, { recursive: true });
-    todoWatch = fs.watch(todoStore.dir, () => { clearTimeout(todoWatchTimer); todoWatchTimer = setTimeout(todosChanged, 300); });
-    todoWatch.on('error', (error) => { try { todoWatch.close(); } catch (_) {} todoWatch = null; todoErrors?.report('watch', error); });
-  } catch (error) { todoWatch = null; todoErrors?.report('watch', error); }
+  // git removes this folder when a sync rebase is aborted; watchDir survives that (dir-watch.js).
+  todoWatch = watchDir(todoStore.dir, () => { clearTimeout(todoWatchTimer); todoWatchTimer = setTimeout(todosChanged, 300); },
+    { onError: (error) => todoErrors?.report('watch', error) });
 }
 handleMain('todos:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'update', 'remove'].includes(payload.op)) throw new Error('Invalid to-do operation.');

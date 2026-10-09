@@ -1,6 +1,6 @@
 'use strict';
-const fs = require('fs');
 const os = require('os');
+const { watchDir } = require('./dir-watch');
 
 // No model calls. The watcher catches local/sync edits; polling recovers missed
 // rename events. The durable claim is made before notifying the renderer.
@@ -88,13 +88,10 @@ class TaskHeartbeat {
     run(this.pendingRework, (c) => this.store.reworkPending(c), this.onRework, (c) => c.review_reject.key);
   }
   start() {
-    fs.mkdirSync(this.store.dir, { recursive: true });
-    this.watch = fs.watch(this.store.dir, () => {
+    this.watch = watchDir(this.store.dir, () => {
       // Coalesce a burst without postponing scans indefinitely during writes.
       if (!this.debounce) this.debounce = setTimeout(() => { this.debounce = null; this.scan(); }, 100);
-    });
-    this.watch.on('error', (error) => this.log('task-board watcher: ' + error.message));
-    this.watch.unref();
+    }, { onError: (error) => this.log('task-board watcher: ' + error.message) });
     this.timer = setInterval(() => this.scan(), this.interval);
     this.timer.unref();
     this.scan();

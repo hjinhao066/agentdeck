@@ -46,6 +46,7 @@
       "memory-pressure.js",
       "pty-work.js",
       "config-cache.js",
+      "dir-watch.js",
       "battery-core.js",
       "preload.js",
       "index.html",
