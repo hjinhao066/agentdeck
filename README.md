@@ -338,6 +338,7 @@ Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；�
 卡片标题最多两行，「···」或失败卡片的「查看」打开详情浮层（完整回执、文件、实时活动、打开终端；Esc 关闭）。
 架构图只留当前的活：做完的队长会话没有新指令 10 分钟后自动归档（AgentDeck 重启后也照此处理，重启时已超时的在终端安静约 1 分钟后归档）；
 失败或停下的会话要等它的看板卡片已完成、或同一张卡已由另一个会话接手才自动归档，没人接手的失败留在图上等队长处理。
+自动归档前最后再查一次这个终端的进程树（`pty-work.js`，Mac 用 `ps`，Windows 用 `Get-CimInstance Win32_Process`，一次列表所有终端共用 5 秒）：Claude 的 Bash 工具起的命令（前台或后台，都带 Claude 的 shell-snapshots）和它们下面的进程还在跑，就不归档；MCP 服务（Windows 上是 `cmd /c npx …`）、状态栏命令、caffeinate 不算。还没拿到答案时这次先不归档，列不出进程时照屏幕判断。
 项目框标题的数字只统计图上还在的会话（不含已归档历史），和队长框一致。
 项目名不分大小写（AgentDeck 和 agentdeck 是同一个项目框，显示最早那个会话写的写法，已存数据不改）；
 项目里没有任何干活、待补充、排队、失败、停下、空闲的会话（全部已完成或已归档）时，项目框从图上消失，有新会话再出现；「显示已归档」时仍列出全部项目。
@@ -575,7 +576,10 @@ again with the current provider, model and effort instructions.
   Claude workers whose live footer still reports background shells/monitors/tasks
   running remain busy even after the model's reply. They produce no missing-command
   receipt and cannot auto-archive; the three-minute grace starts after their
-  background work ends. Old quoted counters and zero/completed counts are ignored.
+  background work ends. Before an automatic archive the terminal's process tree is
+  checked too: a command Claude's Bash tool started (it sources Claude's shell
+  snapshot) that is still running keeps the session; MCP servers and the status
+  line do not. Old quoted counters and zero/completed counts are ignored.
   The Captain's own permanent receipt listener does not keep its foreground busy.
   Screen 【回执】/【提问】 blocks, examples, contract echoes and Doing… never count
   as submissions. A late command replaces the fallback notice. Prompt submission
