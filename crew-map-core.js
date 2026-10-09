@@ -505,7 +505,8 @@
   // across the top. opts.keep (the plan in use) stays while it still holds the same frames in the
   // same order, fits the width and is no more than LANE_KEEP times as tall as a fresh one, so a card
   // more or less does not move frames from lane to lane. The window's height is never asked.
-  // Returns { lanes, caps }.
+  // opts.count: exactly that many lanes; opts.exact: the plan given, as it stands (both null when the frames cannot
+  // stand so). Returns { lanes, caps }.
   const BAND = 48, LANE_KEEP = 1.15;
   function planAcross(map, size, opts) {
     const o = { ...LAYOUT, ...opts };
@@ -528,8 +529,20 @@
     };
     const fits = (lanes) => lanes.length === 1 || across(lanes) <= availW + 0.5;
     const out = (lanes) => ({ lanes: lanes.map((lane) => lane.map((p) => p.key)), caps: Object.fromEntries(projects.map((p) => [p.key, caps.get(p.key)])) });
+    // the plan given, as it stands (opts.exact): null when it no longer holds these frames in this order or fits
+    const rank = new Map(projects.map((p, i) => [p.key, i]));
+    const held = (plan) => {
+      if (!plan || !Array.isArray(plan.lanes) || plan.lanes.flat().length !== n || !plan.lanes.flat().every((key) => rank.has(key)) || !projects.every((p) => plan.caps && plan.caps[p.key] === caps.get(p.key))) return null;
+      const lanes = plan.lanes.map((lane) => lane.map((key) => projects[rank.get(key)]));
+      const tops = lanes.map((lane) => rank.get(lane[0].key));
+      const inOrder = lanes.every((lane) => lane.length) && tops.every((r, i) => r === i) && lanes.every((lane) => lane.every((p, k) => !k || rank.get(p.key) > rank.get(lane[k - 1].key)));
+      return inOrder && fits(lanes) ? lanes : null;
+    };
+    if (o.exact) { const lanes = held(o.exact); return lanes ? out(lanes) : null; }
+    // opts.count: that many lanes and no other (null when the frames cannot stand so)
     let fresh = null;
-    for (let K = n; K >= 1 && !fresh; K--) {
+    const most = o.count ? Math.min(n, o.count) : n, least = o.count ? most : 1;
+    for (let K = most; K >= least && !fresh; K--) {
       const lanes = projects.slice(0, K).map((p) => [p]);
       if (!fits(lanes)) continue;
       const placed = projects.slice(K).every((p) => {
@@ -542,15 +555,10 @@
       });
       if (placed) fresh = lanes;
     }
+    if (!fresh) return null;
     // the plan in use, if it is still a plan for these frames in this order
-    const rank = new Map(projects.map((p, i) => [p.key, i]));
-    const keep = o.keep && Array.isArray(o.keep.lanes) ? o.keep : null;
-    if (keep && keep.lanes.flat().length === n && keep.lanes.flat().every((key) => rank.has(key)) && projects.every((p) => keep.caps && keep.caps[p.key] === caps.get(p.key))) {
-      const lanes = keep.lanes.map((lane) => lane.map((key) => projects[rank.get(key)]));
-      const tops = lanes.map((lane) => rank.get(lane[0].key));
-      const inOrder = tops.every((r, i) => r === i) && lanes.every((lane) => lane.every((p, k) => !k || rank.get(p.key) > rank.get(lane[k - 1].key)));
-      if (inOrder && fits(lanes) && Math.max(...lanes.map(height)) <= Math.max(...fresh.map(height)) * LANE_KEEP + 0.5) return out(lanes);
-    }
+    const kept = o.keep ? held(o.keep) : null;
+    if (kept && Math.max(...kept.map(height)) <= Math.max(...fresh.map(height)) * LANE_KEEP + 0.5) return out(kept);
     return out(fresh);
   }
 
@@ -631,8 +639,10 @@
 
   // ---- 智能一页 for a window ----
   // WRAP_GAIN: one row of frames gives way to lanes when they show the whole map at least this much larger (off any
-  // N/(N-1): six one-card frames against five lanes is exactly 6/5); WRAP_KEEP: either way, the arrangement in use
-  // stays until the other is that much better again, so dragging the window back and forth over a width never flips it.
+  // N/(N-1): six one-card frames against five lanes is exactly 6/5). WRAP_KEEP: every change of arrangement (a
+  // frame's columns, how many lanes and which frames stand in them, one row or wrapped) waits until another shows the
+  // map that much larger than the one in use (or as much shorter, where both scroll) and holds it with that much
+  // room to spare, so dragging the window back and forth over a width never flips it.
   const WRAP_GAIN = 1.22, WRAP_KEEP = 1.03;
   // The smallest text on the map (a card's model, account, time and chips: 11.5 on the canvas, nothing smaller) is
   // never shown under READABLE_PX device pixels: readableScale is the scale (drawn units) that asks for on a screen
@@ -662,41 +672,75 @@
       bottom: Math.max(...boxes.map((b) => b.y + b.h), ...points.map((p) => p[1])) + 16,
     };
   }
-  // The arrangement 智能一页 makes for a window, untouched by hand: every project across one row (planPage), or
-  // the same columns in lanes (planAcross), roomy or tight. view: { w, h }, the viewport in screen px; o: the
-  // layout options, with o.tightly (what the tight lanes change), o.inset (the fit's inset) and o.returns (the
-  // return lines are shown, o.dpr: the screen's density); current: { plan, planW, dpr }, the arrangement in use and
-  // the width and density it was made for (kept only on the same screen: another density is arranged afresh).
-  // Returns { plan, lay, pageFits }: pageFits, the whole map shows on one page.
+  // The arrangement 智能一页 makes for a window, untouched by hand: every project across one row (planPage), or the
+  // same columns in lanes (planAcross), roomy or tight. view: { w, h }, the viewport in screen px; o: the layout
+  // options, with o.tightly (what the tight lanes change), o.inset (the fit's inset), o.returns (the return lines
+  // are shown) and o.dpr (the screen's density); current: { plan, dpr }, the arrangement in use and the density it
+  // was made for (kept only on the same screen: another is arranged afresh).
+  // Afresh, one row stands unless the lanes with the most frames across show the map WRAP_GAIN larger; lanes are
+  // then as many as show the map largest (the whole map on the page first; of those that scroll, the shortest;
+  // fewer lanes where it is all the same). The arrangement in use stays while it still holds the map (a row that no
+  // longer shows whole scrolls, while its frames still stand across the window), until the one 智能一页 would make
+  // now, with WRAP_KEEP's room to spare, is better by WRAP_KEEP: whole on the page where it is not, that much larger
+  // (lanes take over from a row only at WRAP_GAIN times that), that much shorter where both scroll. Any change of
+  // arrangement goes through this: a frame's columns (planPage keeps them by PAGE_KEEP), the lanes and the frames in
+  // them, one row or wrapped. A window made wider so never shows the map smaller, unless that brings all of it onto
+  // the page or gives its frames columns that score better. Returns { plan, lay, pageFits }: the whole map shows.
   function arrangePage(map, view, o, current = {}) {
     const density = (d) => Number(d) || 1, sc = scalesFor(o.dpr);
     const FIT = BASE_SCALE, inset = { top: 0, right: 0, bottom: 0, left: 0, ...o.inset }, plan = current.plan && density(current.dpr) === density(o.dpr) ? current.plan : null;
     const build = (p) => layout(map, { ...o, ...(p.tight ? o.tightly : {}), lanes: p.lanes, caps: p.caps });
-    const scaleOf = (l, max) => computeFit(fitBounds(map, l, o, o.returns), view, inset, { min: 0, max }).scale;
-    // the whole layout shows in this window at `least` of the drawn size or more; how large the fit shows it
-    const whole = (l, least) => scaleOf(l, 1) >= least - 1e-9;
-    const shown = (l) => scaleOf(l, sc.max);
     const page = (k) => ({ w: (view.w - inset.left - inset.right) / k, h: (view.h - inset.top - inset.bottom) / k });
-    const onePage = planPage(map, page(FIT), { ...o, minScale: sc.floor / FIT, keep: plan && plan.page ? plan : null });
-    // the same columns in lanes, as many across as the window holds at the lanes' scale: roomy while the whole map
-    // shows that large, tight when only that brings it all in
-    const pick = (tight) => {
-      const p = planAcross(map, page(sc.lanes), { ...o, ...(tight ? o.tightly : {}), caps: onePage.caps, keep: plan && !plan.page && current.planW === view.w && !!plan.tight === tight ? plan : null });
-      const next = { lanes: p.lanes, caps: p.caps, tight };
-      return { plan: next, lay: build(next) };
+    // An arrangement as the view shows it: whole on the page at least at its least scale (fits), how large (as large
+    // as the page holds it, up to PAGE_MAX_SCALE; one that does not show whole stands at the lanes' scale and
+    // scrolls), how tall; whole (the scale that shows all of it) and least, to ask it for room to spare.
+    const judge = (p) => {
+      const lay = build(p), bounds = fitBounds(map, lay, o, o.returns), least = p.page ? sc.floor : sc.lanes;
+      const whole = computeFit(bounds, view, inset, { min: 0, max: 1 }).scale, fits = whole >= least - 1e-9;
+      return { plan: p, lay, fits, whole, least, scale: fits ? Math.min(whole, sc.max) : sc.lanes, height: bounds.bottom - bounds.top, row: !!p.page };
     };
-    let lanes = pick(false), lanesFit = whole(lanes.lay, sc.lanes);
-    if (!lanesFit) { const tight = pick(true); if (whole(tight.lay, sc.lanes)) { lanes = tight; lanesFit = true; } }
-    // one row stands while it shows the map about as large as the lanes would: a row that fits only shrunk wraps
-    // instead, like lines of text, when the lanes show the whole map clearly larger
-    const wrapAt = !plan ? WRAP_GAIN : plan.page ? WRAP_GAIN * WRAP_KEEP : WRAP_GAIN / WRAP_KEEP;
-    if (onePage.fits) {
-      const next = { lanes: onePage.lanes, caps: onePage.caps, tight: false, page: true };
-      const l = build(next);
-      if (whole(l, sc.floor) && !(lanesFit && shown(lanes.lay) >= shown(l) * wrapAt)) return { plan: next, lay: l, pageFits: true };
+    // one row, its columns kept while they score within PAGE_KEEP of the best (planPage)
+    const onePage = planPage(map, page(FIT), { ...o, minScale: sc.floor / FIT, keep: plan && plan.page ? plan : null });
+    const rowPlan = onePage.fits ? { lanes: onePage.lanes, caps: onePage.caps, tight: false, page: true } : null;
+    const row = rowPlan ? judge(rowPlan) : null;
+    // the arrangement in use, as it stands in this window (a row no longer whole scrolls while its frames still stand
+    // across the window at the lanes' scale), or gone
+    const holds = (p, k) => planAcross(map, page(sc.lanes * k), { ...o, ...(p.tight ? o.tightly : {}), caps: p.caps, exact: p });
+    let cur = null;
+    if (plan && plan.page && row && row.fits) cur = row;
+    else if (plan) { const held = holds(plan, 1); if (held) cur = judge({ ...held, tight: !!plan.tight, ...(plan.page ? { page: true } : {}) }); }
+    // afresh: the same columns in K lanes (K = 1, 2, ...), roomy while the whole map shows, tight when only that
+    // brings it in; one row unless the lanes with the most frames across show the map WRAP_GAIN larger, else the
+    // lanes that show it largest
+    const lanes = [];
+    for (let K = 1; K <= onePage.lanes.length; K++) {
+      let best = null;
+      for (const tight of [false, true]) {
+        const a = planAcross(map, page(sc.lanes), { ...o, ...(tight ? o.tightly : {}), caps: onePage.caps, count: K });
+        if (!a) break;
+        const c = judge({ lanes: a.lanes, caps: a.caps, tight });
+        if (!best || (c.fits && !best.fits)) best = c;
+        if (best.fits) break;
+      }
+      if (best) lanes.push(best);
     }
-    // taller than a page even then: the lanes at their scale, panned down
-    return { plan: lanes.plan, lay: lanes.lay, pageFits: lanesFit };
+    const near = (d) => (Math.abs(d) < 1e-9 ? 0 : d);
+    const largest = lanes.slice().sort((a, b) => (b.fits - a.fits) || (a.fits ? near(b.scale - a.scale) : near(a.height - b.height)) || (a.plan.lanes.length - b.plan.lanes.length))[0];
+    const most = lanes[lanes.length - 1];
+    const fresh = row && row.fits && !(most.fits && most.scale >= row.scale * WRAP_GAIN) ? row : largest;
+    const same = (a, b) => JSON.stringify([a.lanes, a.caps, !!a.tight, !!a.page]) === JSON.stringify([b.lanes, b.caps, !!b.tight, !!b.page]);
+    // It takes over from the one in use only holding the map with WRAP_KEEP's room to spare (whole on the page, and
+    // its lanes across the window) and better by WRAP_KEEP: whole where the one in use scrolls; that much larger
+    // (lanes over a row: WRAP_GAIN times that); that much shorter where both scroll.
+    const takesOver = () => {
+      const fits = fresh.whole >= fresh.least * WRAP_KEEP - 1e-9;
+      if (!fresh.row && !holds(fresh.plan, WRAP_KEEP)) return false;
+      if (fits !== cur.fits) return fits;
+      if (!fits) return !fresh.fits && fresh.height * WRAP_KEEP <= cur.height;
+      return fresh.scale >= cur.scale * (cur.row && !fresh.row ? WRAP_GAIN : 1) * WRAP_KEEP;
+    };
+    const pick = cur && (same(fresh.plan, cur.plan) || !takesOver()) ? cur : fresh;
+    return { plan: pick.plan, lay: pick.lay, pageFits: pick.fits };
   }
 
   // The order the user has put the project frames in, read from where they stand now the way

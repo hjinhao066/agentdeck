@@ -11,13 +11,14 @@
 //   frame across one row, each 1 to CrewMapCore.PAGE_COLUMNS cards wide, the
 //   widths chosen together so the whole map shows on one page as large as it
 //   can, no frame much taller than the rest (CrewMapCore.planPage). The same
-//   frames can also stand in lanes at 100%, as many across as the window holds,
+//   frames can also stand in lanes at 100%, as many as show the map largest,
 //   the rest under the lane that ends highest (CrewMapCore.planAcross): when
 //   the one row fits only shrunk and the lanes show the whole map clearly
 //   larger (C.WRAP_GAIN: six small frames squeezed into one thin row), the
-//   frames wrap like lines of text, and stay so until one row is clearly
-//   better again (C.WRAP_KEEP). A map too big for one page either way stands
-//   in lanes and is panned (CrewMapCore.arrangePage).
+//   frames wrap like lines of text. Any change of arrangement waits until the
+//   new one holds the map with room to spare and shows it C.WRAP_KEEP larger
+//   (CrewMapCore.arrangePage). A map too big for one page stands in lanes and
+//   is panned.
 //   Once the user drags a card or a frame, that plan is kept under their
 //   moves until they tidy or go back to 智能一页, so a window resize never
 //   pulls the ground from under a hand-placed map.

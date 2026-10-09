@@ -1230,21 +1230,28 @@ const ARRANGE = { nodeW: 280, nodeH: 110, captainW: 440, captainH: 112, gapX: 24
   padX: 16, padBottom: 16, rowGap: 12, reviewGap: 36, headH: 68, rails: true, railX: 8, entryTop: 20,
   fold: false, collapsedProjects: {}, order: [], grid: true, center: true, tray: true, headW: {},
   tightly: { captainH: 104, fanY: 40, rowGap: 10, padBottom: 12 }, inset: { top: 8, right: 8, bottom: 8, left: 8 }, returns: false };
+// The whole arrangement, as a name: one row or lanes, which frames in which lane, each frame's columns, roomy or tight.
+const arrangement = (plan) => `${plan.page ? 'row' : 'lanes'} ${plan.lanes.map((lane) => lane.join('+')).join(' | ')} ${Object.entries(plan.caps).map(([k, c]) => k + c).join(' ')}${plan.tight ? ' tight' : ''}`;
+// how large the view shows it (CrewMap.fit: C.fitLimits)
+const shownAt = (map, r, view, dpr) => C.computeFit(C.fitBounds(map, r.lay, ARRANGE, false), view, ARRANGE.inset, C.fitLimits(r, dpr)).scale;
 // The window dragged: the arrangement made for each width in turn, the one in use carried along as the app carries it.
-function sweep(map, widths, h, dpr = 1) {
+function drag(map, widths, h, dpr = 1) {
   let current = {};
-  return widths.map((w) => { const r = C.arrangePage(map, { w, h }, { ...ARRANGE, dpr }, current); current = { plan: r.plan, planW: w, dpr }; return r.plan.page ? 'row' : 'lanes'; });
+  return widths.map((w) => { const r = C.arrangePage(map, { w, h }, { ...ARRANGE, dpr }, current); current = { plan: r.plan, planW: w, dpr }; return { name: arrangement(r.plan), scale: shownAt(map, r, { w, h }, dpr), whole: r.pageFits, row: !!r.plan.page }; });
 }
+const sweep = (map, widths, h, dpr = 1) => drag(map, widths, h, dpr).map((a) => a.name);
 const switches = (modes) => modes.filter((m, i) => i && m !== modes[i - 1]).length;
+const widthsFrom = (a, b, step = 1) => { const out = []; for (let w = a; a <= b ? w <= b : w >= b; w += a <= b ? step : -step) out.push(w); return out; };
 // small projects of one to four cards, the mixes the review swept (six of one or two cards is common)
 const SMALL = { '2-1-2-1-2-1': { a: 2, b: 1, c: 2, d: 1, e: 1, f: 2 }, '1x6': { a: 1, b: 1, c: 1, d: 1, e: 1, f: 1 }, '2x5': { a: 2, b: 2, c: 2, d: 2, e: 2 }, '3-2-2-1-1': { a: 3, b: 2, c: 2, d: 1, e: 1 }, '4-2-1-1-1-1': { a: 4, b: 2, c: 1, d: 1, e: 1, f: 1 } };
 
-test('智能一页 does not flip between one row and lanes while the window is dragged: one change at most each way, none from a few pixels back and forth', () => {
+test('智能一页 does not flip between one row and lanes while the window is dragged: one change at most each way, no change at all from a few pixels back and forth', () => {
   const widths = []; for (let w = 1180; w <= 1340; w += 2) widths.push(w);
+  const mode = (names) => names.map((n) => n.split(' ')[0]);
   // (a 1x screen and a 2x one: there one row may shrink to 80% of the map's own 100%, here only to what keeps its text readable)
   for (const dpr of [1, 2]) for (const h of [730, 780, 815]) for (const [name, spec] of Object.entries(SMALL)) {
     const map = crewOf(spec);
-    const there = sweep(map, widths, h, dpr), back = sweep(map, widths.slice().reverse(), h, dpr);
+    const there = mode(sweep(map, widths, h, dpr)), back = mode(sweep(map, widths.slice().reverse(), h, dpr));
     assert.ok(switches(there) <= 1, `${name} at ${h}, ${dpr}x: wider, ${switches(there)} changes ${there.join(' ')}`);
     assert.ok(switches(back) <= 1, `${name} at ${h}, ${dpr}x: narrower, ${switches(back)} changes`);
     // at any width, 4px back and forth a few times: whatever it settled on stays
@@ -1255,14 +1262,53 @@ test('智能一页 does not flip between one row and lanes while the window is d
   }
 });
 
+// Every change of arrangement (a frame's columns, how many lanes and which frames in them, one row or wrapped) goes
+// through the same keep: the one in use stays while it still holds the map, until another shows it 3% larger
+// (one row gives way to lanes only when they show it WRAP_GAIN larger). The review's nudges: the user's 11 / 3 / 1 at
+// 1162/1164 x 814 on a 2x screen flipped between two lanes at 126% and one row at 100% on every push.
+const NUDGED = { '11-3-1': { a: 11, b: 3, c: 1 }, '2-1-2-1-2-1': { a: 2, b: 1, c: 2, d: 1, e: 2, f: 1 }, '1x6': { a: 1, b: 1, c: 1, d: 1, e: 1, f: 1 }, '2x5': { a: 2, b: 2, c: 2, d: 2, e: 2 },
+  '3-2-2-1-1': { a: 3, b: 2, c: 2, d: 1, e: 1 }, '4-3-2-2-1': { a: 4, b: 3, c: 2, d: 2, e: 1 }, '15-3-2-2-1-1': { a: 15, b: 3, c: 2, d: 2, e: 1, f: 1 }, '1x8': { a: 1, b: 1, c: 1, d: 1, e: 1, f: 1, g: 1, h: 1 } };
+test('智能一页 keeps the arrangement in use until another is 3% larger: 1380-1450px a pixel at a time, one change at most each way', () => {
+  for (const dpr of [1, 1.25, 2]) for (const h of [640, 732, 814, 912]) for (const [name, spec] of Object.entries(NUDGED)) {
+    const map = crewOf(spec);
+    for (const widths of [widthsFrom(1380, 1450), widthsFrom(1450, 1380)]) {
+      const seen = sweep(map, widths, h, dpr);
+      assert.ok(switches(seen) <= 1, `${name} at ${h}, ${dpr}x, ${widths[0]} -> ${widths[widths.length - 1]}: ${switches(seen)} changes\n${[...new Set(seen)].join('\n')}`);
+    }
+  }
+  // the review's nudge itself: 1162 <-> 1164 at 814, 2x, seven times
+  const user = crewOf(NUDGED['11-3-1']);
+  assert.equal(switches(sweep(user, [1162, 1164, 1162, 1164, 1162, 1164, 1162, 1164], 814, 2)), 0);
+});
+
+test('智能一页 never flips on a few pixels back and forth, and a wider window never shows the map smaller', () => {
+  for (const dpr of [1, 1.25, 2]) for (const h of [640, 814, 912]) for (const name of ['11-3-1', '2-1-2-1-2-1', '15-3-2-2-1-1', '1x8']) {
+    const map = crewOf(NUDGED[name]);
+    // 4px back and forth at any width, carrying what it settled on: no change at all
+    for (let w = 900; w <= 1900; w += 50) {
+      const seen = sweep(map, [w, w + 4, w, w + 4, w, w + 4, w], h, dpr).slice(1);
+      assert.equal(switches(seen), 0, `${name} at ${w}x${h}, ${dpr}x: ${[...new Set(seen)].join(' / ')}`);
+    }
+    // wider, step by step: the map is never shown more than 3% smaller than a step before, unless that brings all of
+    // it onto the page, or one row's frames take columns that score better (planPage: none much taller than the rest)
+    const wider = drag(map, widthsFrom(900, 1900, 4), h, dpr);
+    wider.forEach((a, i) => {
+      const was = wider[i - 1];
+      if (i && a.scale < was.scale * 0.97) assert.ok((a.whole && !was.whole) || (a.row && was.row), `${name} at ${h}, ${dpr}x, ${900 + 4 * i}px: ${was.name} at ${was.scale.toFixed(3)} -> ${a.name} at ${a.scale.toFixed(3)}`);
+    });
+  }
+});
+
 // A window moved to a screen of another density is arranged afresh there: what 智能一页 keeps in place (the 3% and
 // the wrap's keep) is for the same window on the same screen.
 test('智能一页 on another screen starts afresh: an arrangement kept for a 1x screen does not hold the map on a 2x one', () => {
-  for (const [spec, view] of [[{ agentdeck: 15, 秋招: 3, kenke: 2, fuqing: 2, daily: 1, other: 1 }, { w: 1420, h: 912 }], [{ a: 2, b: 1, c: 2, d: 1, e: 2, f: 1 }, { w: 1000, h: 732 }]]) {
+  for (const [spec, view] of [[{ agentdeck: 15, 秋招: 3, kenke: 2, fuqing: 2, daily: 1, other: 1 }, { w: 1200, h: 814 }], [{ a: 2, b: 1, c: 2, d: 1, e: 2, f: 1 }, { w: 1220, h: 814 }]]) {
     const map = crewOf(spec);
     const there = C.arrangePage(map, view, { ...ARRANGE, dpr: 1 }, {});
     const fresh = C.arrangePage(map, view, { ...ARRANGE, dpr: 2 }, {});
     assert.notDeepEqual(there.plan, fresh.plan, `${JSON.stringify(spec)}: the two screens arrange it differently`);
+    // (were it the same screen, the 1x arrangement would stay: what the density check is there for)
+    assert.notDeepEqual(C.arrangePage(map, view, { ...ARRANGE, dpr: 2 }, { plan: there.plan, planW: view.w, dpr: 2 }).plan, fresh.plan);
     assert.deepEqual(C.arrangePage(map, view, { ...ARRANGE, dpr: 2 }, { plan: there.plan, planW: view.w, dpr: 1 }).plan, fresh.plan, JSON.stringify(spec));
     // on the same screen the arrangement in use is still kept
     assert.deepEqual(C.arrangePage(map, view, { ...ARRANGE, dpr: 2 }, { plan: fresh.plan, planW: view.w, dpr: 2 }).plan, fresh.plan);
