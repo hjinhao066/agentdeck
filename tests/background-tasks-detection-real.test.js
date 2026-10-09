@@ -29,3 +29,14 @@ test('claudeBackgroundTasks still rejects non-Claude terminals', () => {
   const screen = '❯ \n────────\n  ⏵⏵ some task · 1 mon';
   assert.ok(!M.claudeBackgroundTasks(screen, 'bash'), 'non-claude command should return false');
 });
+
+test('claudeBackgroundTasks detects folded status lines in narrow columns', () => {
+  // Real case: narrow column folds the status line, leaving "1 shell still" on one line
+  // and "running" on the next line. Need to match across line breaks.
+  const screen1 = '❯ \n✻ Churned for 3m 55s · done\n9:16 PM · 1 shell still\nrunning';
+  assert.ok(M.claudeBackgroundTasks(screen1, 'claude'), 'should detect folded "1 shell still / running"');
+
+  // Another variant: task/monitor split
+  const screen2 = '❯ \n9:20 PM · 2 tasks\nstill running';
+  assert.ok(M.claudeBackgroundTasks(screen2, 'claude'), 'should detect folded "2 tasks / still running"');
+});

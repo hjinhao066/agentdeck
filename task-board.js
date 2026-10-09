@@ -250,13 +250,13 @@ class TaskStore {
     return this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at) || this.sessionOpen(card.dispatch_session_id, false, sessions, card.dispatch_host, card.dispatch_bound_at) ||
       sessions.some((s) => !s.archived && (s.boardId === card.id || s.dispatcherCardId === card.id));
   }
-  activeAttempt(card) {
+  activeAttempt(card, skipOtherSessions = false) {
     const sessions = this.sessions();
     const session = sessions.find((s) => s.id === card.session_id);
     return (card.session_id && this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at) && !card.attempt_closed &&
       !session?.failed && !(session?.lastReceipt?.failed && !session.active) &&
       !['failed', 'quota', 'held'].includes(card.flag) && !/:failed:/.test(card.last_event || '')) ||
-      sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id);
+      (!skipOtherSessions && sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id));
   }
   failure(card, attempt, reason, rework, source = '') {
     const duplicate = card.last_failure_attempt === attempt;
@@ -398,11 +398,12 @@ class TaskStore {
       }
       const explicitReview = Array.isArray(input.reviews) && input.reviews.length > 0;
       const reworkingFromReview = card.status === 'review' && !explicitReview;
-      // When reworking from review, temporarily clear session_id to avoid activeAttempt blocking
+      // When reworking from review, the old review session needs to be stopped
+      // Temporarily clear session_id and skip other session checks to allow the bind
       const savedSessionId = reworkingFromReview ? card.session_id : null;
       if (reworkingFromReview) card.session_id = '';
       try {
-        if (this.activeAttempt(card)) throw new Error('Card already has an active execution or verification session.');
+        if (this.activeAttempt(card, reworkingFromReview)) throw new Error('Card already has an active execution or verification session.');
       } finally {
         if (reworkingFromReview) card.session_id = savedSessionId;
       }
@@ -434,7 +435,10 @@ class TaskStore {
       if (card.review_block) card.review_block = null;
       if (card.review_reject) card.review_reject.delivered = true;
       touch(card);
-      return { card, notices: [] };
+      const result = { card, notices: [] };
+      // When reworking from review, indicate that the old review session should be stopped
+      if (reviewSessionId) result.stopSession = reviewSessionId;
+      return result;
     });
   }
   event(input) {
