@@ -4,9 +4,13 @@
 // re-arms at once, forever: tens of thousands of callbacks a second, one CPU core gone
 // (2.0.2 on the Windows PC). So every event first checks that the folder is still the one
 // being watched; when it is not, the watcher is closed (which lets Windows finish the
-// delete), the caller hears one change, and the folder is created and watched again later.
+// delete), the caller hears one change, and the folder is watched again later.
+// Watching again re-creates only the deleted folder itself, and only while its parent is
+// there: a deleted ~/.agents (to be cloned again) is never brought back. Changes made while
+// nothing watched are not seen, so the caller hears one more change once the watch is back.
 'use strict';
 const nodeFs = require('node:fs');
+const path = require('node:path');
 
 const RETRY_MS = 5000;
 
@@ -21,23 +25,31 @@ function watchDir(dir, onChange, { onError = () => {}, retryMs = RETRY_MS, fs = 
     timer = setTimeout(start, retryMs);
     timer.unref?.();
   };
-  function start() {
+  // The first start makes the whole path, as the callers always did; later ones only the
+  // folder itself, and while its parent is missing they just wait for it.
+  function start(first = false) {
     timer = null;
     if (closed) return;
     try {
-      fs.mkdirSync(dir, { recursive: true });
+      if (first) fs.mkdirSync(dir, { recursive: true });
+      else if (current() === null) {
+        try { fs.statSync(path.dirname(dir)); } catch (_) { retry(); return; }
+        try { fs.mkdirSync(dir); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+      }
       ino = current();
       const w = fs.watch(dir, (...args) => {
         if (watcher !== w) return;
-        if (current() !== ino) { stop(); retry(); } else failing = false;
+        if (current() !== ino) { stop(); retry(); }
         onChange(...args);
       });
       watcher = w;
+      failing = false;
       w.on('error', (error) => { if (watcher === w) fail(error); });
       w.unref?.();
-    } catch (error) { fail(error); }
+    } catch (error) { fail(error); return; }
+    if (!first) onChange();
   }
-  start();
+  start(true);
   return {
     watching: () => watcher !== null,
     close() { closed = true; clearTimeout(timer); timer = null; stop(); },
