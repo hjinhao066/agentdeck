@@ -1,4 +1,5 @@
 const closeElectron = require('./fixtures/close-electron');
+const screenDensity = require('./fixtures/screen-density');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -40,10 +41,9 @@ async function launch(crew) {
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks } }));
   const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
-  // a 1x screen, whatever this machine's is
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
-    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`, '--force-device-scale-factor=1'], env,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow(); errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
@@ -62,6 +62,8 @@ test.afterEach(async () => {
 async function size(width, height, theme) {
   await page.setViewportSize({ width, height });
   await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height]);
+  // a 1x screen, whatever this machine's (see fixtures/screen-density)
+  await screenDensity(page, 1);
   if (theme) await page.evaluate((t) => applyTheme(t), theme);
 }
 async function open(width, height, theme, cards) {
@@ -149,7 +151,7 @@ test('1x screen: the 24-session map that stands on one row on a 2x screen is not
   expect(g.label).toBe('124%');
   const type = await typePx();
   readable(type);
-  for (const k of ['.agent-model-label', '.cm-time', '.cm-prio span', '.cm-lead span', '.cm-project-summary']) expect(type.some((t) => t.kind === k), k).toBe(true);
+  for (const k of ['.agent-model-label', '.cm-time', '.cm-prio span', '.cm-lead span', '.cm-project-name', '.cm-count-label']) expect(type.some((t) => t.kind === k), k).toBe(true);
   await page.locator('[data-cm="fit"]').click(); await settled();
   await expect(page.locator('.cm-hint')).toHaveText('一页放不下：保持 124% 大小，其余部分向下滚动查看');
   // the rest is down the page: the wheel brings the lowest card up whole, still that large

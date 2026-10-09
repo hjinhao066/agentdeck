@@ -1,4 +1,5 @@
 const closeElectron = require('./fixtures/close-electron');
+const screenDensity = require('./fixtures/screen-density');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -37,14 +38,15 @@ test.beforeAll(async () => {
   fs.writeFileSync(path.join(profile, 'chats', 'c2003.json'), JSON.stringify({ turns: [{ id: 'u1', ts: now, user: '请审查 /tmp/demo/login.js 和「写注册接口」', reply: '', done: false }] }));
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
-  // a 2x screen, as on the MacBook these layouts were made on (the least a map shows at depends on it; crew-map-readable covers 1x)
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
-    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`, '--force-device-scale-factor=2'], env,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
   page.on('dialog', (d) => d.accept());
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(5);
+  // a 2x screen, as on the MacBook these layouts were made on (see fixtures/screen-density)
+  await screenDensity(page, 2);
 });
 test.afterAll(async () => {
   if (application) await closeElectron(application);
