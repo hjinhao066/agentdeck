@@ -232,13 +232,18 @@ test('a card reads in three layers and its line is news: never a CLI update noti
   await expect(page.locator('.cm-node[data-node-id="w4"] .cm-view')).toHaveText('查看');
   // nothing on its screen yet: what the session reported; a newer report shows on the next tick, in place
   expect(card('w23').line).toBe('只读核对 42 项删除清单，已核 30 项');
-  const before = await page.locator('.cm-node[data-node-id="w23"]').elementHandle();
-  // (news replacing news rises into place: a short fade and lift, opacity and transform only)
-  const rise = await page.evaluate(() => { MainSession.state().tasks.find((t) => t.colId === 'w23').progress = '已核完 42 项，没有误删'; CrewMap.refresh();
-    return document.querySelector('.cm-node[data-node-id="w23"] .cm-meta > .cm-line').getAnimations().map((a) => [...new Set(a.effect.getKeyframes().flatMap((k) => Object.keys(k)))].filter((k) => ['opacity', 'transform'].includes(k)).sort()); });
-  expect(rise).toEqual([['opacity', 'transform']]);
-  await expect(page.locator('.cm-node[data-node-id="w23"] .cm-meta > .cm-line')).toHaveText('已核完 42 项，没有误删');
-  expect(await before.evaluate((n) => n.isConnected), 'updated in place, not rebuilt').toBe(true);
+  // The line updates in place, not rebuilt, and news replacing news rises into place (a short fade and lift,
+  // opacity and transform only). (A status change elsewhere rebuilds the whole map on the same tick, and then
+  // there is nothing to rise: the update is tried again, after the map has taken in what changed.)
+  let round = 0;
+  await expect.poll(() => page.evaluate((n) => {
+    CrewMap.refresh();
+    const line = document.querySelector('.cm-node[data-node-id="w23"] .cm-meta > .cm-line');
+    MainSession.state().tasks.find((t) => t.colId === 'w23').progress = '已核完 42 项，没有误删' + (n ? `（${n}）` : '');
+    CrewMap.refresh();
+    return line.isConnected ? line.getAnimations().map((a) => [...new Set(a.effect.getKeyframes().flatMap((k) => Object.keys(k)))].filter((k) => ['opacity', 'transform'].includes(k)).sort()) : 'rebuilt';
+  }, round++)).toEqual([['opacity', 'transform']]);
+  await expect(page.locator('.cm-node[data-node-id="w23"] .cm-meta > .cm-line')).toHaveText(/^已核完 42 项，没有误删/);
   // the account behind the seat is a small text tag on the card (a seat's flag stays in the sidebar), named
   // in full on hover; it gives way first: a long account name is cut with an ellipsis, never the status or the model
   const seats = await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .agent-seat-label')].map((n) => [n.textContent.trim(), n.getAttribute('aria-label') || '', getComputedStyle(n).display, n.scrollWidth <= n.clientWidth]));

@@ -117,7 +117,8 @@ test('sci-fi crew map: bundled trunk, dispatch lines avoid other projects, motio
   // Flat project panes (no backdrop blur: it costs frames on a zoomable canvas); 队长 has no aurora animation.
   const flat = await page.locator('.cm-project').first().evaluate((n) => getComputedStyle(n).backdropFilter + getComputedStyle(n, '::before').backdropFilter);
   expect(flat).not.toContain('blur');
-  expect(await page.locator('.cm-node.kind-captain').evaluate((n) => getComputedStyle(n, '::before').animationName)).toBe('none');
+  // (polled: a status tick may replace 队长's card between finding it and reading it)
+  await expect.poll(() => page.locator('.cm-node.kind-captain').evaluate((n) => n.isConnected ? getComputedStyle(n, '::before').animationName : 'replaced')).toBe('none');
   // Icon controls keep their names, tooltips and a real hit area.
   const controls = await page.locator('.cm-controls button:not([hidden]), .cm-return-toggle, .cm-project-toggle, .cm-more').evaluateAll((list) => list.map((n) => {
     // CSS size: the project toggles live on the zoomable canvas
