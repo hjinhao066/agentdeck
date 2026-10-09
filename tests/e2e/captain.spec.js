@@ -1,4 +1,5 @@
 const closeElectron = require('./fixtures/close-electron');
+const dragRow = require('./fixtures/sidebar-drag');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -56,7 +57,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => {
   if (application) await closeElectron(application);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true });
+  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 test('there is one Captain: the sidebar entry creates it first, then just returns to it', { tag: '@smoke' }, async () => {
@@ -192,14 +193,7 @@ test('a session the Captain only told something keeps its place; its own session
   await expect(crew(child)).toHaveCount(1);
   await expect(crew('cap-x')).toHaveCount(0);
   await expect(page.locator('.nav-group:not(.nav-crew) .colnav-item[data-col-id="cap-x"]')).toHaveCount(1);
-  const drag = async (from, to) => {
-    const a = await from.boundingBox();
-    const b = await to.boundingBox();
-    await page.mouse.move(a.x + 30, a.y + a.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(b.x + 30, b.y + b.height / 2, { steps: 6 });
-    await page.mouse.up();
-  };
+  const drag = (from, to) => dragRow(page, from, to);
   await drag(crew(child), page.locator('.nav-section[data-section="loose"]'));
   await expect(crew(child)).toHaveCount(0);
   // out of the background: an ordinary session with its own deck column
@@ -499,7 +493,9 @@ test('a command line that starts but never draws anything gets no task text; the
   await page.waitForTimeout(3000);
   expect(await replay(child)).not.toContain('SILENT-TASK-TEXT');
   expect(capturedPrompts().filter((p) => p.includes('SILENT-TASK-TEXT'))).toHaveLength(0);
-  expect(await page.evaluate(() => JSON.stringify(config.mainSession.tasks) + JSON.stringify(config.mainSession.pending))).not.toContain('已结束，未提交回执');
+  // Only this column's records: an earlier worker (cap-x, answered but never reporting) gets its
+  // own three-minute fallback, which on a slower machine lands during this test.
+  expect(await page.evaluate((i) => JSON.stringify(config.mainSession.tasks.filter((t) => t.colId === i)) + JSON.stringify(config.mainSession.pending.filter((p) => p.colId === i)), child)).not.toContain('已结束，未提交回执');
   await page.evaluate((i) => { config.mainSession.pending = config.mainSession.pending.filter((p) => p.colId !== i); config.mainSession.inflight = config.mainSession.inflight.filter((p) => p.colId !== i); archiveColumn(columns.find((c) => c.id === i)); }, child);
 });
 
@@ -749,8 +745,12 @@ test('only the Captain holds control: other columns get no token and are refused
   const probe = path.join(profile, 'worker-token.js');
   const result = path.join(profile, 'worker-token.txt');
   fs.writeFileSync(probe, `const value = 'TOKEN=' + (process.env.AGENTDECK_CONTROL_TOKEN || 'none'); require('fs').writeFileSync(process.argv[2], value); console.log(value);`);
-  await run('cap-y', `clear; node "${probe}" "${result}"`);
-  await expect.poll(() => fs.existsSync(result) ? fs.readFileSync(result, 'utf8') : '', { timeout: 15000 }).toBe('TOKEN=none');
+  // Without a shell-prompt check on Windows, the first line can reach the stand-in while it
+  // is still exiting and be swallowed; the probe only writes a file, so typing it again is safe.
+  await expect(async () => {
+    if (!fs.existsSync(result)) await run('cap-y', `clear; node "${probe}" "${result}"`);
+    await expect.poll(() => fs.existsSync(result) ? fs.readFileSync(result, 'utf8') : '', { timeout: 5000 }).toBe('TOKEN=none');
+  }).toPass({ timeout: 30000 });
   await expect.poll(() => screen('cap-y'), { timeout: 15000 }).toContain('TOKEN=none');
   const refused = await page.evaluate(() => MainSession.handle({ action: 'main-ledger' }, columns.find((c) => c.id === 'cap-x'))
     .then(() => 'allowed', (e) => e.message));

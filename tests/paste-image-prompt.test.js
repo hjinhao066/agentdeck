@@ -50,3 +50,28 @@ test('an ordinary prompt still submits after the usual short settle', async () =
 test('the wait for a pasted image is bounded', () => {
   assert.match(source, /const PASTE_READ_MAX = 30_000;/);
 });
+
+// Windows: the paste reaches the agent through ConPTY 0.1-0.5s after it is written, so a TUI that
+// draws nothing until its paste detector settles (Cursor-like) must not get the Enter early.
+function windowsHarness({ drawAt }) {
+  const h = harness({ footerAt: 0 });
+  h.context.host.platform = 'win32';
+  const t0 = Date.now();
+  if (drawAt != null) setTimeout(() => { h.entry.lastOutputAt = Date.now(); }, drawAt);
+  return { ...h, t0 };
+}
+test('on Windows, Enter waits until the agent has drawn something since the paste', async () => {
+  const { context, sent } = windowsHarness({ drawAt: 900 });
+  await context.sendPrompt({ id: 'w', cmd: 'cursor-agent' }, '慢粘贴任务', null, {});
+  const enters = sent.filter((s) => s.data === '\r');
+  assert.equal(enters.length, 1, 'exactly one Enter');
+  assert.ok(enters[0].at >= 1100, `Enter at ${enters[0].at}ms came before the agent read the paste and went quiet`);
+  assert.ok(enters[0].at < 1600, `Enter at ${enters[0].at}ms waited longer than needed`);
+});
+test('on Windows, an agent that never draws still gets its Enter within 3 seconds', async () => {
+  const { context, sent } = windowsHarness({ drawAt: null });
+  await context.sendPrompt({ id: 'w', cmd: 'claude' }, '普通任务', null, {});
+  const enters = sent.filter((s) => s.data === '\r');
+  assert.equal(enters.length, 1);
+  assert.ok(enters[0].at >= 2900 && enters[0].at < 3400, `Enter at ${enters[0].at}ms`);
+});

@@ -35,7 +35,7 @@ function terminal(cmd = 'claude') {
     beginTurn: () => ({ id: 't' }),
   });
   vm.runInContext(sendSource, context);
-  return { typed, saved, send: (text, opts) => context.sendPrompt({ id: 'col', cmd }, text, null, opts || { silent: true }) };
+  return { entry, typed, saved, send:(text, opts) => context.sendPrompt({ id: 'col', cmd }, text, null, opts || { silent: true }) };
 }
 // A briefing that has grown to `length` characters; the closing paragraph and
 // the token saver's resume line are still the last thing in it.
@@ -83,6 +83,21 @@ test('a briefing of exactly 10000 characters is still pasted whole; one more cha
     assert.match(o.typed[0], /（这条消息共 10001 字，完整内容已存成文件，请先完整读取再照做：\/tmp\/long-prompts\/prompt\.txt）/, platform);
     assert.ok(!o.typed[0].includes('读看板继续'), platform + ': past the limit the closing is only in the file');
   }));
+});
+
+// A terminal without bracketed paste (a line-reading agent; Windows ConPTY often drops the
+// agent's paste request) gets the briefing typed: any line past the tty limit would send it
+// all to a file instead. Rule 8 once ran to 1120 bytes on one line.
+test('every briefing line fits the line-mode limit, so a line-reading agent is typed the briefing whole', async () => {
+  for (const platform of PLATFORMS) for (const legacy of [false, true]) for (const cap of [5, 30, 50]) {
+    const text = M.instructions(platform, '', legacy, cap) + M.SAVER_RESUME;
+    assert.ok(ChatCore.longestLineBytes(' ' + text) <= ChatCore.LINE_MODE_BYTES, `${platform}${legacy ? ' legacy' : ''} cap ${cap}`);
+    const t = terminal();
+    t.entry.term.modes.bracketedPasteMode = false;
+    assert.ok(await t.send(text, BRIEFING), platform);
+    assert.deepEqual(t.saved, [], platform + ': nothing goes to a file');
+    assert.deepEqual(t.typed, [text.replace(/\r?\n/g, '\r'), '\r'], platform + ': typed whole, then one Enter');
+  }
 });
 
 // Raising the briefing's limit must not change what any agent gets as ordinary work.

@@ -43,7 +43,11 @@ async function launch() {
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code|Codex CLI/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(count);
   await expect(page.locator('.claude-seat-rotate')).toBeEnabled({ timeout: 15000 });
   await expect.poll(() => promptsFor(captainId).slice(promptCount).some((p) => p.startsWith('你是 AgentDeck')), { timeout: 20000 }).toBe(true);
-  await expect.poll(() => page.evaluate((i) => terms.get(i)?.lastScreen.includes('> 你是 AgentDeck'), captainId), { timeout: 20000 }).toBe(true);
+  // After a relaunch the restart note follows the briefing as soon as it is done, and the
+  // stand-in redraws for it; a slow machine can miss the briefing's screen between two
+  // status reads. The replay keeps what the TUI drew, so check both.
+  await expect.poll(() => page.evaluate(async (i) => terms.get(i)?.lastScreen.includes('> 你是 AgentDeck')
+    || (await window.deck.ptyReplay(i) || '').includes('> 你是 AgentDeck'), captainId), { timeout: 20000 }).toBe(true);
   await idle(captainId);
 }
 test.beforeEach(async ({}, testInfo) => {
@@ -85,7 +89,7 @@ test.beforeEach(async ({}, testInfo) => {
 test.afterEach(async () => {
   if (page && !page.isClosed()) await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach((d) => d.close()));
   if (application) await closeApplication();
-  if (profile) fs.rmSync(profile, { recursive: true, force: true });
+  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 test('fresh Captain receives its complete multiline briefing after input is ready', async () => {
   const expected = await page.evaluate(() => MainCore.instructions(env.platform));

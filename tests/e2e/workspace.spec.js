@@ -1,4 +1,6 @@
 const closeElectron = require('./fixtures/close-electron');
+const dragRow = require('./fixtures/sidebar-drag');
+const ChatCore = require('../../chat-core');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -46,7 +48,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => {
   if (application) await closeElectron(application);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true });
+  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 test('status lines under the composer, a clean reply, and an artifact from it', async () => {
@@ -111,7 +113,14 @@ test('a very long prompt is not cut: it goes to the agent as a file', async () =
     const records = path.join(profile, 'delivered-columns.jsonl');
     return fs.existsSync(records) ? fs.readFileSync(records, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter((p) => p.colId === 'ws-c').map((p) => p.text).join('\n') : '';
   };
-  await expect.poll(received, { timeout: 15000 }).toContain(`${long.slice(0, 300)}…\n（这条消息共 ${long.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`);
+  const note = `（这条消息共 ${long.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`;
+  // A terminal in bracketed-paste mode gets the opening and the note on two lines. One that
+  // reads lines (this stand-in never asks for paste mode) gets one line within the tty limit.
+  const pointer = await page.evaluate(([text, n]) => (terms.get('ws-c').term.modes.bracketedPasteMode
+    ? `${text.slice(0, 300)}…\n${n}`
+    : ChatCore.clipBytes(text.slice(0, 300), ChatCore.LINE_MODE_BYTES - ChatCore.utf8Length(n + '… ')) + '…' + n), [long, note]);
+  await expect.poll(received, { timeout: 15000 }).toContain(pointer);
+  expect(ChatCore.longestLineBytes(pointer)).toBeLessThanOrEqual(ChatCore.LINE_MODE_BYTES);
   await expect(col.locator('.composer textarea')).toHaveValue('');
 });
 
@@ -174,19 +183,8 @@ test('dragging a session into a folder moves its column, and the order persists'
 
   const row = page.locator('.colnav-item[data-col-id="ws-d"]');
   const target = page.locator('.nav-folder-head');
-  const from = await row.boundingBox();
-  const to = await target.boundingBox();
-  await page.mouse.move(from.x + 40, from.y + from.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(from.x + 40, from.y - 20, { steps: 4 });
-  await page.mouse.move(to.x + 60, to.y + to.height / 2, { steps: 6 });
-  const debug = await page.evaluate(([x, y]) => {
-    const n = document.elementFromPoint(x, y);
-    return { at: n && n.className, drop: [...document.querySelectorAll('.drop-into,.drop-before,.drop-after')].map((e) => e.className),
-      body: document.body.className, rows: [...document.querySelectorAll('#navList > *')].map((e) => e.className + ':' + Math.round(e.getBoundingClientRect().top)) };
-  }, [to.x + 60, to.y + to.height / 2]);
-  await page.mouse.up();
-  await expect(page.locator('.nav-folder .colnav-item[data-col-id="ws-d"]')).toBeVisible().catch((e) => { console.log('DRAG', JSON.stringify({ from, to, debug })); throw e; });
+  await dragRow(page, row, target, { fromX: 40, toX: 60 });
+  await expect(page.locator('.nav-folder .colnav-item[data-col-id="ws-d"]')).toBeVisible();
   expect(await deckOrder()).toEqual(['ws-d', 'ws-a', 'ws-b', 'ws-c']);
   // moving it never restarted its terminal
   expect(await alive('ws-d')).toBe(true);
