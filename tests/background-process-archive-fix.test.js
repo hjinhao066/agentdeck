@@ -2,10 +2,12 @@
 // The screen can miss a background command (a footer cut at the column width, a
 // status row scrolled away), so before the automatic archive ends a quiet Claude
 // worker, the main process reads the terminal's process tree (pty-work.js). Only
-// what Claude started through a shell counts (its Bash tool / run_in_background
-// commands: zsh/bash -c, Windows cmd /c, powershell -Command) and everything under
-// it. Claude's resident children (MCP servers, caffeinate) and the terminal's own
-// shell never count, or no session would ever be archived.
+// what Claude's Bash tool started counts (foreground or run_in_background; every such
+// command sources Claude's shell snapshot) and everything under it, cmd /c or
+// powershell -Command included. Claude's resident children never count, or no session
+// would ever be archived: caffeinate and `npm exec …-mcp` on the Mac, and on the
+// Windows PC (10-09 listing) its MCP server as `cmd.exe /d /s /c "npx -y tavily-mcp"`
+// and its status line as `bash.exe -c "npx -y ccstatusline@latest"`.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -25,6 +27,7 @@ const MAC_PS = [
   '88543 50113 caffeinate -i -t 300',
   '61001 50113 npm exec @gongrzhe/server-gmail-autoauth-mcp',
   '61002 61001 node /Users/me/.npm/_npx/1/node_modules/.bin/gmail-mcp',
+  '61003 50113 /bin/sh -c ~/.claude/statusline.sh',
   "70001 50113 /bin/zsh -c source /Users/me/.claude/shell-snapshots/snapshot-zsh-1.sh 2>/dev/null || true && eval 'sleep 900' < /dev/null && pwd -P >| /var/folders/x/claude-1-cwd",
   '70002 70001 sleep 900',
   '50200   756 /bin/zsh',
@@ -37,19 +40,23 @@ const without = (text, ...pids) => text.split('\n').filter((line) => !pids.some(
 const WIN_ROWS = [
   { ProcessId: 4100, ParentProcessId: 900, CommandLine: '"C:\\Program Files\\AgentDeck\\AgentDeck.exe"' },
   { ProcessId: 4200, ParentProcessId: 4100, CommandLine: 'C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo' },
-  { ProcessId: 4300, ParentProcessId: 4200, CommandLine: '"C:\\Users\\me\\.local\\bin\\claude.exe" --dangerously-skip-permissions --model claude-opus-5-5' },
-  { ProcessId: 4310, ParentProcessId: 4300, CommandLine: '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\mcp\\server.js' },
+  { ProcessId: 4300, ParentProcessId: 4200, CommandLine: '"D:\\npm-global\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" --resume 769540a1' },
+  // resident, as listed on the Windows PC: the MCP server and a status line run
+  { ProcessId: 4310, ParentProcessId: 4300, CommandLine: 'C:\\windows\\system32\\cmd.exe /d /s /c "npx ^"-y^" ^"tavily-mcp^""' },
+  { ProcessId: 4311, ParentProcessId: 4310, CommandLine: 'node "D:\\npm-global\\node_modules\\npm\\bin\\npx-cli.js" -y tavily-mcp' },
+  { ProcessId: 4312, ParentProcessId: 4300, CommandLine: '"C:\\Program Files\\Git\\bin\\bash.exe" -c "npx -y ccstatusline@latest"' },
   { ProcessId: 4350, ParentProcessId: 4300, CommandLine: null },
-  { ProcessId: 4320, ParentProcessId: 4300, CommandLine: 'C:\\WINDOWS\\system32\\cmd.exe /d /s /c "npm run test:e2e"' },
+  // the Bash tool through Git Bash, running the E2E through cmd /c and a PowerShell step
+  { ProcessId: 4340, ParentProcessId: 4300, CommandLine: '"C:\\Program Files\\Git\\bin\\bash.exe" -c "source C:/Users/me/.claude/shell-snapshots/snapshot-bash-1791522610826-ky7t9x.sh 2>/dev/null || true && eval \'npm run test:e2e\' < /dev/null"' },
+  { ProcessId: 4320, ParentProcessId: 4340, CommandLine: 'C:\\WINDOWS\\system32\\cmd.exe /d /s /c "npm run test:e2e"' },
   { ProcessId: 4321, ParentProcessId: 4320, CommandLine: 'node "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js" run test:e2e' },
-  { ProcessId: 4330, ParentProcessId: 4300, CommandLine: 'powershell.exe -NoProfile -Command "Start-Sleep 900"' },
-  { ProcessId: 4340, ParentProcessId: 4300, CommandLine: '"C:\\Program Files\\Git\\bin\\bash.exe" -c "sleep 900"' },
+  { ProcessId: 4330, ParentProcessId: 4320, CommandLine: 'powershell.exe -NoProfile -Command "Start-Sleep 900"' },
 ];
 const WORK_PIDS = [4320, 4321, 4330, 4340];
 
 test('Mac: a shell command Claude started counts with what it runs; MCP servers, caffeinate and other terminals do not', () => {
   const rows = parseProcessTable(MAC_PS, 'darwin');
-  assert.equal(rows.length, 12);
+  assert.equal(rows.length, 13);
   assert.deepEqual(rows[3], { pid: 50113, ppid: 49957, command: 'claude --session-id 5f0c --dangerously-skip-permissions --model claude-opus-5-5' });
   assert.deepEqual(shellWork(rows, 49957).sort(), [70001, 70002]);
   assert.deepEqual(shellWork(parseProcessTable(without(MAC_PS, 70001, 70002), 'darwin'), 49957), []);
@@ -59,15 +66,16 @@ test('Mac: a shell command Claude started counts with what it runs; MCP servers,
   const launched = parseProcessTable(['  756     1 AgentDeck', '  900   756 /bin/zsh -lc claude --model x', '  901   900 claude --model x',
     '  902   900 /bin/bash -c echo hi', '  903   901 npm exec some-mcp'].join('\n'), 'darwin');
   assert.deepEqual(shellWork(launched, 900), []);
-  // Claude installed through npm runs as node …/claude; bash -lc counts like zsh -c.
-  const npm = parseProcessTable(['  900   756 -zsh', '  901   900 node /opt/homebrew/bin/claude --model x', '  902   901 /bin/bash -lc npm test', '  903   902 node npm-cli.js test'].join('\n'), 'darwin');
+  // Claude installed through npm runs as node …/claude; bash -c -l counts like zsh -c.
+  const npm = parseProcessTable(['  900   756 -zsh', '  901   900 node /opt/homebrew/bin/claude --model x',
+    "  902   901 /bin/bash -c -l source /Users/me/.claude/shell-snapshots/snapshot-bash-2.sh && eval 'npm test'", '  903   902 node npm-cli.js test'].join('\n'), 'darwin');
   assert.deepEqual(shellWork(npm, 900).sort(), [902, 903]);
 });
 
-test('Windows: cmd /c, powershell -Command and Git bash -c under claude count; its node MCP server does not', () => {
+test('Windows: the Bash tool through Git Bash counts with its cmd /c and powershell children; the cmd /c MCP server and status line do not', () => {
   const rows = parseProcessTable(JSON.stringify(WIN_ROWS), 'win32');
   assert.equal(rows.length, WIN_ROWS.length);
-  assert.deepEqual(rows[4], { pid: 4350, ppid: 4300, command: '' });
+  assert.deepEqual(rows[6], { pid: 4350, ppid: 4300, command: '' });
   assert.deepEqual(shellWork(rows, 4200).sort(), WORK_PIDS);
   const idle = WIN_ROWS.filter((r) => !WORK_PIDS.includes(r.ProcessId));
   assert.deepEqual(shellWork(parseProcessTable(JSON.stringify(idle), 'win32'), 4200), []);
@@ -76,7 +84,7 @@ test('Windows: cmd /c, powershell -Command and Git bash -c under claude count; i
   // Claude from npm: node.exe …\@anthropic-ai\claude-code\cli.js.
   const npm = [{ ProcessId: 10, ParentProcessId: 1, CommandLine: 'cmd.exe' },
     { ProcessId: 11, ParentProcessId: 10, CommandLine: '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js' },
-    { ProcessId: 12, ParentProcessId: 11, CommandLine: 'C:\\WINDOWS\\system32\\cmd.exe /d /s /c "timeout 900"' }];
+    { ProcessId: 12, ParentProcessId: 11, CommandLine: '"C:\\Program Files\\Git\\bin\\bash.exe" -c -l "source C:\\Users\\me\\.claude\\shell-snapshots\\snapshot-bash-2.sh && eval \'timeout 900\'"' }];
   assert.deepEqual(shellWork(parseProcessTable(JSON.stringify(npm), 'win32'), 10), [12]);
 });
 

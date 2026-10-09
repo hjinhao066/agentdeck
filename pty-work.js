@@ -1,9 +1,9 @@
 // Background work under a terminal, read off the OS process table: the commands
-// Claude started through a shell (its Bash tool and run_in_background commands)
-// and whatever they run. Claude's resident children (MCP servers, caffeinate) and
-// the terminal's own shell are not work, or no quiet session would ever be
-// archived. One listing serves every terminal for CACHE_MS, so the archive check
-// does not spawn ps / PowerShell on every tick.
+// Claude's Bash tool started (foreground or run_in_background) and whatever they run,
+// cmd /c and powershell -Command included. Claude's resident children and the
+// terminal's own shell are not work, or no quiet session would ever be archived.
+// One listing serves every terminal for CACHE_MS, so the archive check does not
+// spawn ps / PowerShell on every tick.
 'use strict';
 
 const CACHE_MS = 5000;
@@ -50,6 +50,15 @@ function isShellCommand(command) {
   return false;
 }
 
+// Claude runs every Bash tool command through its shell snapshot: on the Mac
+// `/bin/zsh -c source …/shell-snapshots/snapshot-zsh-….sh … && eval '…'`, on Windows
+// Git Bash with snapshot-bash-….sh. Its other shell children are resident: on the
+// Windows PC the MCP server runs as `cmd.exe /d /s /c "npx -y tavily-mcp"` and the
+// status line as `bash.exe -c "npx -y ccstatusline@latest"`.
+function isToolCommand(command) {
+  return isShellCommand(command) && /[\\/]shell-snapshots[\\/]snapshot-/.test(command);
+}
+
 // Pids of the background work under the terminal whose process is rootPid.
 function shellWork(rows, rootPid) {
   const children = new Map();
@@ -72,7 +81,7 @@ function shellWork(rows, rootPid) {
   const work = new Set();
   for (const claude of terminal.filter((row) => isClaude(row.command))) {
     for (const child of children.get(claude.pid) || []) {
-      if (!isShellCommand(child.command)) continue;
+      if (!isToolCommand(child.command)) continue;
       work.add(child.pid);
       for (const row of under(child.pid)) work.add(row.pid);
     }
@@ -118,4 +127,4 @@ function createPtyWork({ platform = process.platform, execFile, now = Date.now, 
   return { busy };
 }
 
-module.exports = { CACHE_MS, parseProcessTable, isClaude, isShellCommand, shellWork, createPtyWork };
+module.exports = { CACHE_MS, parseProcessTable, isClaude, isShellCommand, isToolCommand, shellWork, createPtyWork };
