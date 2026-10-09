@@ -52,6 +52,22 @@ const depsKey = (lockfileBytes) => crypto.createHash('sha256').update(lockfileBy
 
 class InstallWaitTimeout extends Error {}
 
+// Right after npm ci the Electron binary is often still locked by the virus scanner ("the file is in
+// use by another process") and the first launch fails. Start it until it answers, before any job
+// relies on it. Not fatal if it never does: the tests will report the failure themselves.
+function warmElectron(modules) {
+  const marker = path.join(modules, 'electron', 'path.txt');
+  if (!fs.existsSync(marker)) return;
+  const exe = path.join(modules, 'electron', 'dist', fs.readFileSync(marker, 'utf8').trim());
+  const gap = envMs('AGENTDECK_E2E_ELECTRON_RETRY_MS', 3000);
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    const r = spawnSync(exe, ['--version'], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', timeout: 60000 });
+    if (r.status === 0) { say(`electron starts (try ${attempt})`); return; }
+    sleep(gap);
+  }
+  say('warning: electron did not start after install; the first tests may fail to launch it');
+}
+
 // One installer per lock. While another job holds it we log why we wait, every 30 s. A lock older
 // than the stale limit (a crashed job) is broken; waiting longer than the wait limit gives up.
 function withInstallLock(lockDir, fn) {
@@ -95,6 +111,7 @@ function ensureDeps({ workDir, sha, lockfile, install }) {
         fs.rmSync(dir, { recursive: true, force: true });
         return { failed: 'npm ci', code: 13 };
       }
+      warmElectron(path.join(dir, 'node_modules'));
       fs.writeFileSync(done, new Date().toISOString());
       return { modules: path.join(dir, 'node_modules') };
     });

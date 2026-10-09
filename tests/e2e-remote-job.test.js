@@ -198,3 +198,47 @@ test('an install lock left by a crashed job is broken once it is stale', posix, 
     assert.equal(installs(fake).length, 1);
   } finally { env.done(); }
 });
+
+test('after npm ci the Electron binary must start before jobs use it: a first launch that fails is retried (fresh files are often locked by the virus scanner)', posix, async () => {
+  const env = setup();
+  try {
+    const fake = fakeNpm(env);
+    const counter = path.join(env.root, 'electron-starts');
+    const npm = path.join(env.root, 'bin', 'npm');
+    // npm ci that also drops a fake Electron which fails its first two starts
+    fs.writeFileSync(npm, fs.readFileSync(npm, 'utf8') + `mkdir -p node_modules/electron/dist
+echo electron > node_modules/electron/path.txt
+cat > node_modules/electron/dist/electron <<'EOS'
+#!/bin/sh
+echo x >> "${counter}"
+[ "$(wc -l < "${counter}")" -ge 3 ] || { echo "file is in use by another process" >&2; exit 1; }
+echo v1.0.0
+EOS
+chmod +x node_modules/electron/dist/electron
+`, { mode: 0o755 });
+    const job = await startJob(env, 'r1', env.shas.A, { install: 'auto', extraEnv: { PATH: fake.PATH, AGENTDECK_E2E_ELECTRON_RETRY_MS: '100' } });
+    assert.equal(job.code, 0, job.output);
+    assert.equal(fs.readFileSync(counter, 'utf8').trim().split('\n').length, 3, 'started until it worked');
+    assert.match(job.output, /electron starts \(try 3\)/);
+    // a later job finds the install complete and does not start it again
+    const second = await startJob(env, 'r2', env.shas.A, { install: 'auto', extraEnv: { PATH: fake.PATH } });
+    assert.equal(second.code, 0, second.output);
+    assert.equal(fs.readFileSync(counter, 'utf8').trim().split('\n').length, 3);
+  } finally { env.done(); }
+});
+
+test('an Electron that never starts after install: the job still runs (the test itself reports the failure) but says so', posix, async () => {
+  const env = setup();
+  try {
+    const fake = fakeNpm(env);
+    const npm = path.join(env.root, 'bin', 'npm');
+    fs.writeFileSync(npm, fs.readFileSync(npm, 'utf8') + `mkdir -p node_modules/electron/dist
+echo electron > node_modules/electron/path.txt
+printf '#!/bin/sh\\nexit 1\\n' > node_modules/electron/dist/electron
+chmod +x node_modules/electron/dist/electron
+`, { mode: 0o755 });
+    const job = await startJob(env, 'r1', env.shas.A, { install: 'auto', extraEnv: { PATH: fake.PATH, AGENTDECK_E2E_ELECTRON_RETRY_MS: '10' } });
+    assert.equal(job.code, 0, job.output);
+    assert.match(job.output, /warning: electron did not start after install/);
+  } finally { env.done(); }
+});
