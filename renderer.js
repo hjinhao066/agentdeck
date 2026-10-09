@@ -3829,7 +3829,7 @@ const deckHost = {
   createSession, sendWhenReady,
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
-  createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen,
+  createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, hasChildProcesses,
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
@@ -3920,6 +3920,18 @@ function statusScreen(term) {
     text = nl >= 0 ? text.slice(nl + 1) : '';
   }
   return text.trimEnd();
+}
+// Check if the PTY has real child processes (not just the shell itself).
+// This is called from maybeArchive to avoid archiving sessions with background tasks
+// that are not showing output on screen (e.g., long-running E2E tests, video rendering).
+// TODO: Implement actual child process detection via IPC to main.js's process tree check.
+// For now, returns false (stub implementation - does not prevent archiving).
+function hasChildProcesses(term) {
+  // Stub: Future implementation will check the actual process tree via IPC.
+  // In main.js, enumerate child processes of the PTY's pid to detect activity.
+  // macOS: ps -o ppid,pid,comm -p <pid> and check for children
+  // Windows: Get-Process | where {$_.Parent.Id -eq <pid>}
+  return false;
 }
 // Format elapsed ms compactly: 42s → 3m 12s → 1h 05m.
 function fmtElapsed(ms) {
