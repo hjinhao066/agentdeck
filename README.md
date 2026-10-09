@@ -331,7 +331,7 @@ Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；�
 筛选行右侧（刷新左边）的星光图标按钮是动效开关：点一下看板和终端架构图一起静止（连线、描边、颜色都留着，只是不动），
 再点恢复；这个选择会记住。系统开着「减少动态效果」时按钮只提示这一点，动效保持关闭。架构图工具栏里是同一个开关。
 **Token 用量**是看板页的第四个标签（架构图工具栏里也有）：本机每天各模型用了多少 token。顶部是近 7 天 / 近 30 天
-的合计和 Anthropic / OpenAI / Google / 其他四家的占比；下面每天一根堆叠柱，当天用得最多的模型在最底下、越往上越少，
+的合计和 Anthropic / OpenAI / Google / 其他四家的占比；下面每天一根堆叠柱，当天用得最多的模型在最上面、越往下越少（和图例、悬停列表、明细表一样，最多的排第一），
 柱顶是当天合计（数字一律横排，挤不下就错位抬高，再窄就让图自己横向滚动、打开时停在今天）；悬停看当天每个模型的
 数量和占比，点一根柱或在图上按 ←/→ 看那天的明细表（输入、输出、缓存读、缓存写）。用量最多的 6 个模型各有自己的颜色
 （色弱也能分，深浅两套），其余合成灰色「其他模型」。数字来自本机日志，只读出数量、模型名和时间：Claude Code
@@ -930,7 +930,10 @@ when it is shown, by the same rules as the phone page, and its titles, nested
 lists and tables are set as such; copy and share give the same clean text. The
 saved reply is unchanged, and a plain shell's output is shown as it is. The
 cards 队长 leaves between two messages (work handed out, receipts back) sit
-folded behind one line with their count and state; click it to open them.
+folded behind one line with their count and state; click it to open them. A
+receipt card lists the files to look at first (documents, pages, PDFs, pictures,
+sheets, folders) and folds code, tests, data and logs (the 交付文件 panel's
+从不算交付 types, below) behind 另有 N 个代码文件, which opens them in place.
 
 **交付文件** (队长's column only, `chat-deliverables.js`, rules in
 `deliverables-core.js`): a panel on the right lists the result files that came
@@ -953,7 +956,10 @@ nothing dropped for room; the panel shows 200 rows and 显示更早的 adds 200 
 time): each old conversation is read once, and its files stay listed even if the
 conversation is later trimmed. A column at least 1100px wide docks
 the panel (folding it with the head's icon is remembered); a narrower one slides
-it over the chat on request, and Esc closes it. The phone hub does not have it.
+it over the chat on request, and Esc closes it. The number on the head's icon
+(the stacked-sheets icon left of 对话) counts the files that came in since the
+panel was last open, and goes away once it has shown them (`seen` in the index;
+an index from before this counts nothing as new). The phone hub does not have it.
 
 - A new blank session (no launch command, nothing said yet) offers Claude,
   Antigravity, Grok, Cursor CLI and Codex (ChatGPT) buttons. A click types that agent's launch

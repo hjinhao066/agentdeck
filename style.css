@@ -2475,6 +2475,16 @@ body.linking-board .board-port.out::before {
 .task-failed { color: var(--st-input); }
 .task-note { color: var(--muted); font-size: 12px; }
 .task-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.task-code-toggle {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 4px 8px 4px 4px;
+  border: none; border-radius: 8px; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
+}
+.task-code-toggle:hover { color: var(--text-2); background: var(--pill-bg); }
+.task-code-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.task-code-toggle .proc-chev { display: inline-flex; }
+.task-code-toggle[aria-expanded="true"] .proc-chev svg { transform: rotate(90deg); }
+.task-code { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+.task-code[hidden] { display: none; }
 
 body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 

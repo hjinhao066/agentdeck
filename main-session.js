@@ -3313,13 +3313,38 @@
       if (r.undeliveredTaskId) card.appendChild(el('div', 'task-note', `取回未送达指令原文：read --id ${r.undeliveredTaskId}`));
       if (r.summary) card.appendChild(el('div', 'task-summary', r.summary));
       if (!r.explicit && !r.failed) card.appendChild(el('div', 'task-note', '会话已结束，等待命令回执超过 3 分钟。'));
-      if (r.files && r.files.length) {
-        const files = el('div', 'task-files');
-        r.files.forEach((p) => files.appendChild(window.ChatUI.attachmentChip(p, task.colId)));
-        card.appendChild(files);
-      }
+      if (r.files && r.files.length) card.appendChild(receiptFiles(task, r.files));
     }
     return card;
+  }
+  // The results the user looks at come first; scripts, tests, data and logs (the
+  // 交付文件 panel's 从不算交付 types) fold behind one line until it is clicked.
+  const openCode = new Set();    // task ids whose code files are unfolded
+  function receiptFiles(task, list) {
+    const D = window.DeliverablesCore;
+    const { results, code } = D.splitReceiptFiles(list, D.normalizeRules(host.config.deliverableRules));
+    const files = el('div', 'task-files');
+    results.forEach((p) => files.appendChild(window.ChatUI.attachmentChip(p, task.colId)));
+    if (!code.length) return files;
+    const open = openCode.has(task.id);
+    const toggle = el('button', 'task-code-toggle');
+    toggle.type = 'button';
+    toggle.title = '展开 / 收起代码文件';
+    toggle.setAttribute('aria-expanded', String(open));
+    const chev = el('span', 'ico proc-chev');
+    chev.innerHTML = host.ICONS.chevRight;
+    toggle.append(chev, el('span', null, (results.length ? '另有 ' : '') + code.length + ' 个代码文件'));
+    const box = el('div', 'task-files task-code');
+    box.hidden = !open;
+    code.forEach((p) => box.appendChild(window.ChatUI.attachmentChip(p, task.colId)));
+    toggle.addEventListener('click', () => {
+      const now = !openCode.has(task.id);
+      if (now) openCode.add(task.id); else openCode.delete(task.id);
+      box.hidden = !now;
+      toggle.setAttribute('aria-expanded', String(now));
+    });
+    files.append(toggle, box);
+    return files;
   }
 
   function init(h) {

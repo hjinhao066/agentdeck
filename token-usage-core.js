@@ -448,8 +448,10 @@
     }
     return out;
   }
-  // A day's bar from bottom to top: biggest first; models without a colour of
-  // their own merge into one 其他模型 segment, placed by its size like the rest.
+  // A day's bar from bottom to top: smallest first, so the biggest model is the
+  // top segment, the way the legend, the tooltip and the table list it (biggest
+  // first). Models without a colour of their own merge into one 其他模型
+  // segment, placed by its size like the rest.
   function stack(dayMap, colors) {
     const segs = [];
     let other = null;
@@ -460,7 +462,7 @@
       other.total += m.total;
       other.members.push(m.key);
     }
-    return segs.sort((a, b) => b.total - a.total || (a.key < b.key ? -1 : 1));
+    return segs.sort((a, b) => a.total - b.total || (a.key < b.key ? 1 : -1));
   }
 
   // ---- labels on top of the bars ----
