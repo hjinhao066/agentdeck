@@ -76,7 +76,9 @@ function quotaView(data, now) {
 const SEAT_ID = /^[a-zA-Z0-9_-]{1,40}$/;
 // 随手记待办 from the phone: record one, or tick/untick one. Nothing else.
 const TODO_ID = /^td-[A-Za-z0-9-]{8,64}$/;
-const TODO_BASE_KEYS = ['text', 'done', 'doneAt', 'created', 'updated'];
+// textUpdated names the content version the phone saw. api/todos lists these
+// keys, so the phone sends an older build only the fields it accepts.
+const TODO_BASE_KEYS = ['text', 'done', 'doneAt', 'created', 'updated', 'textUpdated'];
 function todoRequest(body) {
   const keys = Object.keys(body);
   if (body.op === 'add') {
@@ -89,7 +91,7 @@ function todoRequest(body) {
     if (!base || typeof base !== 'object' || Array.isArray(base) || Object.keys(base).some((key) => !TODO_BASE_KEYS.includes(key))) return null;
     if (typeof base.text !== 'string' || base.text.length > 2000 || typeof base.updated !== 'string' || base.updated.length > 40) return null;
     if (base.done !== undefined && typeof base.done !== 'boolean') return null;
-    if (['doneAt', 'created'].some((key) => base[key] !== undefined && base[key] !== null && (typeof base[key] !== 'string' || base[key].length > 40))) return null;
+    if (['doneAt', 'created', 'textUpdated'].some((key) => base[key] !== undefined && base[key] !== null && (typeof base[key] !== 'string' || base[key].length > 40))) return null;
   }
   return { op: 'update', id: body.id, done: body.done, ...(base ? { base } : {}) };
 }
@@ -670,7 +672,7 @@ class MobileWebServer {
     // message to the Captain, re-checked after the body is read.
     if (req.method === 'GET' && route === '/api/todos' && this.sources.getTodos) {
       const data = await this.sources.getTodos();
-      return this.json(res, 200, { items: Array.isArray(data?.items) ? data.items : [] });
+      return this.json(res, 200, { items: Array.isArray(data?.items) ? data.items : [], baseKeys: TODO_BASE_KEYS });
     }
     if (req.method === 'POST' && route === '/api/todos' && this.sources.writeTodos) {
       let body;
@@ -725,4 +727,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, batteryView, relayView, attentionView, attentionRequest, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };
+module.exports = { MobileWebServer, batteryView, relayView, attentionView, attentionRequest, todoRequest, TODO_BASE_KEYS, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };

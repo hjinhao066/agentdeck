@@ -116,7 +116,8 @@ function twoComputers(t, clock) {
   const sync = () => { copy(mac, win, 'dev-mac.json'); copy(win, mac, 'dev-win.json'); };
   return { mac: mac.store, win: win.store, sync };
 }
-const baseOf = (item) => ({ text: item.text, done: item.done, doneAt: item.doneAt, created: item.created, updated: item.updated });
+// What the phone hub sends (Core.todoBase): the item as it saw it, with its content version.
+const baseOf = (item) => ({ text: item.text, done: item.done, doneAt: item.doneAt, created: item.created, updated: item.updated, textUpdated: item.textUpdated });
 
 test('the phone ticks an item the other computer just edited: the new text survives the next sync', (t) => {
   let now = Date.parse('2026-10-06T10:00:00Z');
@@ -134,6 +135,17 @@ test('the phone ticks an item the other computer just edited: the new text survi
   now += 60_000;
   sync();
   for (const side of [mac, win]) assert.deepEqual(side.list().map((x) => [x.text, x.done]), [['买牛奶和鸡蛋', true]]);
+  // An older phone page sends no textUpdated: this computer keeps its text for
+  // now, and the edit still wins once git brings it, because a tick never
+  // touches the text's own clock.
+  now += 60_000;
+  const later = win.update({ id: item.id, text: '买牛奶、鸡蛋和面包' });
+  now += 60_000;
+  const { textUpdated: _, ...oldBase } = baseOf(later);
+  assert.equal(mac.update({ id: item.id, done: false, base: oldBase, source: 'phone' }).text, '买牛奶和鸡蛋');
+  now += 60_000;
+  sync();
+  for (const side of [mac, win]) assert.deepEqual(side.list().map((x) => [x.text, x.done]), [['买牛奶、鸡蛋和面包', false]]);
 });
 
 test('a base that is older than, or the same as, this computer\'s copy changes nothing but the tick', (t) => {
@@ -182,14 +194,15 @@ test('a newer base keeps what this computer stored that the phone never sees, an
   fs.writeFileSync(path.join(dir, 'dev-mac.json'), JSON.stringify({ version: 1, device: 'dev-mac', items: [
     { id: 'td-keep-extras-1', text: '旧', done: false, created, updated: created, remindAt: '2026-10-07T01:00:00.000Z', ai: { state: 'requested' } },
   ] }));
-  const base = { text: '新', done: true, doneAt: '2026-10-06T09:30:00.000Z', created: '2000-01-01T00:00:00.000Z', updated: '2026-10-06T09:30:00.000Z', ai: { state: 'approved' }, evil: 1 };
+  const base = { text: '新', done: true, doneAt: '2026-10-06T09:30:00.000Z', created: '2000-01-01T00:00:00.000Z', updated: '2026-10-06T09:30:00.000Z', textUpdated: '2026-10-06T09:30:00.000Z', ai: { state: 'approved' }, evil: 1 };
   const item = make('dev-mac', () => now).update({ id: 'td-keep-extras-1', done: false, base, source: 'phone' });
   assert.equal(item.text, '新');
+  assert.equal(item.textUpdated, base.textUpdated, 'the whole content version is taken, never new text under the old version');
   assert.equal(item.done, false);
   assert.equal(item.doneAt, null);
   assert.equal(item.created, created, 'the item keeps the creation time this computer recorded');
   assert.equal(item.remindAt, '2026-10-07T01:00:00.000Z');
-  assert.deepEqual(item.ai, { state: 'requested' });
+  assert.equal(item.ai, null, 'the AI state of the old text does not travel to the new text');
   assert.equal(item.evil, undefined);
 });
 
@@ -223,6 +236,49 @@ test('merge and the phone view: deletions travel as bare marks, ties do not depe
     { id: 'td-gone-item-1', text: 'secret-ish', deleted: true, updated: '2026-10-06T08:00:00.000Z' },
   ]]).values()];
   const view = phoneView(items);
-  assert.deepEqual(view.find((x) => x.id === 'td-gone-item-1'), { id: 'td-gone-item-1', deleted: true, updated: '2026-10-06T08:00:00.000Z' });
-  assert.deepEqual(Object.keys(view.find((x) => x.id === 'td-open-item-1')).sort(), ['created', 'done', 'doneAt', 'id', 'text', 'updated']);
+  assert.deepEqual(view.find((x) => x.id === 'td-gone-item-1'), { id: 'td-gone-item-1', deleted: true, updated: '2026-10-06T08:00:00.000Z', deletedUpdated: '2026-10-06T08:00:00.000Z' });
+  assert.deepEqual(Object.keys(view.find((x) => x.id === 'td-open-item-1')).sort(), ['created', 'deletedUpdated', 'done', 'doneAt', 'doneUpdated', 'id', 'text', 'textUpdated', 'updated']);
+});
+
+test('newer stale peer checkboxes cannot roll back AI status, artifacts or delivery/notification markers', () => {
+  const base = { id: 'td-ai-merge-0001', text: '@ai 找书', created: '2026-10-06T08:00:00Z',
+    textUpdated: '2026-10-06T08:00:00Z', textDevice: 'dev-mac', updated: '2026-10-06T08:01:00Z',
+    ai: { revision: 'same', status: 'queued', updated: '2026-10-06T08:01:00Z', files: [] } };
+  for (const status of ['working', 'needs_user', 'done', 'failed']) {
+    const fresh = { ...base, updated: '2026-10-06T08:02:00Z', ai: { ...base.ai, status,
+      updated: '2026-10-06T08:02:00Z', files: ['/local/book.pdf'], deliveredAt: 'accepted', exceptionNotifiedAt: 'queued' } };
+    const tick = { ...base, done: true, updated: '2026-10-06T08:03:00Z' };
+    const untick = { ...base, done: false, updated: '2026-10-06T08:04:00Z' };
+    for (const lists of [[[fresh], [tick], [untick]], [[untick], [tick], [fresh]], [[tick], [fresh], [untick]]]) {
+      const merged = merge(lists).get(base.id);
+      assert.equal(merged.done, false); assert.deepEqual(merged.ai, fresh.ai);
+      assert.deepEqual(phoneView([merged])[0].ai, fresh.ai);
+    }
+  }
+});
+
+test('AI merge uses its own time even when retry moves failed back to working; edits never inherit old AI', () => {
+  const base = { id: 'td-ai-merge-0002', text: '@ai A', created: '2026-10-06T08:00:00Z',
+    textUpdated: '2026-10-06T08:00:00Z', updated: '2026-10-06T08:05:00Z',
+    ai: { status: 'failed', updated: '2026-10-06T08:02:00Z' } };
+  const working = { ...base, updated: '2026-10-06T08:04:00Z', ai: { status: 'working', updated: '2026-10-06T08:04:00Z' } };
+  assert.equal(merge([[working], [base]]).get(base.id).ai.status, 'working');
+  for (const edited of [{ ...base, text: '@ai B', ai: null, textUpdated: '2026-10-06T08:06:00Z', updated: '2026-10-06T08:06:00Z' },
+    { ...base, ai: null, textUpdated: '2026-10-06T08:06:00Z', updated: '2026-10-06T08:06:00Z' }]) {
+    assert.equal(merge([[base], [edited]]).get(base.id).ai, null);
+    assert.equal(merge([[edited], [base]]).get(base.id).ai, null);
+  }
+});
+test('three device copies with an intervening edit: the edit, the late tick and the AI state of the edit, in every file order', () => {
+  const owner = { id: 'td-ai-merge-0003', text: '@ai v1', created: '2026-10-06T08:00:00Z',
+    textUpdated: '2026-10-06T08:00:00Z', updated: '2026-10-06T08:10:00Z',
+    ai: { status: 'done', updated: '2026-10-06T08:10:00Z', files: ['/local/result.pdf'] } };
+  const edited = { ...owner, text: '@ai v2', textUpdated: '2026-10-06T08:15:00Z', updated: '2026-10-06T08:20:00Z', ai: null };
+  const tick = { ...owner, done: true, updated: '2026-10-06T08:30:00Z', ai: { status: 'queued', updated: '2026-10-06T08:05:00Z', files: [] } };
+  for (const order of [[owner, edited, tick], [owner, tick, edited], [edited, owner, tick], [edited, tick, owner], [tick, owner, edited], [tick, edited, owner]]) {
+    const seen = merge(order.map((item) => [item])).get(owner.id);
+    // The tick on the stale copy is newest for the checkbox, but the text was
+    // edited after the copy it was made on: v2 stands, and v1's result is not v2's.
+    assert.equal(seen.text, '@ai v2'); assert.equal(seen.done, true); assert.equal(seen.ai, null);
+  }
 });

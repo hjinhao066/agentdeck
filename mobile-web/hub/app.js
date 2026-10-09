@@ -1376,7 +1376,7 @@
     if (!(shut && item.label === '要你处理')) top.append(node('span', 'at-kind', item.label));
     if (stay) top.append(node('span', 'at-seen', '已读'));
     const when = shut ? item.doneAt : item.created;
-    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.automation && '自动任务：' + item.automation, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
+    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.automation && '自动任务：' + item.automation, item.source === 'todo' && '来自待办', item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
     if (when) meta.title = (shut ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
     top.append(meta);
     // An open need with a question: the question is the biggest thing on the card,
@@ -1610,12 +1610,13 @@
     const result = await request(m, 'api/todos');
     m.todosAt = Date.now();
     // 404: a build without to-dos. Nothing to show from it, and nothing failed.
-    if (result.status === 200 && result.body) { m.todos = Core.cleanTodos(result.body); m.todosReady = true; }
+    if (result.status === 200 && result.body) { m.todos = Core.cleanTodos(result.body); m.todosReady = true; m.todoBaseKeys = Array.isArray(result.body.baseKeys) ? result.body.baseKeys : null; }
     else if (result.status === 404) { m.todos = null; m.todosReady = false; }
   }
   const todoSources = () => machines.filter((m) => Array.isArray(m.todos));
   const todoWriter = () => Core.todoWriter(machines, target);
-  // The computer's answer goes into its own copy at once; the next poll confirms it.
+  // The computer's answer (the item as its api/todos shows it) goes into its own
+  // copy at once; the next poll confirms it.
   function keepTodo(m, item) {
     const [clean] = Core.cleanTodos({ items: [item] });
     if (!clean || !Array.isArray(m.todos)) return;
@@ -1651,17 +1652,28 @@
     check.addEventListener('click', () => toggleTodo(t, row, check));
     const body = node('div', 'todo-main');
     const when = t.done ? '完成于 ' + Core.ago(Date.parse(t.doneAt || t.updated), Date.now()) : Core.ago(Date.parse(t.created), Date.now());
-    body.append(node('p', 'todo-text', t.text), node('p', 'todo-when', when));
+    body.append(node('p', 'todo-text', t.text));
+    if (t.ai) body.append(todoAi(t.ai));
+    body.append(node('p', 'todo-when', when));
     row.append(check, body);
     return row;
+  }
+  // A 待办 handed to AI (@ai). The files themselves open from 待我处理.
+  const TODO_AI_LABEL = { working: 'AI 正在办', needs_user: 'AI 在等你', done: 'AI 办完了', failed: 'AI 没办成' };
+  function todoAi(ai) {
+    const box = node('p', 'todo-ai is-' + ai.status);
+    box.append(node('span', 'todo-ai-chip', TODO_AI_LABEL[ai.status] || (ai.delivered ? '已交给 AI · 队长已收到' : '已交给 AI · 等队长接收')));
+    if (ai.message && ai.status !== 'queued') box.append(node('span', 'todo-ai-msg', ai.message));
+    if (ai.files.length) box.append(node('span', 'todo-ai-files', `交回 ${ai.files.length} 个文件：${ai.files.join('、')}（在「待我处理」打开）`));
+    return box;
   }
   async function toggleTodo(t, row, check) {
     const m = todoWriter();
     if (!m || row.classList.contains('is-saving')) return;
     const done = !t.done;
     row.classList.add('is-saving'); row.classList.toggle('is-done', done); check.setAttribute('aria-checked', String(done));
-    // The base lets a computer tick an item the other one recorded less than a git sync ago.
-    const base = { text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated };
+    // The base lets a computer tick an item the other one recorded or edited less than a git sync ago.
+    const base = Core.todoBase(t, m.todoBaseKeys);
     const result = await post(m, 'api/todos', { op: 'update', id: t.id, done, base });
     if (result.status === 200 && result.body && result.body.item) {
       keepTodo(m, result.body.item);

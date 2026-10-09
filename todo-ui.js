@@ -34,7 +34,7 @@
   // The sidebar asks for the shortcut's name before init, so fall back to the browser's own answer.
   const isMac = () => (host ? host.platform === 'darwin' : /^Mac/.test(navigator.platform));
   const shortcutLabel = () => window.TodoShortcutCore.label(host && host.config.todoShortcut, isMac());
-  const subtitle = () => `脑子里冒出来的事，先记在这里。在 AgentDeck 里任何地方按 ${shortcutLabel()} 都能速记一条；手机总台也能记、能勾。`;
+  const subtitle = () => `脑子里冒出来的事，先记在这里。在 AgentDeck 里任何地方按 ${shortcutLabel()} 都能速记一条；手机总台也能记、能勾。句子里写 @ai 就交给 AI 去办，结果回到「待我处理」。`;
   // Enter while an input method is still composing picks a candidate; it never saves.
   const composing = (e) => e.isComposing || e.keyCode === 229;
   const openCount = () => items.filter((t) => !t.done).length;
@@ -210,6 +210,7 @@
       const text = el('span', 'todo-text', t.text);
       text.addEventListener('dblclick', () => startEdit(t.id));
       main.appendChild(text);
+      if (t.ai) main.appendChild(aiLine(t));
     }
     const when = el('time', 'todo-when', t.done ? '完成于 ' + ago(t.doneAt || t.updated) : ago(t.created));
     when.dateTime = t.done ? (t.doneAt || t.updated) : t.created;
@@ -227,6 +228,42 @@
     actions.appendChild(del);
     li.append(check, main, when, actions);
     return li;
+  }
+  // A 待办 handed to AI (@ai): what 队长 wrote back, on every computer (it syncs with the item).
+  const AI_LABEL = { working: 'AI 正在办', needs_user: 'AI 在等你', done: 'AI 办完了', failed: 'AI 没办成' };
+  function aiLine(t) {
+    const ai = t.ai;
+    const status = AI_LABEL[ai.status] ? ai.status : 'queued';
+    const box = el('div', 'todo-ai is-' + status);
+    box.append(el('span', 'todo-ai-chip', AI_LABEL[status] || (ai.deliveredAt ? '已交给 AI · 队长已收到' : '已交给 AI · 等队长接收')));
+    if (ai.message && status !== 'queued') box.append(el('span', 'todo-ai-msg', ai.message));
+    const files = status === 'done' && Array.isArray(ai.files) ? ai.files.filter((p) => typeof p === 'string') : [];
+    if (files.length) {
+      const list = el('ul', 'todo-ai-files');
+      list.setAttribute('aria-label', 'AI 交回的文件');
+      files.forEach((p, i) => {
+        const name = String(p).split(/[\\/]/).filter(Boolean).pop() || p;
+        const row = el('li', 'todo-ai-file');
+        const open = el('button', 'todo-ai-open', name);
+        open.type = 'button'; open.title = p; open.dataset.focusKey = `aifile:${t.id}:${i}`;
+        open.addEventListener('click', (e) => window.SidePane.openLink({ kind: 'file', text: p }, e));
+        const copy = iconButton('copy', '复制路径', () => {
+          try { host.clipboardWrite(p); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
+          const mark = (icon, label) => { copy.innerHTML = svg(icon); copy.title = label; copy.setAttribute('aria-label', label); };
+          mark('check', '已复制'); copy.classList.add('done');
+          clearTimeout(copy.checkTimer);
+          copy.checkTimer = setTimeout(() => { mark('copy', '复制路径'); copy.classList.remove('done'); }, 1200);
+        }, 'todo-ai-tool');
+        copy.dataset.focusKey = `aicopy:${t.id}:${i}`;
+        const reveal = host.platform === 'darwin' ? '在访达中显示' : host.platform === 'win32' ? '在资源管理器中显示' : '在文件管理器中显示';
+        const show = iconButton('folderOpen', reveal, () => window.deck.revealPath(p), 'todo-ai-tool');
+        show.dataset.focusKey = `aireveal:${t.id}:${i}`;
+        row.append(open, copy, show);
+        list.appendChild(row);
+      });
+      box.appendChild(list);
+    }
+    return box;
   }
   // Used by the page and the quick-capture box alike.
   async function toggleDone(t, li) {

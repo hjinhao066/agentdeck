@@ -14,14 +14,18 @@ function createNotifyUser({ getConfig, notifications, fetchImpl = fetch, deliver
     }
     if (typeof command.message !== 'string' || !command.message.trim() || command.message.length > 4000 ||
         typeof command.urgent !== 'boolean' || (command.test !== undefined && typeof command.test !== 'boolean') ||
-        (command.test && !command.urgent)) throw new Error('notify-user requires --message (1–4000 characters) and optional --urgent.');
+        (command.test && !command.urgent) ||
+        (command.level !== undefined && !(command.level === 'timeSensitive' && command.nativeWeb === true &&
+          /^todo-failures-[a-f0-9]{64}$/.test(command.id) && command.urgent && !command.test))) {
+      throw new Error('notify-user requires --message (1–4000 characters) and optional --urgent.');
+    }
     notifications.show({ id: command.callerId, turnId, state: 'input', reply: command.message, visible });
     const local = '已处理本机提醒（遵循通知/声音设置、前台静音及30秒间隔）。';
     // `bark` is a phone push with its own title and level (待我处理 items); without it only --urgent reaches the phone.
     if (!command.urgent && !command.bark) return local;
     const result = await sendBark(command.test
       ? { message: `AgentDeck 加急通知测试，音量 ${Policy.settings(config.barkNotifications).criticalVolume}`, title: '【测试】', level: 'critical' }
-      : command.bark || { message: command.message, level: 'critical', dedupeKey: command.dedupeKey });
+      : command.bark || { message: command.message, level: command.level || 'critical', dedupeKey: command.dedupeKey });
 
     const message = local + '\n' + result.message;
     return structured ? { ...result, message } : message;
@@ -32,7 +36,7 @@ function createNotifyUser({ getConfig, notifications, fetchImpl = fetch, deliver
 function createBarkSender({ getConfig, fetchImpl = fetch, delivery, keyHome }) {
   const transport = async ({ message, title = '队长', level = 'active' }) => {
     if (typeof message !== 'string' || !message.trim() || message.length > 4000 ||
-        !['active', 'critical'].includes(level)) throw new Error('Invalid Bark message or notification level.');
+        !['active', 'timeSensitive', 'critical'].includes(level)) throw new Error('Invalid Bark message or notification level.');
     const config = getConfig();
     const volume = Policy.settings(config.barkNotifications).criticalVolume;
     let file = typeof config.barkKeyFile === 'string' ? config.barkKeyFile.trim() : '';
@@ -75,7 +79,7 @@ function createBarkSender({ getConfig, fetchImpl = fetch, delivery, keyHome }) {
   };
   return async ({ message, title = '队长', level = 'active', dedupeKey }) => {
     if (typeof message !== 'string' || !message.trim() || message.length > 4000 ||
-        typeof title !== 'string' || title.length > 200 || !['active', 'critical'].includes(level)) throw new Error('Invalid Bark message or notification level.');
+        typeof title !== 'string' || title.length > 200 || !['active', 'timeSensitive', 'critical'].includes(level)) throw new Error('Invalid Bark message or notification level.');
     const payload = { message: message.trim(), title, level, ...(typeof dedupeKey === 'string' && dedupeKey.length <= 200 ? { dedupeKey } : {}) };
     return delivery ? delivery.send(payload, transport) : transport(payload);
   };

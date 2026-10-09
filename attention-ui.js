@@ -123,6 +123,8 @@
       let changed = 0;
       try { changed += A.syncCards(s, await window.TaskBoard.list({ archived: true }), now); } catch (_) { /* a damaged board file: try again next time */ }
       changed += A.syncSessions(s, sessionWaiting, now);
+      // What 队长 wrote back on a 待办 handed to AI (@ai).
+      try { const t = await window.deck.todos('list'); changed += A.syncTodos(s, t && t.items, t && t.device, now); } catch (_) { /* read again next time */ }
       changed += deliverToCaptain(s);
       const ms = window.MainSession && window.MainSession.state();
       if (ms && Array.isArray(ms.pending)) changed += A.markRepliesSeen(s, ms.pending.map((p) => p.taskId));
@@ -468,6 +470,7 @@
     meta.appendChild(time);
     if (item.source === 'card') meta.appendChild(el('span', 'at-from', '来自任务看板'));
     if (item.source === 'automation') meta.appendChild(el('span', 'at-from', '来自自动任务：' + item.automation));
+    if (item.source === 'todo') meta.appendChild(el('span', 'at-from', '来自待办'));
     top.append(meta, el('span', 'at-spacer'));
     const tools = el('span', 'at-tools');
     const live = liveSession(item);
@@ -630,6 +633,7 @@
     paintBadge();
     // Cards change on disk (this machine, the other one through git, a worker's receipt).
     if (window.TaskBoard && window.TaskBoard.onChange) window.TaskBoard.onChange(() => refresh());
+    if (window.deck && window.deck.onTodosChanged) window.deck.onTodosChanged(() => refresh());
     setInterval(() => refresh(), 30_000);
     inFront = window.deck.windowInFront();
     window.deck.onWindowFront((on) => { inFront = on; if (!on) stopCounting(); });
