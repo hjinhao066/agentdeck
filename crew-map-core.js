@@ -665,10 +665,12 @@
   // The arrangement 智能一页 makes for a window, untouched by hand: every project across one row (planPage), or
   // the same columns in lanes (planAcross), roomy or tight. view: { w, h }, the viewport in screen px; o: the
   // layout options, with o.tightly (what the tight lanes change), o.inset (the fit's inset) and o.returns (the
-  // return lines are shown, o.dpr: the screen's density); current: { plan, planW }, the arrangement in use and
-  // the width it was made for. Returns { plan, lay, pageFits }: pageFits, the whole map shows on one page.
+  // return lines are shown, o.dpr: the screen's density); current: { plan, planW, dpr }, the arrangement in use and
+  // the width and density it was made for (kept only on the same screen: another density is arranged afresh).
+  // Returns { plan, lay, pageFits }: pageFits, the whole map shows on one page.
   function arrangePage(map, view, o, current = {}) {
-    const FIT = BASE_SCALE, inset = { top: 0, right: 0, bottom: 0, left: 0, ...o.inset }, plan = current.plan || null, sc = scalesFor(o.dpr);
+    const density = (d) => Number(d) || 1, sc = scalesFor(o.dpr);
+    const FIT = BASE_SCALE, inset = { top: 0, right: 0, bottom: 0, left: 0, ...o.inset }, plan = current.plan && density(current.dpr) === density(o.dpr) ? current.plan : null;
     const build = (p) => layout(map, { ...o, ...(p.tight ? o.tightly : {}), lanes: p.lanes, caps: p.caps });
     const scaleOf = (l, max) => computeFit(fitBounds(map, l, o, o.returns), view, inset, { min: 0, max }).scale;
     // the whole layout shows in this window at `least` of the drawn size or more; how large the fit shows it

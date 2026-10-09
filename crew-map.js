@@ -70,6 +70,7 @@
   let smoothT = 0;
   let plan = null;          // the arrangement in use: { lanes, caps, tight }
   let planW = 0;            // the viewport width it was worked out for
+  let planDpr = 0;          // and the screen's density
   let drawnFor = '';        // the viewport size the map was last arranged for
   let pageFits = true;      // the whole map shows at 100% in this window
   let undo = null;          // what 一键整理 / 智能一页 replaced, until the next move by hand
@@ -562,8 +563,8 @@
     }
     if (!hasManual() && saved().plan) { saved().plan = null; host.save(); }   // nothing hand-placed is left to stand on it
     // 智能一页 for this window (CrewMapCore.arrangePage): one row or lanes, the one in use kept while it is nearly as good
-    const r = C.arrangePage(map, { w: vw, h: vh }, { ...base, tightly, inset: FIT_INSET, returns: showReturn, dpr: density() }, { plan, planW });
-    plan = r.plan; planW = vw; pageFits = r.pageFits;
+    const r = C.arrangePage(map, { w: vw, h: vh }, { ...base, tightly, inset: FIT_INSET, returns: showReturn, dpr: density() }, { plan, planW, dpr: planDpr });
+    plan = r.plan; planW = vw; planDpr = density(); pageFits = r.pageFits;
     if (hasManual()) { saved().plan = plan; host.save(); }
     return r.lay;
   }

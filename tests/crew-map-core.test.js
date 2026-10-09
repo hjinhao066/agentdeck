@@ -1233,7 +1233,7 @@ const ARRANGE = { nodeW: 280, nodeH: 110, captainW: 440, captainH: 112, gapX: 24
 // The window dragged: the arrangement made for each width in turn, the one in use carried along as the app carries it.
 function sweep(map, widths, h, dpr = 1) {
   let current = {};
-  return widths.map((w) => { const r = C.arrangePage(map, { w, h }, { ...ARRANGE, dpr }, current); current = { plan: r.plan, planW: w }; return r.plan.page ? 'row' : 'lanes'; });
+  return widths.map((w) => { const r = C.arrangePage(map, { w, h }, { ...ARRANGE, dpr }, current); current = { plan: r.plan, planW: w, dpr }; return r.plan.page ? 'row' : 'lanes'; });
 }
 const switches = (modes) => modes.filter((m, i) => i && m !== modes[i - 1]).length;
 // small projects of one to four cards, the mixes the review swept (six of one or two cards is common)
@@ -1252,6 +1252,20 @@ test('智能一页 does not flip between one row and lanes while the window is d
       const modes = sweep(map, [w, w + 4, w, w + 4, w, w + 4, w], h, dpr).slice(1);
       assert.equal(switches(modes), 0, `${name} at ${w}x${h}, ${dpr}x: ${modes.join(' ')}`);
     }
+  }
+});
+
+// A window moved to a screen of another density is arranged afresh there: what 智能一页 keeps in place (the 3% and
+// the wrap's keep) is for the same window on the same screen.
+test('智能一页 on another screen starts afresh: an arrangement kept for a 1x screen does not hold the map on a 2x one', () => {
+  for (const [spec, view] of [[{ agentdeck: 15, 秋招: 3, kenke: 2, fuqing: 2, daily: 1, other: 1 }, { w: 1420, h: 912 }], [{ a: 2, b: 1, c: 2, d: 1, e: 2, f: 1 }, { w: 1000, h: 732 }]]) {
+    const map = crewOf(spec);
+    const there = C.arrangePage(map, view, { ...ARRANGE, dpr: 1 }, {});
+    const fresh = C.arrangePage(map, view, { ...ARRANGE, dpr: 2 }, {});
+    assert.notDeepEqual(there.plan, fresh.plan, `${JSON.stringify(spec)}: the two screens arrange it differently`);
+    assert.deepEqual(C.arrangePage(map, view, { ...ARRANGE, dpr: 2 }, { plan: there.plan, planW: view.w, dpr: 1 }).plan, fresh.plan, JSON.stringify(spec));
+    // on the same screen the arrangement in use is still kept
+    assert.deepEqual(C.arrangePage(map, view, { ...ARRANGE, dpr: 2 }, { plan: fresh.plan, planW: view.w, dpr: 2 }).plan, fresh.plan);
   }
 });
 
