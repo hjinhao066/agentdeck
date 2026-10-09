@@ -2813,18 +2813,19 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 /* model and account: quiet text, the provider's mark in the same ink, then the account behind the seat
    as a small tag (its short name: the sign-in address up to the @, or the seat's code while that is not
    known). The status beside them is always whole; the account gives way first, down to a few letters
-   cut with an ellipsis (the whole name in its hover text), and only then the model name. */
+   cut with an ellipsis (the whole name in its hover text), and only then the model name. (Under #crewMap so
+   the tag shows whatever else a badge's account label is told elsewhere: a card always has its slot.) */
 .cm-agent { flex: 0 1 auto; min-width: 0; margin-left: auto; display: inline-flex; align-items: center; font-size: 11.5px; color: var(--cm-text-dim); max-width: 168px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .cm-agent > span { display: flex; min-width: 0; max-width: 100%; }
 .cm-agent .cn-badge { margin-right: 0; min-width: 0; max-width: min(168px, 100%); padding: 0; gap: 5px; border: 0; background: transparent; }
 .cm-agent .agent-provider-icon[data-icon-provider] { color: var(--cm-text-dim); width: 12px; height: 12px; }
 .cm-agent .cn-badge .agent-model-label { flex: 0 1 auto; min-width: 0; max-width: 96px; font-size: 11.5px; font-weight: 550; letter-spacing: 0; color: var(--cm-text-2); }
-.cm-agent .agent-seat-label {
+#crewMap .cm-agent .agent-seat-label {
   display: block; flex: 0 100000 auto; min-width: 3.3em; max-width: 96px; height: 15px; margin-left: 1px; padding: 0 4px; box-sizing: border-box;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;
   border: 1px solid var(--cm-rim-hi); border-radius: 4px; font: 650 9.5px/13px var(--mono); letter-spacing: .03em; color: var(--cm-text-dim);
 }
-.cm-agent .agent-seat-label:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 1px; }
+#crewMap .cm-agent .agent-seat-label:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 1px; }
 .cm-node.kind-captain .cm-agent { margin-left: 0; }
 .cm-node.kind-captain .cm-agent .cn-badge { padding: 3px 9px 3px 8px; border-radius: 999px; background: color-mix(in srgb, var(--cm-text) 5%, transparent); border: 1px solid var(--cm-rim); }
 .cm-node.kind-captain .cm-agent .cn-badge .agent-model-label { color: var(--cm-text); }
