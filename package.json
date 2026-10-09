@@ -10,8 +10,9 @@
     "postinstall": "node scripts/check-native.js",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win --publish never",
-    "test:e2e": "playwright test",
-    "test:smoke": "playwright test --grep @smoke --workers=1",
+    "e2e": "node scripts/e2e-queue.js",
+    "test:e2e": "node scripts/e2e-queue.js",
+    "test:smoke": "node scripts/e2e-queue.js --grep @smoke --workers=1",
     "mobile:check": "node scripts/mobile-release.js check",
     "mobile:deploy": "node scripts/mobile-release.js deploy",
     "mobile:rollback": "node scripts/mobile-release.js rollback"

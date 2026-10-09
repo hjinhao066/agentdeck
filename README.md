@@ -1019,6 +1019,7 @@ older downloader does not pull in the vulnerable HTTP cache dependency chain.
 ```sh
 npm test
 npm run test:smoke
+npm run e2e -- tests/e2e/<spec>   # E2E always goes through the machine-wide queue
 npm run test:e2e
 npm audit
 npm start
@@ -1037,6 +1038,48 @@ npm run dist:mac
 冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 
 **发版必须先写「版本更新」**：在仓库根目录的 `release-notes.json` 里，把这一版加到 `released` 最前面（版本号如 `2.0`、日期 `YYYY-MM-DD`、一句标题、3–6 条写给用户看的大白话，每条不超过 60 字），并把它从 `upcoming` 里拿掉；顺手更新 `upcoming`（接下来做什么，用户还没拍板的写 `"state": "pending"`，界面上显示「待你定」）和 `updated`。只改这一个文件，桌面端（侧栏底部点版本号）和手机总台（总览最下面、平板侧栏底部的版本号）都读它（每日进展另读本机统计文件，不在这个文件里）。漏改有两道提醒：`npm test` 里的 `tests/release-notes.test.js` 要求最新一条等于 package.json 的版本；`scripts/release.js` 合完分支、升完版本号后先查这一条，不对就停下，不进测试和打包。规则写在 `mobile-web/hub/core.js` 的 `releaseProblems`。
+
+### E2E 排队与 Windows 远程跑
+
+Mac 上同时开着二十多个会话时，几个会话各自跑 Electron E2E 会把负载顶到几百，所有命令慢十倍。所以**跑 E2E 一律用统一入口，不要直接敲 `npx playwright test`**：
+
+```sh
+npm run e2e -- tests/e2e/foo.spec.js [tests/e2e/bar.spec.js] [--grep 名字]   # 指定 spec，推荐
+npm run test:smoke                                                        # 冒烟，同样自动排队
+npm run test:e2e                                                          # 全量，同样自动排队
+node scripts/e2e-queue.js --queue-status                                  # 看谁在跑、谁在等
+```
+
+- 入口是 `scripts/e2e-queue.js`（逻辑在 `scripts/e2e-queue-core.js`）。全机（所有会话、所有 `~/agentdeck-worktrees/*` 副本）同一时间只放 **1 组**（一次 `npm run e2e` 调用算一组），其余打印 `排队中，前面还有 X 组（正在跑 R 组，排在前面 Q 组，并发上限 N）` 并按先来后到等。轮到时打印 `轮到了（等了 N 秒）`。
+- 锁目录在 `/tmp/agentdeck-e2e-queue/`（Windows 是系统临时目录下同名目录）：`slots/<n>/owner.json` 是正在跑的组，`queue/` 是排队票。**不需要手动清理**：持锁进程（包括它启动的 Electron）都不在了，下一个排队者会自动回收并打印 `回收失效的锁`；进程号被别的程序复用也认得出（对比进程启动时间）。
+- 超时：排队最多等 120 分钟（退出码 75），单组最多跑 45 分钟（超时杀掉整棵进程树并释放锁，退出码 124）。可调：`--queue-wait-timeout 分钟`、`--queue-run-timeout 分钟`、`--queue-slots N`（并发上限，默认 1），或环境变量 `AGENTDECK_E2E_WAIT_MINUTES`、`AGENTDECK_E2E_RUN_MINUTES`、`AGENTDECK_E2E_SLOTS`。机器空闲时可以 `AGENTDECK_E2E_SLOTS=2` 放宽；`--queue-` 开头的参数由入口吃掉，其余原样交给 Playwright。
+- 也可以包一条任意命令：`node scripts/e2e-queue.js -- <命令 参数…>`。已经在排队入口里面的命令（如 `release.js` 跑冒烟）不会再等自己。
+- `release.js` 的冒烟走 `npm run test:smoke`，所以自动排队；`/tmp/agentdeck-test.lock` 仍只管单测和发版。
+
+**把测试派到 Windows**（Mac 忙时，或要看 Windows 上的表现）：
+
+```sh
+node scripts/e2e-remote-win.js <分支或提交> tests/e2e/foo.spec.js [tests/e2e/bar.spec.js] [-- 额外 Playwright 参数]
+# 可选：--host winpc  --out 目录  --queue-wait-timeout 分钟  --queue-run-timeout 分钟  --no-install
+```
+
+- 只测**已提交**的代码：脚本把这个提交打成 git bundle 传过去（不需要先 push，也不需要 Windows 登录 GitHub），所以先 `git commit`。工作区里没提交的改动不会被带过去，脚本会提醒。
+- Windows 上一切都在自己的目录 `C:\Users\hjinh\agentdeck-e2e-win\`：`work\` 是独立检出和依赖（只在 `package-lock.json` 变了才重装，首次要下载 Electron，约几分钟），`tools\` 是本次上传的排队脚本，`inbox\`、`runs\` 是每次运行的临时目录，跑完自动只删本次的。**不碰** Windows 上已安装的 AgentDeck、别的会话目录和用户目录里别的东西。
+- Windows 上同样走 `e2e-queue`，同一时间只跑 1 组，后来的排队。
+- 结果拉回 Mac：`~/reports/agentdeck-e2e-remote/<运行号>/`，内含 `console.log`（完整输出）、`results.json`（Playwright JSON 报告）、`summary.json`（提交、spec、退出码、耗时）、`test-results/`（失败时的 trace 等）。脚本退出码等于 Windows 上的结果（0 通过，75 排队超时，124 跑太久，其余为失败）。
+
+**什么测试适合派到 Windows，什么必须留在 Mac**
+
+CI 已经在 `windows-2022` 和 `macos-14` 上各跑一遍全量 E2E，所以绝大多数 spec 本来就是跨平台的；差别在「Windows 上跑得过」和「Windows 上测到了要测的东西」。
+
+- **适合派到 Windows**：界面和版面（layout、topbar-layout、sidebar-*、settings-sticky、chat*、task-board*、todo、crew-map*、version-label、release-notes）；用替身 agent 或 `board-cli` 的队长/派活/回执逻辑（captain、queue-dispatch、command-receipts、pending-tell、background-receipts、concurrency-cap）；手机总台和手机网页（mobile-hub*、mobile-web、mobile-composer、fleet-sync）；额度、日程、讨论、技能等用夹具数据的功能；电池模式（用 `AGENTDECK_TEST_POWER` 模拟，不读真实电源）。这些只依赖 Electron、Node 和夹具，换系统结论不变。想多一份跨平台覆盖的改动，也该派一组到 Windows。
+- **必须留在 Mac**：
+  - 已安装/打包的 **macOS 应用**本身：`.app`、DMG、签名、公证、`AGENTDECK_TEST_EXECUTABLE` 指向 Mac 包、`restart-agentdeck.sh` 一类安装重启流程。
+  - **POSIX 专属断言**：文件权限 0600、终端设备路径 `/dev/ttys*`、信号与进程重新认父、zsh（`ZDOTDIR`）、符号链接/bash/tar 夹具。这些 spec 在 Windows 上会跳过那几条断言（或整条 skip，例如 `mobile-release`、`auto-worktree` 的信任文件夹），派过去「通过」不代表测到了。
+  - **macOS 专有行为**：通知中心点击回到列、Dock、系统全局热键占用（见记忆「Mac 系统级热键占用」，E2E 本来也测不出）、钥匙串里的 Claude 席位凭据、睡眠唤醒的真实表现。
+  - **要用本机登录或额度的真实 CLI**：`real-cli-briefing`、`native-receipts` 之类需要明确授权的真机冒烟，只在装了并登录的那台机器上跑。
+  - **发版门禁**：发版用的 `npm test` + `npm run test:smoke` 在出包的那台 Mac 上跑，不拿 Windows 的结果代替。
+- 拿不准时：先在 Windows 上跑，失败了再在 Mac 上复现，不要因为 Windows 挂了就直接改 spec 的平台判断。
 
 本机 Mac 可用一条命令准备发版（先收齐已验收的分支，避免边合边反复测试、打包）：
 
@@ -1060,9 +1103,9 @@ node scripts/release.js 1.2.4 --prepared --package-only --output /Users/jinhao/r
 
 该选项保留完整单测、单 worker 冒烟、audit、正式 `dist:mac -- --publish never`、SHA256、DMG 挂载校验、签名和包内运行文件逐字节校验，沿用输入一致时的测试/构建缓存；不生成安装脚本，也不构建、上传或核对手机总台。计划固定记录 `packageOnly: true`，同一输出目录不能切换模式；JSON/Markdown 成功状态为 `package-ready`，手机状态为 `deferred`，不能据此称手机部署或线上验收通过。`--dry-run` 明列跳过和延期事项；不带此选项的默认流程保持以下手机部署门禁。
 
-流程：同步 package.json 与 lockfile 版本 → 核对 `release-notes.json` 最新一条就是这一版 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁依次跑单测和单 worker 冒烟，audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本 → **自动构建/上传手机总台，保留精确回滚点，从公网核对版本、提交、构建时间和资源字节** → JSON/Markdown 逐步耗时报告。手机步骤最多尝试 3 次，失败恢复部署前链接并停止，退出非零；未部署、缺回执、线上版本不符均在发版报告标 🔴。桌面构建命中缓存也不能跳过手机部署。`--dry-run` 不部署。详情见 [手机部署与核对](docs/mobile-release.md)。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
+流程：同步 package.json 与 lockfile 版本 → 核对 `release-notes.json` 最新一条就是这一版 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁跑单测、单 worker 冒烟（冒烟自己在 E2E 排队里等），audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本 → **自动构建/上传手机总台，保留精确回滚点，从公网核对版本、提交、构建时间和资源字节** → JSON/Markdown 逐步耗时报告。手机步骤最多尝试 3 次，失败恢复部署前链接并停止，退出非零；未部署、缺回执、线上版本不符均在发版报告标 🔴。桌面构建命中缓存也不能跳过手机部署。`--dry-run` 不部署。详情见 [手机部署与核对](docs/mobile-release.md)。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
 
-`release.js` 自己持锁，直接运行它即可，不要在外层再拿同一把锁。单独运行 `npm test` 或 E2E 命令时，用 shell 加外层锁，结束时删除自己的 owner 文件并释放目录。
+`release.js` 自己持锁，直接运行它即可，不要在外层再拿同一把锁。单独运行 `npm test` 时，用 shell 加外层锁，结束时删除自己的 owner 文件并释放目录。**E2E 不用这把锁**，一律走下面的 E2E 排队入口。
 
 子进程清除现役 `AGENTDECK_*` 凭据；调用者环境保留，仍能提交自己的回执。同一 worktree 的依赖安装可复用；成功测试和构建只有在完整 Git tree、依赖文件/权限、Node/平台/系统/签名与测试环境都相同时复用，DMG 还须通过哈希校验。首次依赖指纹计算与门禁重叠执行，异步遍历并分块读取依赖，哈希期间持续读取测试和 audit 的输出；audit 每次运行，缓存包每次重新核对。
 
@@ -1190,7 +1233,8 @@ uploads and snapshot downloads continue. Store ID indexes have no prototype,
 including after loading JSON, so prototype-shaped IDs are ordinary keys.
 
 Serialize local verification with the whole-machine `/tmp/agentdeck-test.lock`
-before running unit tests, E2E, or the transport smoke. Record the owning PID,
+before running unit tests or the transport smoke. Run E2E through `npm run e2e`
+(machine-wide queue, see 「E2E 排队与 Windows 远程跑」), not with that lock. Record the owning PID,
 branch and start time in `owner`, and remove that file and directory on exit.
 
 Run `node scripts/fleet-two-machine-smoke.js --ssh winpc --report /absolute/report.md`
