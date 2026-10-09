@@ -13,12 +13,12 @@ CN's default service is `Claude Code-credentials`. Other services append the fir
 8 hex characters of SHA256 of the absolute normalized configuration directory.
 No token crosses IPC or enters config/cache/logs. The reader never logs a raw
 exception or HTTP response, runs login/logout, or prints a credential. Requests
-refuse redirects and time out after 8 seconds. When the stored access token is
-expired and the refresh token is still in date, the reader posts one refresh to
-`https://platform.claude.com/v1/oauth/token` and writes the rotated credential
-back to that seat's Keychain item (macOS, secret on stdin) or credential file.
-A refresh that fails leaves the previous usage sample untouched. An idle seat
-therefore stays queryable after Claude itself has exited.
+refuse redirects and time out after 8 seconds. The reader only ever reads the
+stored credential: it never renews a token or writes the Keychain item or credential
+file. A Claude CLI running on the same seat renews its own token, and a second
+writer racing it for one Keychain item can sign that CLI out. When the stored access
+token has expired, the seat's numbers are 未知 until a Claude session on that seat
+renews it; previous samples keep their own rules below.
 
 Sampling happens on startup, about every five minutes, refresh-button clicks, and
 new CLI exhaustion observations for the affected seat. Concurrent requests for a
@@ -87,13 +87,12 @@ Relay keeps its existing durable checkpoint/new-column behavior. Config writes
 are flushed before the spawn IPC to avoid racing recently edited seat settings.
 
 Valid Keychain OAuth credentials work even without profile email metadata. An
-expired access token with a refresh token is still treated as logged in. The
-usage reader refreshes that token itself so an idle seat does not depend on a
-running Claude process. Missing credentials, malformed credentials, or an
+expired access token with a refresh token is still treated as logged in; its usage
+reads as 未知 (the reader does not renew it). Missing credentials, malformed credentials, or an
 expired access token without a live refresh token give a seat-specific login
 reason. A locked or unreadable Keychain gives a verification/access-permission
 reason, not a login instruction. Network, permission and ordinary usage-query
-failures keep login state unknown. An official HTTP 401 or OAuth `invalid_grant`
+failures keep login state unknown. An official HTTP 401 from the usage endpoint
 is an explicit authentication failure and participates in logout confirmation.
 
 ## Seat logout alerts
@@ -101,7 +100,7 @@ is an explicit authentication failure and participates in logout confirmation.
 The main process watches actual quota/account polls for a transition from a
 previously working login to **confirmed 未登录**. Claude uses its configured
 seat directory and credential service: missing credentials, expired access
-without a usable refresh token, rejected refresh, or an official 401 are logout
+without a usable refresh token, or an official 401 are logout
 proofs. Two proofs at least 30 seconds apart confirm the outage. After the first
 proof, an extra check runs after 30 seconds; network/permission/ordinary query
 failure breaks the consecutive confirmation. An authenticated failed worker
