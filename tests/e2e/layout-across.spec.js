@@ -204,6 +204,24 @@ const readChips = () => page.evaluate(() => {
     icons: [...bar.querySelectorAll('.tbv-tools button')].map((n) => ({ label: n.getAttribute('aria-label'), title: n.title, svg: !!n.querySelector('svg'), text: n.textContent.trim(), ...rect(n) })),
     boardScrollsSideways: document.querySelector('.tbv-scroll').scrollWidth > document.querySelector('.tbv-scroll').clientWidth + 1 };
 });
+// A chip that fits beside the tools with a few pixels to spare stays on the first row: the space a chip
+// keeps after itself does not count at the end of a row (Windows' fonts once left 1.7px there and the chip
+// wrapped). The bar is widened to leave exactly 3px more than the next chip needs.
+test('任务看板: a chip that fits with a few pixels to spare stays on its row', async () => {
+  await launch(ONE, MANY);
+  await size(1440, 900);
+  if (!(await page.locator('#taskBoardView').isVisible())) await page.locator('#navTop .nav-row[data-nav="tasks"]').click();
+  await expect(page.locator('.tbv-chip')).toHaveCount(MANY.length + 1);
+  const rows = (g) => [...new Set(g.chips.map((c) => Math.round(c.y)))].sort((a, b) => a - b).map((y) => g.chips.filter((c) => Math.round(c.y) === y));
+  const g = await readChips(), [first, second] = rows(g), last = first[first.length - 1], next = second[0];
+  const room = last.right + 6 + next.width + 10 + 3 - g.tools.x;
+  expect(room, 'the next chip does not fit yet').toBeGreaterThan(3);
+  await page.evaluate((add) => { const bar = document.querySelector('#taskBoardView .tbv-filters'); bar.style.width = bar.getBoundingClientRect().width + add + 'px'; }, room);
+  const after = await readChips(), moved = after.chips.find((c) => c.key === next.key);
+  expect(after.tools.x - 10 - (after.chips.find((c) => c.key === last.key).right + 6 + moved.width), 'spare room').toBeCloseTo(3, 0);
+  expect(Math.round(moved.y), `「${next.key}」 fits on the first row`).toBe(Math.round(first[0].y));
+  expect(errors).toEqual([]);
+});
 // rows the chips take at 1920, 1440 and 980 wide windows (1.3 gave the 25 projects 3, 4 and 9 rows, in the left part of the bar)
 const CHIP_ROWS = { few: [1, 1, 2], many: [2, 3, 5] };
 
