@@ -1036,9 +1036,9 @@ npm run dist:mac
 
 **Mac 压力下的 E2E 分流：** 跑 E2E 时用 `node scripts/e2e-auto.js tests/e2e/a.spec.js [b.spec.js] [-- playwright 参数]`：带 Windows 平台跳过标记（`test.skip(process.platform === 'win32', …)`）的 spec 走本机排队锁；其余 spec 在 Windows 在线时合成一组、经 ssh 在后台（非桌面会话，不弹窗）派到 Windows 跑，ssh 或远端准备失败时自动改走本机排队锁。Windows 测的是当前工作区（没提交的改动也会带过去）；测试在 Windows 上真失败就是失败，不会悄悄换 Mac 重跑，只在 Windows 才不通过的 spec 要加上面的跳过标记。看本机队列：`node scripts/e2e-auto.js --status`。
 
-**Windows 后台执行：** Windows 上每组任务有自己的检出目录（`agentdeck-e2e-win\checkouts\<运行号>`，共用一份 node_modules），所以 `AGENTDECK_E2E_SLOTS` 大于 1 时几组可以同时跑，互不覆盖。进程优先级没有调低。验证没有窗口跑到桌面的办法：`scripts/verify-windows-background.ps1`（ssh 登录在会话 0，看不到桌面会话的窗口，所以证据是「所有测试进程都在会话 0、桌面会话里没有新的测试进程」）。
+**Windows 后台执行：** Windows 上每个任务有自己的检出目录（`agentdeck-e2e-win\checkouts\<运行号>`），依赖按 lockfile 分目录（`deps\<哈希>`，同一 lockfile 只装一次，其他任务等它装完复用，等锁有日志、25 分钟超时后退出码 15 并自动改走 Mac），所以 `AGENTDECK_E2E_SLOTS` 大于 1 时几组可以同时跑，互不覆盖。进程优先级没有调低。验证没有窗口跑到桌面的办法：`scripts/verify-windows-background.ps1`（ssh 登录在会话 0，看不到桌面会话的窗口，所以证据是「所有测试进程都在会话 0、桌面会话里没有新的测试进程」）。
 
-**性能基准：** `node scripts/perf-e2e-benchmark.js --mode win --groups N --sha <提交> --out <目录> <spec…>` 与 `--mode mac …` 对同一提交实测，只输出实测值。实测结果和建议的并发数见 `docs/e2e-windows-background.md`。
+**性能基准：** `node scripts/perf-e2e-benchmark.js --mode win --groups N --sha <提交> --out <目录> <spec…>` 与 `--mode mac …` 对同一提交实测，只输出实测值。实测结果（Windows 单组比 Mac 慢，3 组同时跑总吞吐约 2.9 倍，建议 `AGENTDECK_E2E_SLOTS=3`）见 `docs/e2e-windows-background.md`。
 
 冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 

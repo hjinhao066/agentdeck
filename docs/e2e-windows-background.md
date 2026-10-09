@@ -1,172 +1,70 @@
-# E2E Testing: Windows Background Execution & Performance
+# E2E on the Windows PC, in the background
 
-AgentDeck now supports running E2E tests on Windows as a background executor, keeping Mac available for user work even under high test load.
+`scripts/e2e-auto.js` sends E2E specs to the Windows PC over ssh so the Mac's queue stays free.
+Everything below was measured, not estimated; the raw data and the full tables are in
+`~/reports/agentdeck-e2e-windows/` (`benchmark.md`, `runs/`).
 
-## Architecture
-
-```
-Mac (busy with other tests/work)
-  ├─ Mac-only specs → run locally via e2e-queue.js (with per-spec queueing)
-  └─ Cross-platform specs → route to Windows if online
-
-Windows (user's main computer)
-  └─ Cross-platform specs → run with BelowNormal priority via SSH (isolated session)
-```
-
-## Auto-Routing E2E Specs
+## Routing
 
 ```bash
-# Simple usage: auto-detect and route
-node scripts/e2e-auto.js tests/e2e/chat.spec.js
-
-# Multiple specs
 node scripts/e2e-auto.js tests/e2e/chat.spec.js tests/e2e/quota-warmup.spec.js
-
-# Check queue status
-node scripts/e2e-auto.js --status
-
-# Pass playwright arguments
-node scripts/e2e-auto.js tests/e2e/chat.spec.js -- --headed --debug
+node scripts/e2e-auto.js tests/e2e/chat.spec.js -- --grep "prompt typed"   # Playwright options after --
+node scripts/e2e-auto.js --status                                         # local queue
 ```
 
-Detection logic:
-- **Mac-only**: Specs with `skip: process.platform === 'win32'` or `test.skip(process.platform === 'win32')` always run locally
-- **Cross-platform**: Route to Windows if online, otherwise local queue
+- **Mac-only spec**: carries a platform skip that is true on Windows (`test.skip(process.platform === 'win32', …)`,
+  `{ skip: process.platform !== 'darwin' }`, `test.describe.skip(…)`, `test.fixme(…)`, `os.platform()`, a
+  `const isWin = process.platform === 'win32'` alias). The condition is evaluated for win32; a skip that also
+  depends on something else (a loop variable, an env var) does not count. A skip inside one test sends the
+  whole file to the Mac (the safe side). Runs through the local queue.
+- **Everything else**: one Windows group (all specs together, one bundle, one queue slot).
+- **Windows offline, or ssh/setup failure** (exit 255, 75, 10–15): the specs run on the local queue instead.
+- **A test failing on Windows is a failure.** It is not silently re-run on the Mac. A spec that only works on
+  macOS/POSIX and has no skip marker fails there; add the marker.
+- **What Windows tests is your working tree**, uncommitted changes and new files included (a throw-away commit
+  is built with a temporary index; HEAD, your index, branches and the stash are untouched).
+- Unknown arguments before `--` are an error (they used to be dropped silently).
 
-## Windows Background Execution
+## How the Windows side is laid out (`%USERPROFILE%\agentdeck-e2e-win`)
 
-### How It Works
+| Folder | What |
+|---|---|
+| `hub` | one git repository holding the commits sent so far |
+| `checkouts\<run>` | the job's own checkout (a git worktree), removed after the run; `node_modules` is linked in |
+| `deps\<lockfile key>` | `node_modules` for one lockfile (+ platform, CPU, Node version): installed once under a lock, then read-only |
+| `inbox\<run>`, `runs\<run>` | uploaded tools/bundle and the run's results; removed by the dispatcher |
 
-1. **Isolated Session**: Tests run via SSH in a separate session, not on user's desktop
-2. **Low Priority**: Process priority set to BelowNormal to not block foreground work
-3. **No Windows**: Electron tests use headless/offscreen rendering, no visible windows
+Several jobs can run at once (`AGENTDECK_E2E_SLOTS`), also for different commits. Jobs with the same lockfile
+wait for one installer and reuse its folder (the log says "waiting for another job to finish installing
+dependencies"; a lock older than 30 min is broken; waiting longer than 25 min gives up with exit 15, and
+`e2e-auto` then falls back to the Mac). The Electron binary is downloaded and started once during that install,
+because the first launch after a fresh install often fails while the virus scanner holds the files.
+Folders are not pruned automatically: remove `deps\<key>` of old lockfiles by hand when the disk is short.
 
-### Verification
+## Background: nothing on the user's desktop
 
-Run this on Windows (PowerShell) to monitor test execution:
+The ssh login runs in session 0; the desktop is session 1. A process in session 0 cannot draw on the desktop
+and cannot take its focus. Priorities are not changed. From an ssh session the desktop's windows cannot be
+listed, so the evidence is the process session: `scripts/verify-windows-background.ps1 -Mode sample` records,
+every few seconds, the sessions of all processes started from `agentdeck-e2e-win`. In every measured run
+that was `0` only.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/verify-windows-background.ps1
-```
+## Measured (same commit, chat.spec.js + quota-warmup.spec.js, 24 tests, workers=1)
 
-Then start E2E test in another terminal. The verification script will:
-- Record baseline visible windows
-- Monitor for new windows during test (alert if any appear)
-- Check process priorities (confirm BelowNormal)
-- Report after 60 seconds
+| | per group, wall clock | Playwright only |
+|---|---|---|
+| Mac queue, Mac busy (load ≈ 108) | 147 s | |
+| Mac queue, Mac idle (load ≈ 9) | 93 s | |
+| Windows, 1 group | 238 s | 140 s |
+| Windows, 2 groups at once | 209–219 s | 125–134 s |
+| Windows, 3 groups at once | 241–243 s | 146–149 s |
 
-Expected output:
-```
-✓ No new visible windows created during test
-✓ Monitored X Node process(es)
-```
+Windows is not faster per group (1.6× longer than a busy Mac, 2.6× longer than an idle one; roughly 90 s of the
+wall clock is upload, checkout and fetching results). Its value is parallelism: 3 groups at once take as long as
+1, a throughput of 2.9×, and each group sent there frees 93–147 s of the Mac's queue. Defender (MsMpEng) stayed
+at 2–3 % of the machine (peak ≤ 9 %) with the exclusions in place. These runs happened while the user was in a
+Zoom call, so total CPU was 75–96 % before and during; the share caused by the tests cannot be separated.
+`AGENTDECK_E2E_SLOTS=3` is the measured-safe value; 4 or more was not measured.
 
-## Performance Benchmarking
-
-Compare wall-clock time, concurrent throughput, and CPU impact.
-
-### Run Benchmarks
-
-```bash
-node scripts/perf-e2e-benchmark.js tests/e2e/chat.spec.js tests/e2e/quota-warmup.spec.js
-```
-
-This will:
-1. Run chat.spec.js on Mac (via queue), record time
-2. Run quota-warmup.spec.js on Mac (via queue), record time
-3. Run chat.spec.js on Windows (background), record time
-4. Run quota-warmup.spec.js on Windows (background), record time
-5. Generate comparison table
-
-**Total time**: 30-60 minutes (depends on test duration)
-
-### Expected Output Format
-
-```
-Spec,Mac (s),Windows (s),Speedup Factor
-chat.spec.js,120.5,45.3,2.66x
-quota-warmup.spec.js,85.2,32.1,2.65x
-
-Sequential total: Mac 205.7s, Windows 77.4s (2.66x faster)
-Estimated throughput with concurrent Windows:
-  2 groups: 2.22x faster than sequential Mac
-  3 groups: 1.96x faster than sequential Mac
-```
-
-### Interpreting Results
-
-- **Single Group Speedup**: Windows time vs Mac time (e.g., 2.5x = tests run 2.5× faster on Windows)
-- **Throughput**: Total time to run N tests sequentially on Mac vs running on Windows
-- **Concurrent**: Estimated speedup if running 2-3 groups in parallel on Windows
-
-### Hardware Reference
-
-- **Mac**: M1 Pro (8 cores), 16 GB RAM, currently load ~150
-- **Windows**: Ryzen 9 8945HX (16 cores, 32 threads), 31 GB RAM
-
-## Configuration
-
-### Mac Queue
-
-- **Slots**: 1 (only one group runs at a time)
-- **Concurrency**: Serialized; each spec waits for previous to complete
-- **Location**: `/tmp/agentdeck-e2e-queue`
-
-### Windows Remote
-
-- **Concurrency**: Can run multiple groups (test with 1, 2, 3 concurrent runs)
-- **Priority**: BelowNormal (doesn't block user foreground)
-- **Session**: Separate SSH session (isolated from user's desktop)
-
-## Implementation Details
-
-### Config Changes
-
-- `scripts/e2e-auto.js`: Routes specs to Windows or Mac queue
-- `scripts/e2e-remote-job.js`: Runs Windows tests with low priority via PowerShell
-- `scripts/e2e-remote-win.js`: SSH dispatcher (unchanged, already background-safe)
-
-### Priority Setting (Windows)
-
-```powershell
-Start-Process -NoNewWindow -Wait -FilePath "node.exe" -ArgumentList @(...) -Priority BelowNormal
-```
-
-`-NoNewWindow`: Prevents console window from appearing
-`-Priority BelowNormal`: Reduces scheduling priority to avoid blocking user work
-
-## Troubleshooting
-
-### Windows test shows visible window
-
-Check that SSH session is properly isolated:
-```powershell
-# List all visible windows (run on Windows)
-powershell -File scripts/verify-windows-background.ps1
-
-# If Electron window is visible, check SSH connection:
-ssh winpc "tasklist | findstr node"
-```
-
-The SSH session should be in a separate login session (SessionId != user's current SessionId).
-
-### Tests running slowly on Windows
-
-Common causes:
-1. **Antivirus scanning**: Add test directories to Windows Defender exclusions (user decides)
-2. **Low priority**: By design - can increase if needed, but will affect foreground work
-3. **Network latency**: SSH overhead; expected to be <5% for typical tests
-4. **Concurrent load**: Each group gets full CPU when others idle; throughput improves with parallelism
-
-### Can't connect to Windows
-
-1. Verify SSH key is configured: `ssh -i ~/.ssh/id_rsa winpc "echo ok"`
-2. Check Windows SSH service: `Get-Service -Name sshd`
-3. Firewall: Windows Defender should allow sshd (user can verify in Firewall settings)
-
-## Next Steps
-
-1. Run benchmarks with representative specs (chat, quota-warmup, captain)
-2. Measure concurrent Windows performance (1, 2, 3 groups)
-3. Document recommended concurrent group count based on user's CPU/load tolerance
-4. Monitor actual foreground impact (CPU, responsiveness) during tests
+Re-measure with `scripts/perf-e2e-benchmark.js` (`--mode win --groups N` / `--mode mac`, same `--sha`); it prints
+the numbers it measured and nothing else.
