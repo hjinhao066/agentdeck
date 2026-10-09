@@ -1,76 +1,96 @@
+'use strict';
 const test = require('node:test');
-const assert = require('node:assert');
+const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { createJsonFileCache } = require('../config-cache');
 
-// Test the mtime-based caching pattern for config.json reads
-test('mtime-based config caching avoids re-parsing unchanged files', () => {
-  const testDir = fs.mkdtempSync(path.join(__dirname, 'tmp-config-cache-'));
-  const configPath = path.join(testDir, 'test-config.json');
-  const testData = { test: 'data', seats: ['a', 'b'] };
+const PINNED = 1700000000; // whole seconds, so both files carry the identical mtime
+const fresh = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-config-cache-'));
+  return { dir, file: path.join(dir, 'config.json'), done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+};
+// Counts real parses without touching the module under test.
+const countParses = (fn) => { const real = JSON.parse; let n = 0; JSON.parse = (...a) => { n++; return real(...a); }; try { fn(); } finally { JSON.parse = real; } return n; };
 
-  // Write initial config
-  fs.writeFileSync(configPath, JSON.stringify(testData));
-
-  // Implement cached version
-  let cachedData = null, cachedMtime = null;
-  let parseCount = 0;
-  const getCachedConfig = () => {
-    try {
-      const stat = fs.statSync(configPath);
-      if (cachedData && cachedMtime === stat.mtimeMs) {
-        return cachedData; // Return cached, don't re-parse
-      }
-      parseCount++;
-      cachedData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      cachedMtime = stat.mtimeMs;
-      return cachedData;
-    } catch (_) { return {}; }
-  };
-
-  // First read: should parse (parseCount = 1)
-  const first = getCachedConfig();
-  assert.deepStrictEqual(first, testData);
-  assert.strictEqual(parseCount, 1, 'First read should parse');
-
-  // Second read without file change: should use cache (parseCount still 1)
-  const second = getCachedConfig();
-  assert.deepStrictEqual(second, testData);
-  assert.strictEqual(parseCount, 1, 'Second read of unchanged file should use cache');
-
-  // Modify file (ensure different mtime)
-  const newData = { test: 'data', seats: ['a', 'b', 'c'] };
-  fs.writeFileSync(configPath, JSON.stringify(newData));
-
-  // Third read after file change: should re-parse (parseCount = 2)
-  const third = getCachedConfig();
-  assert.deepStrictEqual(third, newData);
-  assert.strictEqual(parseCount, 2, 'Read after file change should re-parse');
-
-  // Fourth read without further change: should use new cache (parseCount still 2)
-  const fourth = getCachedConfig();
-  assert.deepStrictEqual(fourth, newData);
-  assert.strictEqual(parseCount, 2, 'Read of unchanged modified file should use cache');
-
-  // Cleanup
-  fs.rmSync(testDir, { recursive: true, force: true });
+test('an unchanged file is parsed once, however often it is read', () => {
+  const t = fresh();
+  try {
+    fs.writeFileSync(t.file, JSON.stringify({ a: 1 }));
+    const read = createJsonFileCache(t.file);
+    assert.equal(countParses(() => { for (let i = 0; i < 50; i++) assert.deepEqual(read(), { a: 1 }); }), 1);
+  } finally { t.done(); }
 });
 
-test('config caching handles missing files gracefully', () => {
-  const missingPath = '/nonexistent/config.json';
+test('an in-place rewrite with the same size and the same mtime is still noticed', () => {
+  const t = fresh();
+  try {
+    fs.writeFileSync(t.file, '{"seat":"aaa"}');
+    fs.utimesSync(t.file, PINNED, PINNED);
+    const read = createJsonFileCache(t.file);
+    assert.equal(read().seat, 'aaa');
+    fs.writeFileSync(t.file, '{"seat":"bbb"}');
+    fs.utimesSync(t.file, PINNED, PINNED); // coarse-mtime filesystem / same clock tick
+    assert.equal(read().seat, 'bbb');
+  } finally { t.done(); }
+});
 
-  let cachedData = null, cachedMtime = null;
-  const getCachedConfig = () => {
-    try {
-      const stat = fs.statSync(missingPath);
-      if (cachedData && cachedMtime === stat.mtimeMs) return cachedData;
-      cachedData = JSON.parse(fs.readFileSync(missingPath, 'utf8'));
-      cachedMtime = stat.mtimeMs;
-      return cachedData;
-    } catch (_) { return {}; }
-  };
+test('an atomic replace (tmp file + rename, as main.js saves) with the same size and mtime is noticed', () => {
+  const t = fresh();
+  try {
+    fs.writeFileSync(t.file, '{"seat":"aaa"}');
+    fs.utimesSync(t.file, PINNED, PINNED);
+    const read = createJsonFileCache(t.file);
+    assert.equal(read().seat, 'aaa');
+    fs.writeFileSync(t.file + '.tmp', '{"seat":"bbb"}');
+    fs.utimesSync(t.file + '.tmp', PINNED, PINNED);
+    fs.renameSync(t.file + '.tmp', t.file);
+    assert.equal(read().seat, 'bbb');
+  } finally { t.done(); }
+});
 
-  // Should return empty object without crashing
-  const result = getCachedConfig();
-  assert.deepStrictEqual(result, {});
+test('an ordinary external rewrite is noticed at the next read', () => {
+  const t = fresh();
+  try {
+    fs.writeFileSync(t.file, JSON.stringify({ seats: ['a'] }));
+    const read = createJsonFileCache(t.file);
+    assert.deepEqual(read().seats, ['a']);
+    fs.writeFileSync(t.file, JSON.stringify({ seats: ['a', 'b', 'c'] }));
+    assert.deepEqual(read().seats, ['a', 'b', 'c']);
+  } finally { t.done(); }
+});
+
+test('a deleted file reads as empty, and the old content does not come back', () => {
+  const t = fresh();
+  try {
+    fs.writeFileSync(t.file, '{"a":1}');
+    const read = createJsonFileCache(t.file);
+    assert.deepEqual(read(), { a: 1 });
+    fs.rmSync(t.file);
+    assert.deepEqual(read(), {});
+    fs.writeFileSync(t.file, '{"a":1}');
+    assert.deepEqual(read(), { a: 1 });
+  } finally { t.done(); }
+});
+
+test('a half-written (invalid) file reads as empty like before the cache, then recovers when fixed', () => {
+  const t = fresh();
+  try {
+    fs.writeFileSync(t.file, '{"a":1}');
+    const read = createJsonFileCache(t.file);
+    assert.deepEqual(read(), { a: 1 });
+    fs.writeFileSync(t.file, '{"a":');
+    assert.deepEqual(read(), {});
+    fs.writeFileSync(t.file, '{"a":2}');
+    assert.deepEqual(read(), { a: 2 });
+  } finally { t.done(); }
+});
+
+test('main.js reads the seat config through the shared cache, not a private copy of the logic', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /require\('\.\/config-cache'\)/);
+  assert.match(main, /const seatConfig = createJsonFileCache\(configPath\)/);
+  assert.doesNotMatch(main, /cachedConfigMtime/);
+  assert.ok(require('../package.json').build.files.includes('config-cache.js'), 'packaged app must ship the module main requires');
 });

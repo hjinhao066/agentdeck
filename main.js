@@ -40,6 +40,7 @@ const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
+const { createJsonFileCache } = require('./config-cache');
 const Battery = require('./battery-core');
 const RestartResume = require('./restart-resume');
 const AgentSessions = require('./agent-sessions');
@@ -954,17 +955,8 @@ app.whenReady().then(async () => {
   const feedHome = tudArg ? path.join(app.getPath('userData'), 'schedule-home') : HOME;
   registerScheduleFeedIpc({ handleMain, dir: path.join(feedHome, '.agents', 'schedules'), home: feedHome, userData: app.getPath('userData'), env: ENV });
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
-  // Cache config.json by mtime to avoid repeated full-file parses on every idle report/keypress
-  let cachedConfigData = null, cachedConfigMtime = null;
-  const seatConfig = () => {
-    try {
-      const stat = fs.statSync(configPath);
-      if (cachedConfigData && cachedConfigMtime === stat.mtimeMs) return cachedConfigData;
-      cachedConfigData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      cachedConfigMtime = stat.mtimeMs;
-      return cachedConfigData;
-    } catch (_) { return {}; }
-  };
+  // Parsed config.json is several MB; re-read only when the file changed (config-cache.js).
+  const seatConfig = createJsonFileCache(configPath);
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, env: ENV, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
