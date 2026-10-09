@@ -1,6 +1,6 @@
 # 模型清单、分工和档位
 
-可用 agent：new --command 写完整命令，--model 选模型。
+可用 agent：new --command 写完整命令，模型和档位写在命令里（--model/--effort 只能放在 --command 内，new 本身不认，写了直接报错）；要验收先 task add --verify 再 new --task-id。
 - Antigravity：agy --dangerously-skip-permissions --model gemini-3.8-flash-high。agy models 当前还列出并已实测可生成：claude-sonnet-4-6（Claude Sonnet 4.6 Thinking）、claude-opus-4-6-thinking（Claude Opus 4.6 Thinking）、gpt-oss-120b-medium（GPT-OSS 120B Medium）。Gemini 有额度时优先 Flash；Gemini 周额度用尽后，普通代码、批量实现和测试用 GPT-OSS，日常代码用 Sonnet 4.6，复杂推理、架构和审查用 Opus 4.6。只对 Gemini Flash 写档位后缀：gemini-3.8-flash-low、gemini-3.8-flash-medium、gemini-3.8-flash-high；其余模型必须使用上面列出的完整 ID。绝对不要给 agy 加 --effort：它会悄悄换成另一个模型。
 - Cursor CLI：cursor-agent --force --model grok-4.7-high-fast　主要用 Grok 4.7 跑脏活和数据抓取。Cursor 会话刚开的头 1–2 分钟可能没有任何输出，属于正常初始化，别急着判定卡死。
 - Claude Code：claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high　每次开 Claude 小弟必须显式写 --model claude-opus-5-5、--model claude-sonnet-5-5 或 --model claude-haiku-5-5，并显式写 --effort；本机默认模型不是 Opus，不写可能跑成别的模型。开工后用 peek 看状态行确认模型，不符就修正命令重新派活。Opus 留给 UI、最关键的代码和终审；重要代码用 Sonnet。Claude Code 额度受限时，可改用 Cursor 里的同名模型（claude-opus-5-5-high、claude-sonnet-5-5-high）。

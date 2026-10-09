@@ -427,6 +427,13 @@ again with the current provider, model and effort instructions.
   control capability token those commands need. Every column has a separate
   submission-only token, so a worker can report its own task without controlling
   any session.
+- Every board-cli command takes only the flags it lists (`board-cli.js help`).
+  A flag it does not know (for example `new --model … --effort … --verify`) is
+  refused with a non-zero exit, a list of the supported flags and, for `new`, the
+  reminder that model and effort go inside `--command` and review is `task add
+  --verify` then `new --task-id`. Nothing is sent to the app. `new --agent claude`
+  without `--command` prints a one-line warning that the machine's default model
+  will be used.
 - Use `new --project "项目名"` to group sessions on the terminal architecture
   map and `--reviews id1,id2` to declare exactly which sessions a reviewer checks.
   One Captain directly assigns work, workers sit above reviewers, and completed
