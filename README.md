@@ -1036,6 +1036,10 @@ npm run dist:mac
 
 **Mac 压力下的 E2E 分流：** 跑 E2E 时用 `node scripts/e2e-auto.js tests/e2e/spec.js [playwright args]`，自动判断：不是 Mac 专属的 spec 且 Windows 在线时，派到 Windows；否则用本机排队锁 `e2e-queue.js`。这样 Mac 只跑必须在 Mac 上的用例，减轻负担。单独查队列：`node scripts/e2e-auto.js --status`。
 
+**Windows 后台执行：** 远程 E2E 通过 SSH 运行在 Windows 隔离会话中（已与桌面分离），不会在用户屏幕上创建窗口。进程优先级设为 BelowNormal，避免占用用户前台工作的 CPU。验证方法：`powershell -ExecutionPolicy Bypass -File scripts/verify-windows-background.ps1`（在 Windows 上另开 PowerShell 运行，可实时检测新窗口和进程优先级）。
+
+**性能基准测试：** 对比 Mac 队列 vs Windows 后台的执行时间和吞吐量，`node scripts/perf-e2e-benchmark.js tests/e2e/chat.spec.js tests/e2e/quota-warmup.spec.js` 会在两个平台各跑一次指定的 spec 并生成提速倍数表（格式：spec 名，Mac 秒数，Windows 秒数，加速倍数）。总耗时 30-60 分钟。
+
 冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 
 **发版必须先写「版本更新」**：在仓库根目录的 `release-notes.json` 里，把这一版加到 `released` 最前面（版本号如 `2.0`、日期 `YYYY-MM-DD`、一句标题、3–6 条写给用户看的大白话，每条不超过 60 字），并把它从 `upcoming` 里拿掉；顺手更新 `upcoming`（接下来做什么，用户还没拍板的写 `"state": "pending"`，界面上显示「待你定」）和 `updated`。只改这一个文件，桌面端（侧栏底部点版本号）和手机总台（总览最下面、平板侧栏底部的版本号）都读它（每日进展另读本机统计文件，不在这个文件里）。漏改有两道提醒：`npm test` 里的 `tests/release-notes.test.js` 要求最新一条等于 package.json 的版本；`scripts/release.js` 合完分支、升完版本号后先查这一条，不对就停下，不进测试和打包。规则写在 `mobile-web/hub/core.js` 的 `releaseProblems`。
