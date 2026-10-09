@@ -26,12 +26,13 @@ function isWindowsOnline(host = 'winpc', timeoutSecs = 5) {
   }
 }
 
-// Check if a spec file is Mac-only (has `skip: process.platform === 'win32'` or similar)
+// Check if a spec file is Mac-only (has `skip: process.platform === 'win32'` or test.skip(...'win32'...))
 function isMacOnlySpec(specPath) {
   try {
     const content = fs.readFileSync(specPath, 'utf8');
-    // Look for skip conditions that exclude Windows
-    return /skip:?\s*process\.platform\s*===\s*['"]win32["']/.test(content) ||
+    // Look for skip conditions that exclude Windows: test.skip(process.platform === 'win32') or skip: process.platform === 'win32'
+    return /test\.skip\s*\(\s*process\.platform\s*===\s*['"]win32["']/.test(content) ||
+           /skip:?\s*process\.platform\s*===\s*['"]win32["']/.test(content) ||
            /skip:?\s*!?\s*process\.platform\s*===\s*['"]darwin["']/.test(content);
   } catch {
     return false;
