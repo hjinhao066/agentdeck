@@ -1410,7 +1410,9 @@ only the ones whose hash or time changed (`/v1/history`); an older client still
 gets whole transcripts, and every answer over 1 KB is gzipped for a client that
 asks (Node's fetch does). Credential-shaped fields are stripped,
 but transcript prose is preserved, so sync only to a trusted private service.
-Requests time out after 10 seconds and retry on subsequent sync rounds.
+Requests time out after 10 seconds and retry on subsequent sync rounds. A round
+still running when the next is due is not queued behind it (one round at a time,
+none started after sync stops).
 If the hub loses a card or rolls back behind a pending edit's revision, the
 client discards that edit's old base and queues the complete local card with a
 new operation ID and revision zero for the next round. Newer local fields are

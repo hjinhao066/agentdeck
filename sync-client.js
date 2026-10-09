@@ -460,7 +460,13 @@ class FleetClient {
   }
   start() {
     if (this.timer) return;
-    const tick = () => { this.syncOnce().catch((err) => { this.error = this._safeError(err, ''); }); };
+    // A round still running when the next is due is not queued behind it: a slow
+    // hub would otherwise get rounds back to back, still coming after stop().
+    const tick = () => {
+      if (this.ticking || !this.timer) return;
+      this.ticking = true;
+      return this.syncOnce().catch((err) => { this.error = this._safeError(err, ''); }).finally(() => { this.ticking = false; });
+    };
     this.timer = setInterval(tick, this.syncMs);
     if (this.timer.unref) this.timer.unref();
     return tick();
