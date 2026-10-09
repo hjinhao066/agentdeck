@@ -253,6 +253,10 @@ if (saved) {
       folderId: typeof c.folderId === 'string' ? c.folderId : null,
       isMain: !!c.isMain,
       captainCrew: !!c.captainCrew,
+      // 小队长: the sub-captain itself, the sub-captain a child reports to, its folded child list
+      ...(c.subCaptain === true ? { subCaptain: true } : {}),
+      ...(typeof c.subCaptainId === 'string' && c.subCaptainId ? { subCaptainId: c.subCaptainId } : {}),
+      ...(c.subCrewCollapsed === true ? { subCrewCollapsed: true } : {}),
       project: typeof c.project === 'string' ? c.project : '',
       boardId: typeof c.boardId === 'string' ? c.boardId : '',
       boardAttempt: typeof c.boardAttempt === 'string' ? c.boardAttempt : '',
@@ -2230,11 +2234,12 @@ function buildColumn(col, isFresh) {
             term.write(replayMsg, () => finishReplay());
           });
         } else finishReplay();
-        // 队长 gets a control token too; the columns it drives never do.
+        // 队长 gets a control token too; the columns it drives never do, except a 小队长
+        // (new --sub-captain), whose token MainSession accepts only for its own children.
         const boundSeat = col.executor === 'chatgpt-web' ? {} : ClaudeSeatsCore.bindColumn(col, config);
         flushConfig();
 
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir, !!col.captainCrew && !col.isMain);
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain || col.subCaptain === true, boundSeat.id, boundSeat.configDir, !!col.captainCrew && !col.isMain);
         if (col.executor === 'chatgpt-web') terms.get(col.id).webExecutorReady = true;
 
         if (launch && col.executor !== 'chatgpt-web') {
@@ -2676,6 +2681,8 @@ function removeCol(col) {
   ChatUI.onColumnRemoved(col.id);
   if (col.isMain) config.mainSession = null;
   detachColumn(col, false);
+  // A 小队长's children keep running and go back to the 队长.
+  if (col.subCaptain) window.MainSession?.releaseSubCrew?.(col, '关掉');
   saveConfig();
   renderColNav();
   renderBoardGraph();
@@ -2739,6 +2746,8 @@ function archiveColumn(col, opts) {
   detachColumn(col, true);
   const snapshot = { ...col, role: 'manual', relationship: 'Independent manual terminal', archivedAt: Date.now() };
   config.archived = [snapshot, ...(config.archived || []).filter((a) => a.id !== col.id)];
+  // A 小队长's children keep running and go back to the 队长.
+  if (col.subCaptain) window.MainSession?.releaseSubCrew?.(col, '归档');
   saveConfig();
   if (!(opts && opts.worktreeHandled)) {
     try { window.MainSession?.settleArchivedWorktree?.(snapshot); } catch (_) {}
@@ -3660,7 +3669,8 @@ window.deck.onBoardCommand(async (message) => {
     return;
   }
   if (message.action === 'create-child' || message.action === 'spawn-child') {
-    const existingChild = columns.find((col) => col.createdByRequestId === message.id);
+    // A 小队长's child is a 队长 session: MainSession answers a repeated request for it.
+    const existingChild = columns.find((col) => col.createdByRequestId === message.id && !col.captainCrew);
     if (existingChild) {
       respondBoard(message.id, existingChild.taskCompleted
         ? { done: true, childId: existingChild.taskId, result: existingChild.result }
@@ -3685,14 +3695,16 @@ window.deck.onBoardCommand(async (message) => {
       if (message.action === 'session-exit') { respondBoard(message.id, { done: true }); return; }
     } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
   }
-  // 队长's commands: only its own column may use them.
   if (message.action === 'main-todo-delivery' || message.action === 'main-todo-error') {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => window.deck.boardRespond({ requestId: message.id, ...response }),
       (error) => window.deck.boardRespond({ requestId: message.id, done: true, error: error.message }));
     return;
   }
-  if (String(message.action || '').startsWith('main-') || message.action === 'seat-auth-alert') {
+  // 队长's commands: only its own column may use them. A 小队长 reaches a few of them, and
+  // create-child, on its own children (MainSession checks which).
+  if (String(message.action || '').startsWith('main-') || message.action === 'seat-auth-alert' ||
+      (message.action === 'create-child' && caller?.subCaptain === true && !caller.isMain && !message.submitOnly)) {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and

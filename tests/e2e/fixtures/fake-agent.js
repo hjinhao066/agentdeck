@@ -26,6 +26,13 @@ if (process.env.AGENTDECK_TEST_CONTROL_ENV_FILE && process.env.AGENTDECK_CONTROL
     AGENTDECK_CONTROL_TOKEN: process.env.AGENTDECK_CONTROL_TOKEN,
   }));
 }
+// One file per terminal that holds a control token (队长, 小队长), named by its column id.
+if (process.env.AGENTDECK_TEST_CONTROL_ENV_DIR && process.env.AGENTDECK_CONTROL_TOKEN) {
+  require('fs').writeFileSync(require('path').join(process.env.AGENTDECK_TEST_CONTROL_ENV_DIR, process.env.AGENTDECK_COL_ID + '.json'), JSON.stringify({
+    AGENTDECK_CONTROL_DIR: process.env.AGENTDECK_CONTROL_DIR,
+    AGENTDECK_CONTROL_TOKEN: process.env.AGENTDECK_CONTROL_TOKEN,
+  }));
+}
 if (process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE) {
   require('fs').writeFileSync(process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE, JSON.stringify({
     child: Object.hasOwn(process.env, 'CLAUDE_CODE_CHILD_SESSION'),

@@ -274,12 +274,14 @@ function usage() {
   process.stdout.write(
     'AgentDeck managed-terminal bridge\n\n' +
     '  Each command takes only the flags listed here; an unknown flag is refused (exit 1), never ignored.\n\n' +
-    '  create-child --title "Task" --task "Instructions" [--agent claude|agy|cursor|grok] [--cwd path]\n' +
+    '  create-child --title "Task" --task "Instructions" [--agent claude|agy|cursor|grok|codex | --command "launch"] [--cwd path]\n' +
+    '                                           小队长: opens a child at once and prints its id; its receipts come to your receipts\n' +
     '  spawn-child --title "Task" --task "Instructions" [--agent claude|agy|cursor|grok]\n' +
     '  wait --task <task-id>\n' +
     '  send --task <task-id> --message "Follow-up or answer"\n' +
     '  progress --message "Current progress"\n' +
-    '  complete --result "One to three sentences" [--files path1,path2] [--failed "Reason"]\n' +
+    '  complete --result "One to three sentences" [--files path1,path2] [--failed "Reason"] [--final]\n' +
+    '                                           --final: a 小队长\'s final delivery; its other completes are stage reports that leave its card alone\n' +
     '  ask --question "Decision needed from the Captain"\n' +
     '  status\n\n' +
     'Scheduled scripts on this computer (no terminal needed; automation help for details):\n' +
@@ -316,8 +318,10 @@ function usage() {
     '  briefing --topic <name>|all|list          one of the Captain rule files (models, dispatch, review, inbox,\n' +
     '                                           sessions, capacity, release, handoff, commands), read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
-    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--sub-captain] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
     '                                           model and effort go inside --command (…--model claude-opus-5-5 --effort high); new has no --model/--effort/--verify\n' +
+    '                                           --sub-captain (needs --project): a 小队长 that opens its own children with create-child;\n' +
+    '                                           their receipts go to it, not to you; ledger nests them under it\n' +
     '  worktree clean [--apply --path copy]      list copies a person may remove; deletion needs --apply and each --path\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
@@ -403,7 +407,8 @@ async function main() {
       action,
       title,
       task,
-      agent: String(args.agent || 'claude'),
+      // Unnamed: a 小队长's child runs its model; a conductor-board child runs claude.
+      agent: typeof args.agent === 'string' ? args.agent : '',
       command: typeof args.command === 'string' ? args.command : '',
       cwd: typeof args.cwd === 'string' ? args.cwd : '',
       relationship: typeof args.relationship === 'string' ? args.relationship : 'Delegated by parent',
@@ -449,7 +454,9 @@ async function main() {
     if (!result.trim()) fail('complete requires --result.');
     if (args.files !== undefined && typeof args.files !== 'string') fail('complete --files requires comma-separated paths.');
     if (args.failed !== undefined && (typeof args.failed !== 'string' || !args.failed.trim())) fail('complete --failed requires a reason.');
-    await request({ action, result, files: args.files ? args.files.split(',').map((p) => p.trim()).filter(Boolean) : [], failed: args.failed || '' }, false);
+    if (args.final !== undefined && args.final !== true) fail('complete --final takes no value.');
+    await request({ action, result, files: args.files ? args.files.split(',').map((p) => p.trim()).filter(Boolean) : [], failed: args.failed || '',
+      ...(args.final === true ? { final: true } : {}) }, false);
     process.stdout.write('Result delivered to the parent task.\n');
     return;
   }
@@ -598,6 +605,8 @@ async function main() {
     if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(args.seat))) fail('new --seat requires a seat id.');
     if (args['web-mode'] !== undefined && (!['chat', 'deep-research'].includes(args['web-mode']) || args.agent !== 'chatgpt-web')) fail('new --web-mode requires --agent chatgpt-web and chat or deep-research.');
     if (args.priority !== undefined && !['high', 'normal'].includes(args.priority)) fail('new --priority is high or normal.');
+    if (args['sub-captain'] !== undefined && args['sub-captain'] !== true) fail('new --sub-captain takes no value.');
+    if (args['sub-captain'] === true && (typeof args.project !== 'string' || !args.project.trim())) fail('new --sub-captain requires --project "Project".');
     const worktree = args.worktree !== undefined;
     if (worktree && (typeof args.worktree !== 'string' || !args.worktree.trim())) fail('new --worktree requires a repository path.');
     if (!worktree && (args.base !== undefined || args.branch !== undefined)) fail('new --base and --branch require --worktree.');
@@ -620,6 +629,7 @@ async function main() {
       ...(args['web-mode'] !== undefined ? { webMode: args['web-mode'] } : {}),
       ...(args.seat !== undefined ? { seatId: args.seat } : {}),
       ...(args.priority !== undefined ? { priority: args.priority } : {}),
+      ...(args['sub-captain'] === true ? { subCaptain: true } : {}),
       ...(worktree ? { worktree: repo, base: typeof args.base === 'string' ? args.base.trim() : '', branch: typeof args.branch === 'string' ? args.branch.trim() : '' } : {}),
       project: typeof args.project === 'string' ? args.project.trim() : '',
       reviews: typeof args.reviews === 'string' ? [...new Set(args.reviews.split(',').map((id) => id.trim()))] : [],

@@ -2364,6 +2364,15 @@ body.linking-board .board-port.out::before {
 .nav-crew .colnav-item:hover .cn-actions, .nav-crew .colnav-item:focus-within .cn-actions { opacity: 1; pointer-events: auto; }
 .nav-crew .colnav-item:hover .cn-meta, .nav-crew .colnav-item:focus-within .cn-meta { display: inline; visibility: hidden; }
 .nav-crew .nav-ibtn { width: 24px; height: 24px; }
+/* 小队长: its children hang under its row, one step in, folded by the arrow at the row's left */
+.nav-crew .colnav-item .sub-fold { position: absolute; left: 20px; top: 50%; transform: translateY(-50%); }
+.nav-crew .colnav-item .sub-count { flex: 0 0 auto; }
+.sub-crew { position: relative; }
+.sub-crew::before {
+  content: ''; position: absolute; left: 32px; top: 0; bottom: 8px; width: 1px;
+  background: color-mix(in srgb, var(--accent) 40%, transparent); pointer-events: none;
+}
+.nav-crew .sub-crew .colnav-item { padding-left: 70px; }
 .captain-item .cn-badge .agent-model-label, .nav-crew .cn-badge .agent-model-label { max-width: 96px; min-width: 0; }
 /* 队长's row is a single line: [fold][crown][dot] 队长 … [count][model][switch].
    Counts, last activity and the live status line are in its tooltip. */

@@ -58,6 +58,31 @@
   }
   const isMain = (col) => !!(col && col.isMain && state() && state().colId === col.id);
   const isMainId = (id) => !!(state() && state().colId === id && mainCol());
+  // ---- 小队长 (sub-captain) ----
+  // A background session the Captain opened with `new --sub-captain` (column.subCaptain).
+  // Sessions it opens with create-child carry column.subCaptainId = its column id. Their
+  // receipts, questions and prompts wait in s.subReceipts[its id] for its own `receipts`,
+  // never in the Captain's pending. Its terminal holds a control token, but only the
+  // commands in SUB_ACTIONS, and only on its own children, are accepted from it.
+  // Only the Captain's `new --sub-captain` sets the flag; filing the session into a folder keeps the role.
+  const isSubCaptain = (col) => !!(col && col.subCaptain === true && !col.isMain && host.columns().includes(col));
+  function subCaptainOf(col) {
+    if (!col || !col.subCaptainId) return null;
+    const sub = host.columns().find((c) => c.id === col.subCaptainId);
+    return isSubCaptain(sub) ? sub : null;
+  }
+  const childrenOf = (sub) => host.columns().filter((c) => c.subCaptainId === sub.id && !c.isMain);
+  function subQueue(s, id) {
+    if (!s.subReceipts || typeof s.subReceipts !== 'object') s.subReceipts = {};
+    if (!Array.isArray(s.subReceipts[id])) s.subReceipts[id] = [];
+    return s.subReceipts[id];
+  }
+  const allPending = (s) => [...s.pending, ...Object.values(s.subReceipts || {}).flat()];
+  // Take receipts out wherever they wait: the Captain's pending or a sub-captain's.
+  function dropReceipts(s, drop) {
+    s.pending = s.pending.filter((p) => !drop(p));
+    for (const id of Object.keys(s.subReceipts || {})) s.subReceipts[id] = s.subReceipts[id].filter((p) => !drop(p));
+  }
   function save() { host.saveConfig(); }
   function persistInstallation() {
     host.flushConfig?.();
@@ -543,6 +568,14 @@
     s.tasks.forEach((t) => { delete t.boardRetrying; });
     s.waitlist = Array.isArray(s.waitlist) ? s.waitlist.filter((w) => w && typeof w.taskId === 'string' && typeof w.task === 'string' && s.tasks.some((t) => t.id === w.taskId && t.status === 'waiting')) : [];
     restoreTodoInbox();
+    // A sub-captain's untaken receipts stay its own; one whose column is gone hands them to the Captain.
+    const queues = s.subReceipts && typeof s.subReceipts === 'object' && !Array.isArray(s.subReceipts) ? s.subReceipts : {};
+    s.subReceipts = {};
+    for (const [id, items] of Object.entries(queues)) {
+      if (!Array.isArray(items) || !items.length) continue;
+      if (host.columns().some((c) => c.id === id && c.subCaptain === true && !c.isMain)) s.subReceipts[id] = items;
+      else s.pending.push(...items);
+    }
     // the column was closed while the app was down
     if (!host.columns().some((c) => c.id === s.colId && c.isMain)) host.config.mainSession = null;
   }
@@ -1052,7 +1085,9 @@
     carried.forEach((t) => { t.gen = s.gen; });
     // An acknowledged notification can still need a decision. Remind the new
     // context once, even if the old Captain already finished its own reply.
+    // A sub-captain's children report to it, and its context was not cleared.
     carried.forEach((t) => {
+      if (subCaptainOf(host.columns().find((c) => c.id === t.colId))) return;
       const waitingInput = t.status === 'input' || (t.status === 'queued' && t.blockedAsked && host.terms.get(t.colId)?.state === 'input');
       if (waitingInput && !s.pending.some((p) => p.colId === t.colId && p.waiting)) {
         push(t, { waiting: confirmationExcerpt(host.terms.get(t.colId)) });
@@ -1080,7 +1115,7 @@
     } else delete s.relayStartup;
     s.fresh = true;
     delete s.briefed;
-    carried.forEach((t) => window.ChatUI.addCard(s.colId, t));
+    carried.forEach((t) => { if (!t.subCaptainId) window.ChatUI.addCard(s.colId, t); });
     save();
     window.Sidebar.render();
     brief(fresh, M.resetNote(retired ? oldId : '', carried.filter((t) => !CLOSED.includes(t.status)), rotation ? 'relay' : '')
@@ -1130,7 +1165,8 @@
     });
   }
   // col null: a 'waiting' card for work queued until a slot frees up.
-  function addTask(col, title) {
+  // A sub-captain's child's cards go in the sub-captain's conversation, not the Captain's.
+  function addTask(col, title, subId = subCaptainOf(col)?.id || '') {
     const s = state();
     // 高优先级 without a card belongs to the piece of work. A mark waiting on the
     // session (a new `new --priority high` session, or one the user marked while
@@ -1147,10 +1183,11 @@
       project: col ? col.project || '' : '', reviews: col ? col.reviews || [] : [],
       boardId: col?.boardId || '', boardAttempt: col?.boardAttempt || '',
       ...(marked ? { important: true } : {}),
+      ...(subId ? { subCaptainId: subId } : {}),
     };
     s.tasks.push(task);
     if (s.tasks.length > MAX_TASKS) s.tasks.splice(0, s.tasks.length, ...trimTasks(s.tasks));
-    window.ChatUI.addCard(s.colId, task);
+    window.ChatUI.addCard(subId || s.colId, task);
     save();
     return task;
   }
@@ -1391,7 +1428,7 @@
       body = `${body.slice(0, 300).replace(/\s+/g, ' ').trim()}…\n（这件活共 ${text.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`;
       if (state() !== s) throw new Error('队长已经关掉了，这件活没有排上队。');   // closed while the file was written
     }
-    const task = addTask(null, title);
+    const task = addTask(null, title, metadata.subCaptainId || '');
     Object.assign(task, metadata);
     const held = openPlan(cmd, metadata.claudeSeatId, metadata.quotaExplicit, metadata);
     task.waitReason = held.action === 'queue' ? quotaQueueText(held, title) : reason;
@@ -1489,6 +1526,7 @@
   function maybeArchive(col, entry) {
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
+    if (isSubCaptain(col) && childrenOf(col).length) return;   // its children still report to it
     if (entry && entry.alive && (!['done', 'plain'].includes(entry.state) || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd) || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) return;
     // The status dot and lastScreen are a few seconds old: look at the terminal itself
     // once more before ending it.
@@ -1500,7 +1538,7 @@
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
     if (M.needsCardCheck(s, col.id)) refreshCards();
-    if (M.archivable(s, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER, cardCache)) host.archiveColumn(col, { quiet: true });
+    if (M.archivable({ ...s, pending: allPending(s) }, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER, cardCache)) host.archiveColumn(col, { quiet: true });
   }
   // `tell` to a background session that was archived brings it back first.
   function archivedCrew(ref) {
@@ -1514,7 +1552,7 @@
 
   function update(task) {
     const s = state();
-    if (s && task.gen === s.gen) window.ChatUI.updateCard(s.colId, task);
+    if (s && task.gen === s.gen) window.ChatUI.updateCard(task.subCaptainId || s.colId, task);
     save();
   }
   // A receipt arrived: record it on the column (the ledger), show it, queue it for the model.
@@ -1558,7 +1596,11 @@
     const anomaly = M.exceptionReason(item);
     // Input/exit/quota events are deduplicated by task status/blockedAsked.
     // Never suppress a new task's failure or a decision the new Captain needs.
-    s.pending.push({ ...(anomaly ? { anomaly } : {}), taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
+    // A sub-captain's child reports to the sub-captain, wherever its instruction came from. A child
+    // whose column is gone (closed) or never opened (queued) is known by its record's subCaptainId.
+    const col = host.columns().find((c) => c.id === task.colId);
+    const sub = col ? subCaptainOf(col) : subCaptainOf({ subCaptainId: task.subCaptainId });
+    (sub ? subQueue(s, sub.id) : s.pending).push({ ...(anomaly ? { anomaly } : {}), taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
     return true;
   }
   // Hand every pending receipt to 队长's model as text; they count as in
@@ -1711,11 +1753,16 @@
       }
     }
     if (!task || task.status === 'stopped' && task.receipt?.source !== 'fallback') return message.action === 'session-exit' ? response : null;
+    // A sub-captain reports in stages: every complete or ask it sends reaches the Captain, not only the first.
+    if (isSubCaptain(caller) && ['complete', 'ask'].includes(message.action) && task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) {
+      task.status = 'working';
+      task.gen = s.gen;
+    }
     if (task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) return response;
     if (message.action === 'session-exit') {
       if (task.status === 'stopped' && task.receipt?.source === 'fallback') {
         task.status = 'working';
-        s.pending = s.pending.filter((p) => p.taskId !== task.id || p.source !== 'fallback');
+        dropReceipts(s, (p) => p.taskId === task.id && p.source === 'fallback');
       }
       if (!CLOSED.includes(task.status) || task.status === 'asking') {
         if (task.status === 'asking') task.status = 'working';
@@ -1752,12 +1799,14 @@
     const receipt = M.commandReceipt(message);
     delete task.progress; // this authenticated receipt is newer than prior progress
     task.resumeSubmission = true; // cancel delayed delivery before the asynchronous board write
-    await recordReceiptForBoard(task, receipt);
+    // A sub-captain's complete is a stage report for the Captain: only `complete --final`
+    // finishes its board card (and opens a review round when the card asks for one).
+    if (!(isSubCaptain(caller) && message.action === 'complete' && message.final !== true)) await recordReceiptForBoard(task, receipt);
     // A real submission may follow a question or the no-receipt notice. Replace
     // an unread automatic notice so the Captain sees the authoritative result.
     if (['asking', 'stopped', 'failed'].includes(task.status)) {
       if (task.receipt?.source === 'command' && task.status !== 'asking') return response;
-      s.pending = s.pending.filter((p) => p.taskId !== task.id);
+      dropReceipts(s, (p) => p.taskId === task.id);
       task.status = 'working';
       task.gen = s.gen; // a closed task keeps its old Captain's generation; the real result must reach the current one
     }
@@ -2140,6 +2189,41 @@
       });
     }).then((sent) => { if (sent && listenerStatus?.colId === col.id) listenerReminder = true; }, () => {}).finally(() => { listenerReminderSending = false; });
   }
+  // A sub-captain's `receipts --wait` dies with a restart, and a model can forget to hang it
+  // again. Its children's receipts then wait unread: after three minutes with no listener and
+  // the sub-captain idle, it is reminded once in its own terminal (never over a draft); receipts
+  // still untaken after ten minutes are reported to the Captain once. Both start over once it
+  // has taken them.
+  const SUB_REMIND_AFTER = 3 * 60_000, SUB_ESCALATE_AFTER = 10 * 60_000;
+  const subListeners = new Map();   // sub-captain id -> { alive, at }, from main.js's listener status
+  const subNudges = new Map();      // sub-captain id -> { reminded, sending, escalated } for the current pile
+  function watchSubReceipts(col, entry) {
+    const s = state();
+    const queue = s?.subReceipts?.[col.id] || [];
+    if (!queue.length) { subNudges.delete(col.id); return; }
+    let nudge = subNudges.get(col.id);
+    if (!nudge) subNudges.set(col.id, nudge = {});
+    const waited = Date.now() - Math.min(...queue.map((p) => p.ts || Date.now()));
+    if (!nudge.escalated && waited >= SUB_ESCALATE_AFTER) {
+      nudge.escalated = true;
+      const name = host.columnLabel(col);
+      s.pending.push({ taskId: 'sub-captain-unread-' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36), colId: col.id, title: name, ts: Date.now(), source: 'command',
+        summary: `小队长「${name}」有 ${queue.length} 条子会话回执超过 ${Math.floor(waited / 60_000)} 分钟没取（它的 receipts --wait 监听不在，或它卡住了）。可以 tell 它先运行 receipts 处理、再重挂一个后台 receipts --wait；或 peek 看它卡在哪。` });
+      save();
+    }
+    const listener = subListeners.get(col.id);
+    if (nudge.reminded || nudge.sending || !listener || listener.alive || Date.now() - listener.at > 30_000 || waited < SUB_REMIND_AFTER) return;
+    const busy = () => !entry.alive || entry.sendingPrompt || ['working', 'quota', 'input'].includes(entry.state) || M.terminalActivity(entry.lastScreen, col.cmd) || host.userComposing(col.id);
+    if (busy()) return;
+    nudge.sending = true;
+    Promise.resolve(host.agentInForeground(col, false)).then((ok) => {
+      if (!ok || !isSubCaptain(col) || subListeners.get(col.id)?.alive || !(state()?.subReceipts?.[col.id] || []).length || busy()) return false;
+      return window.ChatUI.sendPrompt(col, '', null, {
+        prefix: '【AgentDeck 子会话回执提醒】你的后台回执监听不在，子会话的回执已经等了三分钟。请立即运行 receipts 读取并处理，再用 Bash 的 run_in_background: true 重挂恰好一个 receipts --wait（不设超时）。',
+        force: true, guardUserInput: true,
+      });
+    }).then((sent) => { if (sent) nudge.reminded = true; }, () => {}).finally(() => { nudge.sending = false; });
+  }
   // The 额度用尽 receipt is provisional. Claude and Codex wait out the limit and
   // continue on their own ("Usage limit reset · continuing automatically"), but
   // the task was already closed as failed. Once the terminal has visibly worked
@@ -2162,7 +2246,7 @@
     task.status = 'working'; task.endedAt = 0;
     task.gen = s.gen; // a closed task keeps its old Captain's generation, and its receipt would be dropped
     if (col.lastReceipt?.source === 'quota') delete col.lastReceipt;
-    s.pending = s.pending.filter((p) => p.taskId !== task.id || p.source !== 'quota');
+    dropReceipts(s, (p) => p.taskId === task.id && p.source === 'quota');
     autoBoardEvent(task, 'started', '', 'resume-quota-' + Date.now());
     update(task);
   }
@@ -2254,6 +2338,7 @@
     const col = host.columns().find((c) => c.id === id);
     window.SleepResume?.clock.beat();
     if (col) reopenAfterQuota(col, entry);
+    if (col && isSubCaptain(col)) watchSubReceipts(col, entry);
     if (col?.executor === 'chatgpt-web') {
       startWebTask(col);
       if (col.captainCrew) maybeArchive(col, entry);
@@ -2271,7 +2356,7 @@
         delete task.doneAt;
         delete task.processEnded;
         task.status = 'working'; task.endedAt = 0;
-        s.pending = s.pending.filter((p) => p.taskId !== task.id || p.source !== 'fallback');
+        dropReceipts(s, (p) => p.taskId === task.id && p.source === 'fallback');
         autoBoardEvent(task, 'started', '', 'resume-fallback-' + Date.now());
         update(task);
       } else if (stale) {
@@ -2284,7 +2369,7 @@
       if (task.status === 'stopped' && task.receipt?.source === 'fallback' &&
           (!entry.alive || entry.state === 'quota' || M.terminalActivity(entry.lastScreen, col?.cmd) === 'quota')) {
         task.status = 'working';
-        s.pending = s.pending.filter((p) => p.taskId !== task.id || p.source !== 'fallback');
+        dropReceipts(s, (p) => p.taskId === task.id && p.source === 'fallback');
       }
       if (!['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(task.status)) continue;
       if (task.status === 'paused' || task.restartHold) {
@@ -2491,6 +2576,8 @@
         id: c.id, title: host.columnLabel(c), state: c.executor === 'chatgpt-web' ? webTaskState(task) : cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [], important: sessionHigh(c),
+        ...(isSubCaptain(c) ? { subCaptain: true, children: childrenOf(c).length, unread: (state()?.subReceipts?.[c.id] || []).length } : {}),
+        ...(subCaptainOf(c) ? { parent: c.subCaptainId } : {}),
       };
     });
   }
@@ -2578,9 +2665,72 @@
     host.flushConfig?.();
     return record;
   }
+  // What a sub-captain's control token reaches; targeted ones only on its own children.
+  const SUB_ACTIONS = ['create-child', 'main-receipts', 'main-ledger', 'main-tell', 'main-peek', 'main-read', 'main-answer', 'main-stop', 'main-archive', 'main-receipt-listener-status'];
+  function ownChild(sub, ref) {
+    const key = String(ref || '').trim();
+    const target = findTarget(key) || archivedCrew(key);
+    if (target && target.subCaptainId === sub.id) return target;
+    // read --id <task id> fetches an undelivered instruction of one of its children
+    const mine = (id) => [...host.columns(), ...(host.config.archived || [])].some((c) => c.id === id && c.subCaptainId === sub.id);
+    if (!target && state().tasks.some((t) => t.id === key && mine(t.colId))) return null;
+    throw new Error(`「${key.slice(0, 80)}」不是你开的子会话：小队长只能管自己用 create-child 开的会话。先用 ledger 看你的子会话 id。`);
+  }
+  async function createChild(message, sub) {
+    const s = state();
+    const title = window.BoardCore.cleanText(message.title, 80).replace(/\s+/g, ' ');
+    const task = window.BoardCore.cleanText(message.task, 2_000_000);
+    if (!title || !task) throw new Error('create-child 需要 --title 和 --task。');
+    const opened = (col) => `已开子会话 ${col.id}「${host.columnLabel(col)}」，任务会在它准备好后发过去；它的回执和提问只进你的 receipts。`;
+    const existing = host.columns().find((c) => c.createdByRequestId === message.id);
+    if (existing) return { done: true, result: opened(existing) };
+    if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
+    // Same model as the sub-captain unless it names another one.
+    const agent = String(message.agent || '').trim().toLowerCase();
+    // Any terminal preset `new` offers; a web executor cannot open or answer children.
+    if (agent && (agent === 'chatgpt-web' || !Object.prototype.hasOwnProperty.call(window.BoardCore.AGENT_COMMANDS, agent))) throw new Error(`子会话不支持 --agent ${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
+    const custom = window.BoardCore.cleanText(message.command, 1000);
+    const checked = M.checkCommand(custom || (agent ? window.BoardCore.commandForAgent(agent) : sub.cmd));
+    if (checked.error) throw new Error(checked.error);
+    const cwd = window.BoardCore.cleanText(message.cwd, 1000) || sub.cwd || '';
+    const metadata = { project: sub.project || '', reviews: [], boardId: '', subCaptainId: sub.id, ...(custom ? { quotaExplicit: true } : {}) };
+    // Its own folder was trusted for it; the same folder is for its children.
+    if (sub.trustedCwd && sub.trustedCwd === sub.cwd && cwd === sub.cwd) metadata.trustedCwd = cwd;
+    const placed = await placeSession(title, checked.cmd, cwd, message.id, task, metadata);
+    if (placed.queued) return { done: true, result: `${placed.result} 开出来后它的回执和提问只进你的 receipts。` };
+    return { done: true, result: opened(placed.col) };
+  }
+  // The sub-captain's column was archived or closed (the renderer calls this after it left
+  // the deck). Its children keep running and report to the Captain from now on: their
+  // untaken receipts go to the Captain, after one notice saying who was handed back.
+  function releaseSubCrew(sub, how) {
+    const s = state();
+    if (!s || !sub || sub.subCaptain !== true) return 0;
+    const kids = host.columns().filter((c) => c.subCaptainId === sub.id);
+    [...kids, ...(host.config.archived || [])].forEach((c) => { if (c.subCaptainId === sub.id) delete c.subCaptainId; });
+    s.waitlist.forEach((w) => { if (w.metadata?.subCaptainId === sub.id) delete w.metadata.subCaptainId; });
+    // Their cards were in the sub-captain's conversation; unfinished ones show in the Captain's now.
+    s.tasks.forEach((t) => {
+      if (t.subCaptainId !== sub.id) return;
+      delete t.subCaptainId;
+      if (!CLOSED.includes(t.status) && t.gen === s.gen) window.ChatUI.addCard(s.colId, t);
+    });
+    const unread = s.subReceipts?.[sub.id] || [];
+    if (s.subReceipts) delete s.subReceipts[sub.id];
+    if (kids.length || unread.length) {
+      const name = host.columnLabel(sub);
+      s.pending.push({ taskId: 'sub-captain-' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36), colId: sub.id, title: name, ts: Date.now(), source: 'command',
+        summary: `小队长「${name}」已${how}。` + (kids.length ? `它开的 ${kids.length} 个子会话没有结束，已交回给你：${kids.map((c) => `「${host.columnLabel(c)}」(${c.id})`).join('、')}；之后它们的回执和提问直接给你。` : '')
+          + (unread.length ? `它还有 ${unread.length} 条子会话回执没取，一并转给你，紧跟在这条后面。` : '') });
+      s.pending.push(...unread);
+    }
+    save();
+    host.flushConfig?.();
+    return kids.length;
+  }
   // Resolves to the response payload, or rejects with a message for the caller.
   function handle(message, caller) {
-    return ['main-new', 'main-queue', 'main-task'].includes(message.action)
+    return ['main-new', 'main-queue', 'main-task', 'create-child'].includes(message.action)
       ? withQueue(() => handleOnce(message, caller)) : handleOnce(message, caller);
   }
   // The CLI stops waiting at its deadline and reports a timeout. Running the
@@ -2611,7 +2761,11 @@
       }
       return { done: true, result: 'Seat authentication alert recorded.', visible: host.captainColumnVisible(s.colId) };
     }
-    if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
+    const sub = s && isSubCaptain(caller) ? caller : null;
+    if (sub) {
+      if (!SUB_ACTIONS.includes(message.action)) throw new Error('小队长只能用 create-child、receipts、ledger、tell、peek、read、answer、stop、archive，以及 complete/ask/progress 向总队长汇报；其余命令只有队长能用。');
+      if (['main-tell', 'main-peek', 'main-read', 'main-answer', 'main-stop', 'main-archive'].includes(message.action)) ownChild(sub, message.to);
+    } else if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
     if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id &&
         !['main-receipt-listener-status', 'main-install-result'].includes(message.action)) {
       s.relayStartup.attempt.output = true; save();
@@ -2654,6 +2808,10 @@
         return { done: true, result: 'Installation result recorded.' };
       }
       case 'main-receipt-listener-status':
+        if (sub) {   // a sub-captain's listener is watched for its children's receipts (watchSubReceipts)
+          if (typeof message.alive === 'boolean') subListeners.set(caller.id, { alive: message.alive, at: Date.now() });
+          return { done: true };
+        }
         if (!isMain(caller) || typeof message.alive !== 'boolean') throw new Error('无效回执监听状态');
         if (listenerStatus?.colId !== caller.id) listenerReminder = false;
         listenerStatus = { colId: caller.id, alive: message.alive, at: Date.now() };
@@ -2748,7 +2906,7 @@
           t.receipt = { summary: archive ? '队长已结束终端并归档。' : '队长已请求中断当前操作。', files: [], images: [], failed: '', explicit: true, source: archive ? 'captain-archive' : 'captain-stop' };
           update(t);
         });
-        s.pending = s.pending.filter((p) => p.colId !== id);
+        dropReceipts(s, (p) => p.colId === id);
         if (col.executor === 'chatgpt-web') {
           try { await window.deck.chatgptWebCancel(id); }
           finally { if (entry) entry.webExecutorStopping = false; }
@@ -2761,7 +2919,18 @@
         const note = settled?.reason ? ' ' + settled.reason : '';
         return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。${note}` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
       }
+      case 'create-child':
+        if (!sub) throw new Error('只有队长开的小队长（new --sub-captain）可以用 create-child；队长自己用 new。');
+        return createChild(message, sub);
       case 'main-ledger': {
+        if (sub) {
+          // Its own children only: no 队长, no other sessions.
+          const mine = new Set(childrenOf(sub).map((c) => c.id));
+          const shelved = (host.config.archived || []).filter((a) => a.subCaptainId === sub.id).slice(0, 10).map((a) => `${a.id}「${host.columnLabel(a)}」`).join('、');
+          const queued = s.waitlist.filter((w) => w.metadata?.subCaptainId === sub.id).map((w) => `「${w.title}」`).join('、');
+          const rows = ledgerRows().filter((r) => mine.has(r.id)).map(({ parent, ...r }) => r);
+          return { done: true, result: (rows.length ? M.ledgerText(rows) : '你还没有开子会话。') + (shelved ? `\n已归档的子会话（tell 会先自动恢复）：${shelved}` : '') + (queued ? `\n排队等空位：${queued}` : '') };
+        }
         const archived = (host.config.archived || []).length;
         const history = M.historyText(host.config.captainHistory);
         const waiting = s.waitlist.map((w) => `${isHigh(w) ? M.PRIORITY_MARK : ''}「${w.title}」`).join('、');
@@ -2796,10 +2965,20 @@
         return { done: true, result: JSON.stringify({ acknowledged: pending.length - s.pending.length }) };
       }
       case 'main-receipts': {
-        if (nativeCaptain(mainCol()?.cmd)) throw new Error('Native Captain host owns receipt delivery; use snapshot/ack, not a consuming receipts listener.');
         // A short read belonging to a timed watcher must not consume anything
         // if it was queued while the renderer was unavailable and has expired.
-        if (message.wait && message.expiresAt !== undefined && (!Number.isFinite(message.expiresAt) || Date.now() >= message.expiresAt)) return { done: true, result: '' };
+        const expired = message.wait && message.expiresAt !== undefined && (!Number.isFinite(message.expiresAt) || Date.now() >= message.expiresAt);
+        if (sub) {
+          // The sub-captain's children's receipts: handed over once, like the Captain's.
+          const queue = s.subReceipts?.[sub.id] || [];
+          if (expired || !queue.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
+          s.subReceipts[sub.id] = [];
+          save();
+          host.flushConfig?.();
+          return { done: true, result: M.receiptsForModel(queue) };
+        }
+        if (nativeCaptain(mainCol()?.cmd)) throw new Error('Native Captain host owns receipt delivery; use snapshot/ack, not a consuming receipts listener.');
+        if (expired) return { done: true, result: '' };
         // Exactly one listener. A second one in the same terminal (hung again after
         // /clear, or by mistake) takes over; the older one is told to leave on its
         // next poll. Who is newer is the order this process first saw each watcher,
@@ -2873,6 +3052,11 @@
         }
         const metadata = { project, reviews, boardId: typeof message.boardId === 'string' ? message.boardId : '' };
         if (message.priority !== undefined && (!['high', 'normal'].includes(message.priority) || !isMain(caller))) throw new Error('--priority 只能是 high 或 normal，且只有队长可以标。');
+        if (message.subCaptain !== undefined) {
+          if (message.subCaptain !== true || !isMain(caller)) throw new Error('--sub-captain 只有队长可以用。');
+          if (!project) throw new Error('--sub-captain 需要 --project "项目名"：小队长按项目统筹一摊活。');
+          metadata.subCaptain = true;
+        }
         if (metadata.boardId && reviews.length) {
           const card = await findCard(metadata.boardId);
           if (!card) throw new Error('找不到卡片。');
@@ -2898,6 +3082,7 @@
           metadata.executor = 'chatgpt-web';
           metadata.webMode = message.webMode || 'chat';
         } else if (message.webMode !== undefined) throw new Error('--web-mode 仅用于 chatgpt-web。');
+        if (metadata.subCaptain && metadata.executor === 'chatgpt-web') throw new Error('小队长要在终端里开子会话、收回执，不能用 chatgpt-web。');
         const custom = window.BoardCore.cleanText(message.command, 1000);
         const explicitCommand = !!custom;
         if (explicitCommand) metadata.quotaExplicit = true;
@@ -2949,7 +3134,8 @@
         // Past the limit, behind work already waiting, at quota, or under critical memory: queue it.
         // placeSession applies same-tier fallback unless the command was named with --command.
         refuseLate(message);   // the checks above wait on the board and the seat list
-        const placed = await placeSession(title, cmd, cwd, message.id, task, metadata, prior);
+        // A sub-captain gets its rules with the task itself, so a restart resumes them too.
+        const placed = await placeSession(title, cmd, cwd, message.id, metadata.subCaptain ? task + '\n\n' + M.subCaptainBrief(host.platform) : task, metadata, prior);
         if (prior) cancelWaiting((w) => w === prior, '队长已换命令/模型，替换旧排队。');
         if (placed.queued) {
           return { done: true, result: placed.result };
@@ -3049,6 +3235,8 @@
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onPower, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
     isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice, automation,
+    // 小队长: the renderer calls releaseSubCrew(col, '归档'|'关掉') once a sub-captain's column left the deck
+    releaseSubCrew,
     batteryReadout, setBattery,
     // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click
     isPriority: sessionHigh, isHigh, setPriority: (id, level) => setPriority(id, level, true),

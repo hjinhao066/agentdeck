@@ -57,7 +57,8 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   session output, screenshots containing user data, keys, or installed bundles.
 - Managed terminal tokens provide app-level routing, not an OS sandbox against
   programs running as the same user. Never inherit control tokens into manual columns
-  (the one exception is the 队长 column, which the user creates explicitly).
+  (the exceptions are the 队长 column, which the user creates explicitly, and a 小队长
+  the 队长 opens with `new --sub-captain`, whose token is limited to its own children).
 - Chat view: the xterm of a chat-mode column stays mounted (hidden, never
   `display:none`) so PTY size, status dots and notifications keep working. Bubbles
   hold only the user prompt and the agent's final reply. Left/right swipe between
@@ -120,9 +121,13 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   a protected row pinned above the folders (selecting it shows its conversation);
   that row is never dragged, filed into a folder, archived or deleted like an
   ordinary session, and the top 队长 entry stays for creating/jumping. Its terminal is
-  the only manual column spawned with a control token; `main-*` board actions are
-  accepted only from that column. Columns it drives never get a control token;
-  every column has a separate capability restricted to submitting its own
+  the only manual column spawned with a full control token; `main-*` board actions are
+  accepted only from that column. Columns it drives never get a control token, except a
+  小队长 it opens with `new --sub-captain` (`docs/sub-captain.md`): that token reaches only
+  `MainSession`'s SUB_ACTIONS, and only on sessions whose `subCaptainId` is that 小队长.
+  Its children's receipts wait in `mainSession.subReceipts[id]`, never in the 队长's pending;
+  archiving or closing it never ends a child, it hands them back (`releaseSubCrew`).
+  Every column has a separate capability restricted to submitting its own
   complete/ask/progress commands. Nothing new
   is exposed to the page: the existing board request channel carries it.
 - 自动回执入口 (`automation-core.js`, `docs/automation-receipt.md`): the only door for scheduled
