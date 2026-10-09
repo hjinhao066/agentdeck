@@ -197,7 +197,7 @@ async function run() {
     await peer.call('sync'); await mac.call('sync');
     // The client can reseed an unattempted operation before sending. Replay the
     // identifier actually acknowledged by the hub, rather than the queued one.
-    operation.opId = Object.keys(store.data.ops).find((id) => !priorOps.has(id) && store.data.ops[id].status === 409 && store.data.ops[id].body.card.id === card.id);
+    operation.opId = Object.keys(store.data.ops).find((id) => !priorOps.has(id) && store.data.ops[id].status === 409 && store.data.ops[id].body.cardId === card.id);
     assert.ok(operation.opId, 'hub retained the applied conflict operation');
     for (const side of [mac, peer]) {
       const current = (await side.call('read')).cards.find((item) => item.id === card.id);
