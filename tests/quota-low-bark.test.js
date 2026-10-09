@@ -137,10 +137,10 @@ test('bound OAuth samples use the same thirty-minute freshness as quota summarie
 });
 test('the alert names the seat by the account signed in behind it, when that is known', async () => {
   const h = harness(); h.sample(1);
-  h.config.quotas['Claude:cn'].account = 'hjinhao066us@example.com';
+  h.config.quotas['Claude:cn'].account = 'taylor0421us@example.com';
   h.sample(1, { id: 'us' });   // no account remembered: the seat's own name, as before
   h.config.quotas['Claude:us'].account = 'j***@example.com';   // a masked address from an older version is not a name
   await h.check();
-  assert.match(h.calls.find((c) => c.dedupeKey === 'quota-low:cn').message, /^Claude hjinhao066us（CN 席位）5 小时额度快用完：剩余 1%。/);
+  assert.match(h.calls.find((c) => c.dedupeKey === 'quota-low:cn').message, /^Claude taylor0421us（CN 席位）5 小时额度快用完：剩余 1%。/);
   assert.match(h.calls.find((c) => c.dedupeKey === 'quota-low:us').message, /^Claude 🇺🇸 US（US 席位）5 小时额度快用完/);
 });

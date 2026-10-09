@@ -311,7 +311,7 @@
   }
 
   // An account name in a narrow row. Cut for width, it keeps its end (the part that tells
-  // hjinhao066 from hjinhao066us apart): the ellipsis goes on the left (.seat-acct).
+  // taylor0421 from taylor0421us apart): the ellipsis goes on the left (.seat-acct).
   function accountLabel(text, title) {
     const label = document.createElement('span'), inner = document.createElement('bdi');
     label.className = 'seat-acct';

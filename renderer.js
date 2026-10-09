@@ -64,6 +64,7 @@ const ICONS = {
   file: S('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>'),
   eraser: S('<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>'),
   crown: S('<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>'),
+  gem: S('<path d="M6 3h12l4 6-10 13L2 9z"/>'),
   ban: S('<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>'),
   share: S('<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>'),
   diff: S('<rect x="4" y="3" width="16" height="18" rx="2"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/><line x1="9" y1="17" x2="15" y2="17"/>'),
@@ -3556,7 +3557,7 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
           done: !!turn.done, interrupted: !!turn.interrupted })) } : { turns: [], status: 'unavailable' };
     } else if (op === 'quota') {
       // The same store and summaries as the sidebar quota rows; nothing is sampled for the phone.
-      result = { version: env.version, rows: QuotaCore.mobile(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId(),
+      result = { version: env.version, rows: QuotaCore.mobile(config.quotas, Date.now(), ClaudeSeats.described(config.claudeSeats), claudeCaptainSeatId(),
         columns.find((c) => c.id === config.mainSession?.colId)?.agentProvider) };
     } else if (op === 'captain') {
       MainSession.sendMessage(input?.message, input?.images);
@@ -4076,7 +4077,8 @@ function renderQuotaBar() {
     // "5h / 7d" are named once, in a header row that shares the rows' columns.
     if (!bar.querySelector('.quota-cols')) {
       const cols = el('span', 'quota-cols'); cols.setAttribute('aria-hidden', 'true');
-      cols.append(el('span', ''), el('span', 'quota-col', '5h'), el('span', 'quota-col', '7d'));
+      // Named once for every row: the numbers below are what is left, not what is used.
+      cols.append(el('span', ''), el('span', 'quota-col', '5h 剩余'), el('span', 'quota-col', '7d 剩余'));
       bar.prepend(cols);
     }
     for (const item of [...bar.querySelectorAll('.quota-item')]) if (!items.some((q) => q.key === item.dataset.quotaKey)) item.remove();
@@ -4132,14 +4134,15 @@ function renderQuotaBar() {
       const captain = seat ? seat.id === captainSeatId : !!captainProvider && captainProvider === provider;
       const name = item.querySelector('.quota-name');
       // The row 队长 is on leads with the crown instead of the provider mark, so the name keeps its width.
-      const lead = item.querySelector('.quota-icon');
-      if (lead.classList.contains('quota-captain') !== captain) {
+      // The Max plan is a small gem on the corner of that icon: it follows the account, whichever
+      // directory it is signed in to, and takes no width from the name. The row's detail says 套餐.
+      const lead = item.querySelector('.quota-icon'), paid = !!(seat && q.planMark), leadKey = `${captain}:${paid}`;
+      if (lead.dataset.lead !== leadKey) {
+        lead.dataset.lead = leadKey;
         lead.classList.toggle('quota-captain', captain);
-        lead.innerHTML = captain ? ICONS.crown : AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
+        lead.innerHTML = (captain ? ICONS.crown : AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider]) + (paid ? `<span class="quota-plan">${ICONS.gem}</span>` : '');
       }
-      // The paid plan follows the account, whichever directory it is signed in to. Full address,
-      // plan, seat code and directory are in the row's own detail (no second native tooltip).
-      fill(name, seat ? [AgentInfo.accountLabel(q.accountLabel), ...(q.planMark ? [el('span', 'quota-plan', q.planMark)] : [])] : [NAMES[provider]]);
+      fill(name, seat ? [AgentInfo.accountLabel(q.accountLabel)] : [NAMES[provider]]);
       const state = q.authStatus === 'logged-out' ? 'danger' : q.out ? 'exhausted' : q.state;
       // Signed in to an account other than the one this seat is set to hold.
       const wrong = seat && ClaudeSeats.accountCheck(seat.id)?.state === 'mismatch' ? ClaudeSeats.accountCheck(seat.id).text : '';
@@ -4198,8 +4201,10 @@ function renderQuotaBar() {
       }
       const sampled = q.sampledAt ? `采样 ${Math.abs(q.sampledAt - now) > 86400000 ? `${pad(new Date(q.sampledAt).getMonth() + 1)}-${pad(new Date(q.sampledAt).getDate())} ` : ''}${hm(new Date(q.sampledAt))}${q.stale ? '（数据已旧）' : ''}` : '暂无采样';
       const meta = el('span', `qt-meta${q.stale ? ' stale' : ''}`);
-      for (const [k, v] of [['账号', q.account || '未识别'], q.plan && ['套餐', q.plan], seat && ['席位', `${q.seatCode}${captain ? '（队长在用）' : ''}`],
-        seat && ['目录', seat.configDir], ['来源', [q.source || '暂无', sampled].join(' · ')], ['可信度', q.confidence || '未知']].filter(Boolean)) meta.append(el('span', 'qt-k', k), el('span', 'qt-v', v));
+      const planValue = el('span', 'qt-v', q.plan);
+      if (q.planMark) { const gem = el('span', 'qt-plan-mark'); gem.innerHTML = ICONS.gem; planValue.prepend(gem); }   // what the gem on the row means
+      for (const [k, v] of [['账号', q.account || '未识别'], q.plan && ['套餐', planValue], seat && ['席位', `${q.seatCode}${captain ? '（队长在用）' : ''}`],
+        seat && ['目录', seat.configDir], ['来源', [q.source || '暂无', sampled].join(' · ')], ['可信度', q.confidence || '未知']].filter(Boolean)) meta.append(el('span', 'qt-k', k), typeof v === 'string' ? el('span', 'qt-v', v) : v);
       const copyFocused = document.activeElement?.classList.contains('quota-login-copy') && tip.contains(document.activeElement);
       fill(tip, [head, ...lines, meta]);
       if (copyFocused) {

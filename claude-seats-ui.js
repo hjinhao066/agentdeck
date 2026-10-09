@@ -543,7 +543,8 @@
       seats: choices.map((choice) => {
         const codex = choice.id === P.CODEX_ID, seat = codex ? null : host.config.claudeSeats.find((s) => s.id === choice.id);
         const row = rows.find((r) => codex ? r.provider === 'Codex' : r.key === window.QuotaCore.seatKey(choice.id));
-        return { ...choice, provider: codex ? 'Codex' : 'Claude', name: codex ? codexName() : seat?.name || choice.id,
+        // The phone lists seats by account name (the part before the @); the address itself stays masked.
+        return { ...choice, provider: codex ? 'Codex' : 'Claude', name: codex ? codexName() : seat ? seatName(choice.id) : choice.id,
           account: codex ? row?.account || '' : seats.find((s) => s.id === choice.id)?.maskedEmail || '', cells: row?.cells || [] };
       }) };
   }
@@ -557,7 +558,7 @@
     if (!choice) throw new Error('这台电脑上没有这个账号');
     if (!choice.selectable) throw new Error({ current: '队长已经在这个账号上了', login: '这个账号还没登录，要回电脑上登录',
       onboarding: '这个账号还停在首次启动的引导，要回电脑上处理', exhausted: '这个账号的额度已经用完', low: '这个账号的额度快用完了' }[choice.reason] || '这个账号现在不能用');
-    const name = (id) => id === P.CODEX_ID ? codexName() : host.config.claudeSeats.find((s) => s.id === id)?.name || id;
+    const name = (id) => id === P.CODEX_ID ? codexName() : seatName(id);
     const job = mobileJob = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 10), status: 'switching', fromId: from.id, fromName: name(from.id),
       targetId: choice.id, targetName: name(choice.id), startedAt: Date.now(), finishedAt: null, error: '' };
     const options = {};

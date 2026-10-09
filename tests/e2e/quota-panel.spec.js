@@ -12,8 +12,8 @@ test.beforeAll(async () => {
   // Who is signed in behind each seat directory. They do not line up with the seat names on purpose:
   // the Max account sits in the CN directory, and nobody is signed in to US2.
   const home = path.join(profile, 'seats-home');
-  for (const [dir, meta, account] of [['.claude-cn', '.claude-cn/.claude.json', { emailAddress: 'paid.account20@example.test', organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x' }],
-    ['.claude', '.claude.json', { emailAddress: 'second.account@example.test', organizationType: 'claude_pro', organizationRateLimitTier: 'default_claude_ai' }]]) {
+  for (const [dir, meta, account] of [['.claude-cn', '.claude-cn/.claude.json', { emailAddress: 'nhunhao088us@example.test', organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x' }],
+    ['.claude', '.claude.json', { emailAddress: 'sam.h.second@example.test', organizationType: 'claude_pro', organizationRateLimitTier: 'default_claude_ai' }]]) {
     fs.mkdirSync(path.join(home, dir), { recursive: true });
     fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}');   // stand-in credential existence only
     fs.writeFileSync(path.join(home, meta), JSON.stringify({ oauthAccount: account }));
@@ -50,7 +50,8 @@ test('compact quota rows: header once, used-up / low / no-data cells, brand icon
   });
   // 1. "5h" / "7d" appear once, in the header; rows carry only values.
   await expect(page.locator('#quotaBar .quota-cols')).toHaveCount(1);
-  await expect(page.locator('#quotaBar .quota-cols')).toHaveText('5h7d');
+  // The header says what the numbers are: what is left, not what is used.
+  await expect(page.locator('#quotaBar .quota-cols')).toHaveText('5h 剩余7d 剩余');
   for (const text of await page.locator('#quotaBar .quota-item .quota-values').allInnerTexts()) expect(text).not.toMatch(/5h|7d/);
   // Normal and low cells: % + reset time over a bar; ≤20% is yellow, ≤10% red.
   await expect(cell('Claude:us', '5h').locator('.quota-pct')).toHaveText('88%');
@@ -75,15 +76,19 @@ test('compact quota rows: header once, used-up / low / no-data cells, brand icon
   }
   await expect(cell('Cursor', '5h')).toHaveText('正常');
   // Claude rows go by the account signed in behind the seat (the part before the @), never by the
-  // fixed CN / US / US2 or a flag. The Max mark follows the account; the crown leads 队长's row.
-  await expect(row('Claude:cn').locator('.seat-acct')).toHaveText('paid.account20');
-  await expect(row('Claude:cn').locator('.quota-plan')).toHaveText('Max');
-  await expect(row('Claude:us').locator('.quota-name')).toHaveText('second.account');
+  // fixed CN / US / US2 or a flag. The Max gem follows the account, on the corner of the row's lead
+  // icon so it takes no width from the name; the crown leads 队长's row.
+  await expect(row('Claude:cn').locator('.seat-acct')).toHaveText('nhunhao088us');
+  await expect(row('Claude:cn').locator('.quota-name')).toHaveText('nhunhao088us');
+  await expect(row('Claude:cn').locator('.quota-icon .quota-plan svg')).toBeVisible();
+  await expect(row('Claude:us').locator('.quota-plan')).toHaveCount(0);
+  expect(await row('Claude:cn').locator('.quota-plan').evaluate((e) => { const r = e.getBoundingClientRect(), n = e.closest('.quota-item').querySelector('.seat-acct').getBoundingClientRect(); return r.right <= n.left + 0.5; })).toBe(true);   // never over the name
+  await expect(row('Claude:us').locator('.quota-name')).toHaveText('sam.h.second');
   await expect(row('Claude:us2').locator('.quota-name')).toHaveText('未登录');
   await expect(page.locator('#quotaBar .quota-name')).not.toContainText([/🇨🇳|🇺🇸|CN|US/]);
   await expect(row('Claude:us').locator('.quota-icon.quota-captain svg')).toBeVisible();
   await expect(row('Claude:cn').locator('.quota-captain')).toHaveCount(0);
-  await expect(row('Claude:cn').locator('.quota-icon svg')).toBeVisible();   // its provider mark
+  await expect(row('Claude:cn').locator('.quota-icon > svg')).toBeVisible();   // its provider mark
   // A long name never pushes a value out: whatever the width, it is the name that gives way, from the left.
   for (const width of [200, 252, 320]) {
     await page.evaluate((w) => { config.navWidth = w; applyNavWidth(); renderQuotaBar(); }, width);
@@ -99,7 +104,11 @@ test('compact quota rows: header once, used-up / low / no-data cells, brand icon
     const paid = fit.find((r) => r.key === 'Claude:cn');
     expect(paid.dir).toBe('rtl');                       // cut from the left: the end of the name stays
     expect(paid.acct, JSON.stringify({ width, paid })).toBeGreaterThanOrEqual(36);   // room for the last letters of the name
-    if (width >= 320) expect(fit.some((r) => r.cut), JSON.stringify({ width, fit })).toBe(false);   // wide enough: nothing is cut
+    // At the default width and wider, a twelve-letter account name is whole, Max gem and all.
+    if (width >= 252) {
+      expect(fit.some((r) => r.cut), JSON.stringify({ width, fit })).toBe(false);
+      expect(await row('Claude:cn').locator('.seat-acct').evaluate((e) => e.firstElementChild.getBoundingClientRect().width <= e.getBoundingClientRect().width + 0.01), `whole at ${width}`).toBe(true);
+    }
   }
   await page.evaluate(() => { config.navWidth = 252; applyNavWidth(); renderQuotaBar(); });
   for (const [key, name] of [['Codex', 'ChatGPT'], ['Cursor', 'Grok 4.7'], ['Antigravity', 'Gemini']]) await expect(row(key).locator('.quota-name')).toHaveText(name);
@@ -138,12 +147,12 @@ test('compact quota rows: header once, used-up / low / no-data cells, brand icon
   // 3. Hover / keyboard focus shows the full explanation; the row is labelled and described by it.
   const tip = row('Claude:cn').getByRole('tooltip');
   await expect(row('Claude:cn')).toHaveAttribute('aria-describedby', 'quota-tip-Claude-cn');
-  await expect(row('Claude:cn')).toHaveAttribute('aria-label', /^paid\.account20 Max 20x：已用尽，.*5 小时剩余 0%.*每周剩余 64%/);
+  await expect(row('Claude:cn')).toHaveAttribute('aria-label', /^nhunhao088us Max 20x：已用尽，.*5 小时剩余 0%.*每周剩余 64%/);
   await row('Claude:cn').focus();
   await expect(tip).toBeVisible();
   // The detail carries what the row leaves out: the whole address, the plan, the seat code and its directory.
-  await expect(tip.locator('.qt-name')).toHaveText('paid.account20');
-  for (const text of ['账号', 'paid.account20@example.test', '套餐', 'Max 20x', '席位', 'cn', '目录', '~/.claude-cn', '5 小时', '已用尽', '每周', '剩余 64%', '来源', 'Claude 席位用量（/usage）', '采样', '可信度', '高（按账号 ID 归属）']) await expect(tip).toContainText(text);
+  await expect(tip.locator('.qt-name')).toHaveText('nhunhao088us');
+  for (const text of ['账号', 'nhunhao088us@example.test', '套餐', 'Max 20x', '席位', 'cn', '目录', '~/.claude-cn', '5 小时', '已用尽', '每周', '剩余 64%', '来源', 'Claude 席位用量（/usage）', '采样', '可信度', '高（按账号 ID 归属）']) await expect(tip).toContainText(text);
   await expect(tip).toContainText(/每周剩余 64%\d\d-\d\d 周[日一二三四五六] \d\d:\d\d（3 天后）重置/);
   await expect(row('Antigravity').getByRole('tooltip', { includeHidden: true })).toContainText(/已用尽，预计 \d\d:\d\d（1 小时 39 分后）恢复/);
   await expect(row('Cursor').getByRole('tooltip', { includeHidden: true })).toContainText('未见用尽，此来源不提供百分比');

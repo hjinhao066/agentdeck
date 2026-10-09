@@ -212,13 +212,13 @@ test('a confirmed logout is rechecked every 30 seconds for 10 minutes, then ever
 test('a lost-login alert names the account that was signed in behind the seat', () => {
   const alerts = [];
   const monitor = createSeatAuthMonitor({ home: '/home/test', platform: 'darwin', saveState: () => {}, onAlert: (a) => alerts.push(a) });
-  const seat = { id: 'us2', name: 'US2', configDir: '~/.claude-us2', account: 'jinhao.h.sub@example.com' };
+  const seat = { id: 'us2', name: 'US2', configDir: '~/.claude-us2', account: 'taylor.h.sub@example.com' };
   let at = 1_000_000;
   monitor.observe(seat, { provider: 'Claude', at, authStatus: 'logged-in' });
   monitor.observe(seat, { provider: 'Claude', at: at += 1000, authStatus: 'logged-out' });
   monitor.observe(seat, { provider: 'Claude', at: at += CONFIRM_MS, authStatus: 'logged-out' });
   assert.equal(alerts.length, 1);
-  assert.match(alerts[0].message, /^Claude jinhao\.h\.sub（us2）席位掉登录了/);
+  assert.match(alerts[0].message, /^Claude taylor\.h\.sub（us2）席位掉登录了/);
   // No account known: the seat's own name, as before.
   const plain = [];
   const other = createSeatAuthMonitor({ home: '/home/test', platform: 'darwin', saveState: () => {}, onAlert: (a) => plain.push(a) });

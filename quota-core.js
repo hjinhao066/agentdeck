@@ -401,10 +401,12 @@
     const shown = seatShown(seat, entry), seatName = shown ? shown.label : seat ? seat.name : '';
     // The row's own fields: account name, full address, plan, and the seat code for the hover text.
     const who = { accountLabel: shown ? shown.label : seat ? seat.name : '', plan: shown?.plan || '', planMark: shown?.mark || '', seatCode: shown?.code || '', seatTitle: shown?.title || '',
-      account: shown?.email || (seat?.info ? '' : entry.account || '') };
+      account: shown?.email || (seat?.info ? '' : entry.account || ''), storedAccount: entry.account || '' };
     const seatLine = seat ? `席位：${shown ? shown.code : `${seat.name}（${seat.id}）`}` : '';
     // Text for 队长: a row without a recognised account still says which seat it is.
     const head = seat ? 'Claude / ' + (shown && !shown.email ? `${shown.label}（席位 ${shown.code}）` : seatName) : NAMES[provider];
+    // The headline number of a text line is the least that is left; it carries the word too.
+    const left = (value) => /%$/.test(value) ? '剩 ' + value : value;
     if (entry.auth?.status === 'logged-out') {
       const name = seat ? seatName + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '';
       return { provider, authStatus: 'logged-out', loginCommand: entry.auth.loginCommand || '', state: 'danger', label: '未登录', displayLabel: '未登录', sampleLabel: '', statusText: '未登录',
@@ -435,7 +437,8 @@
       const isWeekly = w.label === '每周';
       const isBlocked = showBlock && (w.exhausted && w.resetAt > now || !isWeekly && !!blocked && !windows.some((v) => v.exhausted && v.label === '每周'));
       const reset = showBlock && !isWeekly && blocked ? recovery || w.resetAt : w.resetAt;
-      return `${isWeekly ? '7d' : '5h'} ${isBlocked ? '已用尽' : w.remaining === 0 && !w.exhausted ? '<0.1%' : `${w.remaining}%`} ↻${reset ? clock(reset, isWeekly) : w.resetText || '未知'}`;
+      // Every percentage is what is left, and says so: a bare "98%" reads as "98% used".
+      return `${isWeekly ? '7d' : '5h'} ${isBlocked ? '已用尽' : w.remaining === 0 && !w.exhausted ? '剩 <0.1%' : `剩 ${w.remaining}%`} ↻${reset ? clock(reset, isWeekly) : w.resetText || '未知'}`;
     };
     const details = windows.map((w) => provider === 'Claude' ? claudeWindow(w) : `${w.label}剩余 ${w.remaining === 0 && !w.exhausted ? '<0.1' : w.remaining}%；重置 ${w.resetAt ? new Date(w.resetAt).toLocaleString() : w.resetText || '未知'}`);
     details.unshift(`模型：${entry.model || ({ Claude: 'Claude（账号共享额度）', Codex: 'Codex（账号共享额度）', Cursor: 'Grok 4.7', Antigravity: 'Gemini（共享分组）' }[provider])}；账号：${who.account ? who.account + (who.plan ? `（${who.plan}）` : '') : seat ? '未识别（此席位）' : '未识别（本机当前登录）'}`);
@@ -479,7 +482,7 @@
     const shortRemaining = fiveHour ?? weekly;
     const expired = sample && trusted && (!fresh || sample.windows?.some((w) => w.resetAt && w.resetAt <= now));
     const shortText = shortRemaining === null ? (out ? '已用尽' : expired ? '过期' : statusText) : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
-    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure ? entry.officialStatus.failures || 1 : 0, cells, ...who, source: evidence?.source || '', confidence: confidence || '', name: seat ? seatName + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${head}：${label}\n${details.join('\n')}` };
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure ? entry.officialStatus.failures || 1 : 0, cells, ...who, source: evidence?.source || '', confidence: confidence || '', name: seat ? seatName + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${head}：${left(label)}\n${details.join('\n')}` };
   }
   const LAUNCH_WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
   function commandIdentity(command) {
@@ -595,15 +598,17 @@
     return items(seats).map(({ provider, seat, key }) => {
       const q = summary(store || {}, provider, now, seat, captainSeatId);
       const named = seat && seat.id !== 'default';
-      const flag = named ? seat.name.match(/\p{Regional_Indicator}{2}/u)?.[0] || '' : '';
-      const plain = named ? seat.name.replace(flag, '').trim() || seat.id.toUpperCase() : '';
+      // A seat goes by its account name on the phone too: only the part before the @, and a
+      // seat without a recognised account also says which seat it is. No flag, no fixed seat name.
+      const flag = '';
+      const plain = named ? (S.accountName(q.account) ? q.accountLabel : `${q.accountLabel}（${q.seatCode}）`) : '';
       const status = q.out ? 'out' : q.cells.length ? (q.stale ? 'stale' : q.state) : q.state === 'normal' ? 'nodigits' : q.sampledAt ? 'expired' : 'unknown';
       return { key, provider,
-        name: seat ? (named ? `Claude ${seat.name}` : 'Claude') : { Codex: 'Codex', Cursor: 'Cursor Grok', Antigravity: 'Gemini' }[provider],
+        name: seat ? (named ? `Claude ${plain}` : 'Claude') : { Codex: 'Codex', Cursor: 'Cursor Grok', Antigravity: 'Gemini' }[provider],
         short: seat ? plain || 'Claude' : { Codex: 'Codex', Cursor: 'Cursor', Antigravity: 'Gemini' }[provider], flag,
         captain: seat ? seat.id === captainSeatId : !!captainProvider && captainProvider === provider,
         status, failed: q.failures > 0, cells: q.cells.map((c) => ({ key: c.key, remaining: c.remaining, out: !!c.out, resetAt: c.resetAt || null })),
-        recoveryAt: q.recoveryAt || null, sampledAt: q.sampledAt || null, account: maskAccount(q.account), source: q.source };
+        recoveryAt: q.recoveryAt || null, sampledAt: q.sampledAt || null, account: maskAccount(q.account || q.storedAccount), source: q.source };
     });
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }

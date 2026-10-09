@@ -55,9 +55,11 @@ function imageKind(data) {
 // Quota rows are rebuilt field by field: whatever the desktop hands over, the
 // phone gets display values only, and an account is always h***@example.com.
 const QUOTA_STATUS = ['out', 'stale', 'normal', 'warning', 'danger', 'nodigits', 'expired', 'unknown'];
+// A seat's name is its account name, the part before the @: a whole address never goes to the phone.
+const nameOnly = (value) => value.replace(/@[^\s，；（）()]*/g, '');
 function quotaView(data, now) {
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
-  const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
+  const text = (value, max) => typeof value === 'string' ? nameOnly(value.replace(/[\x00-\x1f\x7f]/g, ' ')).slice(0, max) : '';
   const rows = (Array.isArray(data?.rows) ? data.rows : []).slice(0, 16).filter((row) => row && typeof row === 'object').map((row) => ({
     key: text(row.key, 60), provider: text(row.provider, 20), name: text(row.name, 100), short: text(row.short, 40), flag: text(row.flag, 8),
     captain: row.captain === true,
@@ -109,7 +111,7 @@ function batteryView(data) {
 
 function relayView(data, now) {
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
-  const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
+  const text = (value, max) => typeof value === 'string' ? nameOnly(value.replace(/[\x00-\x1f\x7f]/g, ' ')).slice(0, max) : '';
   const id = (value) => typeof value === 'string' && SEAT_ID.test(value) ? value : '';
   const seats = (Array.isArray(data?.seats) ? data.seats : []).slice(0, 12).filter((seat) => seat && id(seat.id)).map((seat) => {
     const reason = RELAY_REASONS.includes(seat.reason) ? seat.reason : 'unknown';
@@ -725,4 +727,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, batteryView, relayView, attentionView, attentionRequest, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };
+module.exports = { MobileWebServer, batteryView, quotaView, relayView, attentionView, attentionRequest, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };

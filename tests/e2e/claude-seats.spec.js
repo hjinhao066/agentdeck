@@ -431,9 +431,9 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
     { key: 'fiveHour', remaining: 100, resetText: 'in 1h' }, { key: 'weekly', remaining: 100, resetText: 'in 4d' },
   ] });
   await page.evaluate(() => ClaudeSeats.refresh());
-  // The row now goes by that account, with the plan mark; the other accounts carry none.
+  // The row now goes by that account, with the Max gem; the other accounts carry none.
   await expect(row.locator('.seat-acct')).toHaveText('paid.account2');
-  await expect(row.locator('.quota-plan')).toHaveText('Max');
+  await expect(row.locator('.quota-icon .quota-plan svg')).toBeVisible();   // the Max gem, on the row's lead icon
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-plan')).toHaveCount(0);
   await expect(row.getByRole('tooltip', { includeHidden: true })).toContainText(/账号paid\.account2@example\.test.*套餐Max 20x.*席位us2.*目录~\/\.claude-us2/);
   await expect(row).toHaveAttribute('aria-label', /^paid\.account2 Max 20x：/);
@@ -471,9 +471,10 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
   await idle(cn);
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us2'))).toBe(true);
   await expect(page.locator('.captain-item .agent-seat-label')).toHaveText('paid.account2');
-  // The row 队长 is on leads with the crown; the plan mark stays with the account.
+  // The row 队长 is on leads with the crown; the Max gem stays with the account.
   await expect(row.locator('.quota-icon.quota-captain svg')).toBeVisible();
-  await expect(row.locator('.quota-name')).toHaveText('paid.account2Max');
+  await expect(row.locator('.quota-name')).toHaveText('paid.account2');
+  await expect(row.locator('.quota-icon.quota-captain .quota-plan svg')).toBeVisible();
   await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-captain')).toHaveCount(0);
   const id = await page.evaluate(() => config.mainSession.colId);
   await expect.poll(() => capture('seat-env.jsonl')).toContain(id);

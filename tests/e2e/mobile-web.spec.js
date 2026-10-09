@@ -15,6 +15,10 @@ const captures = () => {
 
 async function launch(extraTurns = [], before = () => {}) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-mobile-e2e-'));
+  // The account recorded in the CN seat directory (no credentials: the seat is not signed in, the
+  // record alone names it). A real-length name, so the phone layout is checked with one.
+  fs.mkdirSync(path.join(profile, 'seats-home', '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'nhunhao088us@example.test', accountUuid: 'mobile-e2e-cn' } }));
   // Keep the browser's origin stable across an isolated app restart.
   const reservation = net.createServer();
   await new Promise((resolve) => reservation.listen(0, '127.0.0.1', resolve));
@@ -378,15 +382,17 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
 
 // Seeds the desktop's own quota store, so the phone reads what the sidebar shows.
 async function seedQuota(state) {
-  await desktop.evaluate((kind) => {
+  await desktop.evaluate(async (kind) => {
     const now = Date.now(), old = now - 45 * 60000;
+    // The numbers belong to the account behind each seat, so they carry that account's own key.
+    const infos = await ClaudeSeats.refresh(), key = (id) => infos.find((s) => s.id === id)?.accountKey || id + '-account';
     config.claudeSeats = ClaudeSeatsCore.normalize([{ id: 'cn', name: '🇨🇳 CN', configDir: '~/.claude' }, { id: 'us', name: '🇺🇸 US', configDir: '~/.claude-us' }]);
     columns.find((c) => c.isMain).agentProvider = 'Claude';
     for (const key of Object.keys(config.quotas)) delete config.quotas[key];
     const official = (id, dir, at, five, week, account) => QuotaCore.observe(config.quotas, { ...QuotaCore.cacheClaude({ source: QuotaCore.CLAUDE_OAUTH_SOURCE, windows: [
       { key: 'fiveHour', remaining: five, resetText: new Date(now + 2 * 3600000 + 600000).toISOString() }, { key: 'weekly', remaining: week, resetText: new Date(now + 3 * 86400000).toISOString() }] }, at),
-      seatId: id, configDir: dir, accountBound: true, accountKey: id + '-account', credentialKey: id + '-cred', account }, now);
-    official('cn', '~/.claude', kind === 'stale' ? old : now, kind === 'low' ? 8 : kind === 'out' ? 0 : 26, 61, 'hjinhao@gmail.com');
+      seatId: id, configDir: dir, accountBound: true, accountKey: key(id), credentialKey: id + '-cred', account }, now);
+    official('cn', '~/.claude', kind === 'stale' ? old : now, kind === 'low' ? 8 : kind === 'out' ? 0 : 26, 61, 'nhunhao088us@example.test');
     official('us', '~/.claude-us', now, 0, 40, 'us***@example.com');
     QuotaCore.observe(config.quotas, { ...QuotaCore.screen('Codex', 'Weekly limit: 8% left (resets 10:00)', [], now), account: 'co***@example.com' }, now);
     // A screen sample from before the app was last closed: too old to trust its numbers.
@@ -407,16 +413,19 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   const response = await mobile.request.get(url + '/api/quota');
   expect(response.status()).toBe(200);
   const text = await response.text();
-  expect(text).toContain('h***@gmail.com');
-  expect(text).not.toMatch(/hjinhao|\.claude|account"?:\s*"[^"*]*@|cn-account|cn-cred|configDir|token/);
+  // The phone gets the account name (the part before the @) and a masked address, never the whole address.
+  expect(text).toContain('"name":"Claude nhunhao088us"'); expect(text).toContain('n***@example.test');
+  expect(text).not.toMatch(/nhunhao088us@|[^*]@|\.claude|account"?:\s*"[^"*]*@|cn-account|cn-cred|configDir|token/);
   expect(JSON.parse(text).rows.map((row) => [row.key, row.status, row.captain])).toEqual([
     ['Claude:cn', 'normal', true], ['Claude:us', 'out', false], ['Claude:us2', 'unknown', false], ['Codex', 'danger', false], ['Cursor', 'unknown', false], ['Antigravity', 'expired', false]]);
   await mobile.getByRole('button', { name: '刷新', exact: true }).click();
   // The seat indicator sits beside the title and adds no height to the header.
   const chip = mobile.locator('#seat-chip');
-  await expect(chip).toHaveText('CN 26%');
+  await expect(chip).toHaveText('nhunhao088us 26%');
   await expect(chip).toHaveAttribute('data-level', 'ok');
-  await expect(chip).toHaveAttribute('aria-label', /当前席位 Claude 🇨🇳 CN：5 小时剩余 26%/);
+  await expect(chip).toHaveAttribute('aria-label', /当前席位 Claude nhunhao088us：5 小时剩余 26%/);
+  // A long account name never pushes the number out of the chip or the chip out of the header.
+  expect(await chip.evaluate((el) => { const v = el.querySelector('.seat-chip-value').getBoundingClientRect(), c = el.getBoundingClientRect(); return v.right <= c.right + 0.5 && c.right <= innerWidth + 0.5 && document.documentElement.scrollWidth <= innerWidth; })).toBe(true);
   expect((await mobile.locator('.app-header').boundingBox()).height).toBeLessThanOrEqual(60);
   expect((await chip.boundingBox()).height).toBeGreaterThanOrEqual(44);
   await screenshot('chip-normal');
@@ -440,7 +449,7 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   await expect(drawer.locator('#version')).toHaveText(/^V\d+\.\d+\.\d+/);
   // Quota: one row per account, in the desktop's order, the Captain's seat marked.
   const rows = drawer.locator('.quota-item');
-  await expect(rows.locator('.quota-name-text')).toHaveText(['🇨🇳 CN', '🇺🇸 US', '🇺🇸 US2', 'Codex', 'Cursor', 'Gemini']);
+  await expect(rows.locator('.quota-name-text')).toHaveText(['nhunhao088us', '未登录（us）', '未登录（us2）', 'Codex', 'Cursor', 'Gemini']);
   // 5h and 7d are named once, right above the two columns of every row.
   await expect(drawer.locator('#quota-columns span')).toHaveText(['5h', '7d']);
   // Read header and cells in ONE pass: the drawer slides in, and two separate reads straddle the animation.
@@ -526,11 +535,11 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   await expect(sheet).toBeVisible();
   await expect(sheet).toHaveAttribute('aria-modal', 'true');
   await expect(mobile.locator('#quota-sheet-close')).toBeFocused();
-  await expect(mobile.locator('#quota-sheet-title')).toHaveText('Claude 🇨🇳 CN');
+  await expect(mobile.locator('#quota-sheet-title')).toHaveText('Claude nhunhao088us');
   await expect(mobile.locator('#quota-sheet-captain')).toHaveText('队长在用');
   const lines = sheet.locator('.sheet-line');
-  await expect(lines).toHaveText([/^5 小时剩余 26%\d\d:\d\d（2 小时 \d+ 分后）重置$/, /^每周剩余 61%\d\d-\d\d \d\d:\d\d（[23] 天后）重置$/, '账号h***@gmail.com', '来源Claude OAuth usage', /^采样\d\d:\d\d$/]);
-  await expect(sheet).not.toContainText('hjinhao');
+  await expect(lines).toHaveText([/^5 小时剩余 26%\d\d:\d\d（2 小时 \d+ 分后）重置$/, /^每周剩余 61%\d\d-\d\d \d\d:\d\d（[23] 天后）重置$/, '账号n***@example.test', '来源Claude OAuth usage', /^采样\d\d:\d\d$/]);
+  await expect(sheet).not.toContainText('nhunhao088us@');   // the whole address never reaches the phone
   expect(await mobile.locator('#drawer').evaluate((el) => [...el.children].every((child) => child.id === 'quota-sheet' || child.id === 'quota-sheet-scrim' || child.inert))).toBe(true);
   for (const button of await sheet.locator('.icon-button').evaluateAll((els) => els.map((el) => ({ ...el.getBoundingClientRect().toJSON(), label: el.getAttribute('aria-label'), title: el.title, text: el.textContent.trim() })))) {
     expect(button.width).toBeGreaterThanOrEqual(44); expect(button.height).toBeGreaterThanOrEqual(44);
@@ -630,15 +639,15 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   await expect(chip).toBeVisible();
   // Below 10% the indicator turns orange; exhausted is red; old data is grey, never a live number.
   await seedQuota('low');
-  await expect(chip).toHaveText('CN 8%');
+  await expect(chip).toHaveText('nhunhao088us 8%');
   await expect(chip).toHaveAttribute('data-level', 'low');
   await screenshot('chip-low');
   await seedQuota('out');
-  await expect(chip).toHaveText('CN 用尽');
+  await expect(chip).toHaveText('nhunhao088us 用尽');
   await expect(chip).toHaveAttribute('data-level', 'out');
   await screenshot('chip-out');
   await seedQuota('stale');
-  await expect(chip).toHaveText('CN 26%');
+  await expect(chip).toHaveText('nhunhao088us 26%');
   await expect(chip).toHaveAttribute('data-level', 'none');
   await expect(chip).toHaveAttribute('aria-label', /（数据已旧）/);
   await chip.click();
@@ -663,7 +672,7 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   // The More page keeps one entry that leads to the same rows.
   await tab('更多').click();
   await expect(mobile.locator('#more-view .quota-item')).toHaveCount(0);
-  await expect(mobile.locator('#quota-entry-text')).toHaveText('🇨🇳 CN 26%');
+  await expect(mobile.locator('#quota-entry-text')).toHaveText('nhunhao088us 26%');
   await mobile.locator('#quota-entry').click();
   await expect(drawer).toBeVisible();
   await expect(mobile.locator('#quota')).toBeFocused();

@@ -118,7 +118,7 @@ test('idle seats refresh independently every five minutes; failure retains sampl
   for (const seat of seats) assert.ok(!fs.readFileSync(M.credentialLocation(seat, home).usagePath, 'utf8').includes('fake-'));
   const store = {};
   for (const sample of poller.samples()) Q.observe(store, sample, now);
-  assert.equal(Q.summary(store, 'Claude', now, seats[0]).displayLabel, '5h 25% ↻未知 · 7d 60% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now, seats[0]).displayLabel, '5h 剩 25% ↻未知 · 7d 剩 60% ↻未知');
   assert.equal(Q.summary(store, 'Claude', now, seats[1]).state, 'unknown');
 });
 test('refresh coalesces concurrent ticks, does not apply removed seats, and tolerates cache-write failure', async (t) => {
@@ -154,7 +154,7 @@ test('bound server samples retain explicit screen exhaustion; empty and unbound 
   const sample = (at, windows) => ({ ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows }, at), seatId: seat.id, configDir: seat.configDir, accountKey: 'fake-account', accountBound: true });
   Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: seat.id, at: now - 1000, source: '会话屏幕', exhausted: true, windows: [] }, now);
   Q.observe(store, sample(now, [{ key: 'weekly', remaining: 60 }]), now);
-  assert.equal(Q.summary(store, 'Claude', now, seat).displayLabel, '5h 已用尽 ↻未知 · 7d 60% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now, seat).displayLabel, '5h 已用尽 ↻未知 · 7d 剩 60% ↻未知');
   assert.equal(Q.summary(store, 'Claude', now + C.INTERVAL_MS + 1000, seat).state, 'exhausted');
   Q.observe(store, sample(now + 1, []), now + 1);
   assert.equal(Q.summary(store, 'Claude', now + 1, seat).state, 'exhausted');
@@ -170,7 +170,7 @@ test('official numbers remain current between successful polls; rereading an old
   Q.observe(store, api, now);
   Q.observe(store, { ...api, at: now + 1000, official: false, source: '会话屏幕', windows: [{ label: '每周', remaining: 55 }] }, now + 1000);
   Q.observe(store, api, now + 1000);
-  assert.equal(Q.summary(store, 'Claude', now + 1000, seat).displayLabel, '7d 70% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now + 1000, seat).displayLabel, '7d 剩 70% ↻未知');
   Q.observe(store, { ...api, at: now + 2000, official: false, source: '会话屏幕', exhausted: true, windows: [] }, now + 2000);
   Q.observe(store, api, now + 2000);
   assert.equal(Q.summary(store, 'Claude', now + 2000, seat).state, 'exhausted');
@@ -267,7 +267,7 @@ test('display after three consecutive failures retains last remaining percentage
   const read = async () => { await poller.tick(); for (const sample of poller.samples()) Q.observe(store, sample, time); };
   await read();
   const before = Q.summary(store, 'Claude', time, seat), windows = structuredClone(store[Q.seatKey(seat.id)].sample.windows);
-  assert.match(before.displayLabel, /5h 91% ↻.* · 7d 90% ↻/);
+  assert.match(before.displayLabel, /5h 剩 91% ↻.* · 7d 剩 90% ↻/);
   failed = true;
   for (let failures = 1; failures <= 3; failures++) {
     time += C.INTERVAL_MS; await read();
@@ -286,8 +286,8 @@ test('display after three consecutive failures retains last remaining percentage
     assert.match(display.detail, /连续 3 次.*保留上次成功采样（数据已旧）/);
     assert.ok(display.detail.includes(new Date(sampledAt).toLocaleString()));
   }
-  assert.match(Q.text(store, time, [seat]), /5h 91% ↻.*7d 90% ↻.*数据已旧/);
-  assert.doesNotMatch(Q.text(store, time, [seat]), /5h 9%|7d 10%|fake-secret/);
+  assert.match(Q.text(store, time, [seat]), /5h 剩 91% ↻.*7d 剩 90% ↻.*数据已旧/);
+  assert.doesNotMatch(Q.text(store, time, [seat]), /5h 剩 9%|7d 剩 10%|fake-secret/);
   failed = false; time += C.INTERVAL_MS; await read();
   assert.equal(store[Q.seatKey(seat.id)].officialStatus.failures, 0);
   assert.equal(store[Q.seatKey(seat.id)].sample.at, time);

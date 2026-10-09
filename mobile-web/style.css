@@ -53,8 +53,11 @@ h1, h2, h3, h4, p { margin: 0; }
 .title-block { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0 4px; }
 .title-text { flex: 0 1 auto; }
 /* 44px tall for the finger; the visible pill is the small label inside. */
-.seat-chip { flex: none; display: inline-flex; align-items: center; height: 44px; margin-left: auto; padding: 0 4px; border: 0; border-radius: 12px; background: transparent; }
-.seat-chip-text { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 11px; border: 1px solid var(--line); background: var(--raised); color: var(--secondary); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.seat-chip { flex: 0 1 auto; min-width: 0; max-width: 58%; display: inline-flex; align-items: center; height: 44px; margin-left: auto; padding: 0 4px; border: 0; border-radius: 12px; background: transparent; }
+.seat-chip-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.seat-chip-name > bdi { direction: ltr; unicode-bidi: isolate; }
+.seat-chip-value { flex: none; }
+.seat-chip-text { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 11px; border: 1px solid var(--line); background: var(--raised); color: var(--secondary); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: pre; gap: 0; min-width: 0; max-width: 100%; }
 .seat-chip[data-level="low"] .seat-chip-text { color: var(--orange); border-color: color-mix(in srgb, var(--orange) 45%, transparent); background: var(--orange-soft); }
 .seat-chip[data-level="out"] .seat-chip-text { color: var(--quota-out); border-color: color-mix(in srgb, var(--quota-out-fill) 50%, transparent); background: color-mix(in srgb, var(--quota-out-fill) 12%, transparent); }
 .seat-chip[data-level="none"] .seat-chip-text { color: var(--muted); }

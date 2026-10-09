@@ -366,24 +366,23 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
    columns sit to the left; spare width stays empty on the right. The value columns
    keep their width: when the sidebar is too narrow, a long account name is what gets
    cut (from the left, see .seat-acct), never a percentage or a reset time. */
-#quotaBar, #quotaPopList { --qw: 60px; --qg: 8px; display: grid; grid-template-columns: minmax(0, max-content) repeat(2, calc(var(--qw) + var(--qg))) minmax(0, 1fr); row-gap: 1px; container-type: inline-size; }
+#quotaBar, #quotaPopList { --qw: 60px; --qg: 6px; display: grid; grid-template-columns: minmax(0, max-content) repeat(2, calc(var(--qw) + var(--qg))) minmax(0, 1fr); row-gap: 1px; container-type: inline-size; }
 /* Without the reset times (see the 215px rule below) a value column only holds a percentage or 未登录. */
 @container (max-width: 215px) { #quotaBar { --qw: 36px; --qg: 7px; } }
 .quota-cols, .quota-item { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; padding: 0 6px; }
 .quota-cols { height: 14px; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .02em; }
-.quota-col { padding-left: var(--qg); }
+.quota-col { padding-left: var(--qg); white-space: nowrap; }
 .quota-item { position: relative; min-width: 0; height: 30px; border-radius: 6px; color: var(--text); font-size: 11.5px; cursor: default; white-space: nowrap; overflow: visible; }
 .quota-label { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
-.quota-icon { display: flex; flex: 0 0 auto; color: var(--text-2); }
+.quota-icon { position: relative; display: flex; flex: 0 0 auto; color: var(--text-2); }
 .quota-name { display: inline-flex; align-items: center; gap: 3px; min-width: 0; color: var(--text-2); line-height: 1; }
-/* Seat rows show the account signed in behind the seat (the part before the @), then
-   a small plan mark on a Max account. A grid gap here would shift the columns. */
+/* Seat rows show the account signed in behind the seat (the part before the @).
+   A grid gap here would shift the columns. */
 .quota-item[data-seat-id] .quota-name { font-size: 11.5px; }
-/* An account name cut for width keeps its end, the part that tells hjinhao066 from
-   hjinhao066us: the ellipsis goes on the left. The full name is in the hover text. */
+/* An account name cut for width keeps its end, the part that tells taylor0421 from
+   taylor0421us: the ellipsis goes on the left. The full name is in the hover text. */
 .seat-acct { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; line-height: 1.35; }
 .seat-acct > bdi { direction: ltr; unicode-bidi: isolate; }
-.quota-plan { flex: 0 0 auto; padding: 0 1.5px; border-radius: 3px; background: var(--pill-bg); color: var(--text-2); font-size: 9px; font-weight: 700; line-height: 13px; letter-spacing: .02em; }
 .quota-item[data-provider="Claude"] .quota-icon { color: var(--brand-claude); }
 .quota-item[data-provider="Codex"] .quota-icon { color: var(--brand-chatgpt); }
 .quota-item[data-provider="Cursor"] .quota-icon { color: var(--text); }
@@ -393,6 +392,13 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .quota-item[data-provider] .quota-icon.quota-captain { color: #e0a91c; }
 .quota-item[data-provider] .quota-icon.quota-captain svg { width: 14px; height: 14px; }
 .quota-item[data-provider] .quota-icon.quota-captain path { fill: none; }
+/* Max plan: a small gem on the corner of the row's lead icon (it sits in the gap before the
+   name, so the name keeps its whole column). It follows the account; the row's detail names the plan. */
+.quota-plan { position: absolute; right: -3px; bottom: -4px; display: flex; color: var(--text); pointer-events: none; }
+.quota-item[data-provider] .quota-icon .quota-plan svg { width: 8px; height: 8px; }
+.quota-item[data-provider] .quota-icon .quota-plan path { fill: currentColor; stroke-width: 1.5; }
+.qt-plan-mark { display: inline-flex; margin-right: 4px; vertical-align: -1px; }
+.qt-plan-mark svg { width: 10px; height: 10px; fill: currentColor; }
 
 /* Cell: remaining % + reset time, a thin bar underneath. Used up = ⊘ + reset time in red; no number = —. */
 .quota-values { display: contents; }

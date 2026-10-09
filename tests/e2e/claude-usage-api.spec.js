@@ -50,8 +50,8 @@ test('all Claude surfaces use remaining percentages and resets; icons refresh wi
   await refresh.click();
   await expect(seat('cn').locator('.quota-values')).toContainText('91%');
   const text = await page.evaluate(() => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats));
-  expect(text).toContain('5h 91% ↻'); expect(text).toContain('7d 90% ↻');
-  expect(text).not.toMatch(/已用 \d|剩余|5h 9%/);
+  expect(text).toContain('5h 剩 91% ↻'); expect(text).toContain('7d 剩 90% ↻');
+  expect(text).not.toMatch(/已用 \d|剩余|5h 剩 9%/);
   await seat('us').focus();
   await expect(seat('us').getByRole('tooltip')).toContainText(/5 小时已用尽.*重置/);
   await screenshot('official-usage-dark-details');

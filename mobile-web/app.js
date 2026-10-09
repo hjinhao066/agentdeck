@@ -505,7 +505,11 @@
     const value = row.status === 'out' || shown?.out ? '用尽' : shown ? (cell ? '' : '周 ') + percentText(shown) : '—';
     const level = value === '用尽' ? 'out' : !shown || dimmed(row) ? 'none' : shown.remaining < 10 ? 'low' : 'ok';
     const label = [row.flag, row.short].filter(Boolean).join(' ');
-    $('seat-chip-text').textContent = row.short + ' ' + value;
+    // The seat is named by its account, which can be long: the name gives way (from the left,
+    // keeping the end that tells accounts apart), the number beside it never does.
+    const chipName = node('span', 'seat-chip-name');
+    chipName.append(node('bdi', '', row.short));
+    $('seat-chip-text').replaceChildren(chipName, ' ', node('span', 'seat-chip-value', value));
     chip.dataset.level = level;
     const spoken = '当前席位 ' + row.name + '：' + (value === '用尽' ? '已用尽' : !shown ? '额度未知' : (cell ? '5 小时' : '每周') + '剩余 ' + percentText(shown)) + (level === 'none' && shown ? '（数据已旧）' : '') + '，查看额度';
     chip.title = spoken; chip.setAttribute('aria-label', spoken);

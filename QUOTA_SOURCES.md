@@ -26,8 +26,8 @@ were left running. Quota probes made no inference requests.
   bind only to the `~/.claude` seat; unknown explicit seat IDs are ignored.
 - Each item is one compact row in the sidebar quota block: provider icon, then for a
   Claude seat the account signed in behind its directory (the part before the @; a
-  `Max` mark follows a Max-plan account; the row the running Captain uses leads with
-  a crown instead of the provider icon), then one cell per window the
+  Max-plan account has a small gem on the corner of the lead icon; the row the running
+  Captain uses leads with a crown instead of the provider icon), then one cell per window the
   source actually reports, in 5-hour then weekly order. A cell shows the remaining %,
   its reset time and a thin bar; a window that does not exist leaves that column empty
   rather than a dash. A sidebar too narrow for the reset times keeps the percentages
