@@ -4,8 +4,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// 终端架构图: project frames across the window, up to four abreast and row after
-// row under them (项目框横排), 智能一页 (the arrangement for this window's width,
+// 终端架构图: project frames left to right across the window, as many abreast as it
+// holds, each one card wide (two from seven sessions on), the rest under the lane that
+// ends highest (项目框横排), 智能一页 (the arrangement for this window's width,
 // at the map's own 100%), 一键整理 (hand-dragged frames and cards back on the grid,
 // animated, with undo), and the look (the sky, glass cards, lit wiring, nothing
 // moving under 减少动态效果). Real renderer, isolated userData, PTYs running
@@ -119,7 +120,9 @@ const read = () => page.evaluate(() => {
     cards: [...document.querySelectorAll('.cm-node')].map((n) => ({ id: n.dataset.nodeId, ...rect(n) })),
     heads: [...document.querySelectorAll('.cm-project > .cm-project-head')].map((h) => { const name = h.querySelector('.cm-project-name'), tally = h.querySelector('.cm-project-summary');
       return { key: h.parentElement.dataset.project, name: name.textContent, nameScroll: name.scrollWidth, nameClient: name.clientWidth, tallyScroll: tally.scrollWidth, tallyClient: tally.clientWidth, compact: h.classList.contains('compact'),
-        nameRight: name.getBoundingClientRect().right, tallyLeft: tally.getBoundingClientRect().left, tallyRight: tally.getBoundingClientRect().right, frameRight: h.parentElement.getBoundingClientRect().right }; }),
+        nameRight: name.getBoundingClientRect().right, nameBottom: name.getBoundingClientRect().bottom, tallyLeft: tally.getBoundingClientRect().left, tallyTop: tally.getBoundingClientRect().top, tallyRight: tally.getBoundingClientRect().right, frameRight: h.parentElement.getBoundingClientRect().right }; }),
+    // the order the frames read in, like lines of text (what 一键整理 remembers)
+    order: CrewMapCore.orderByPlace(lay.groups),
     bodyPx: parseFloat(getComputedStyle(document.querySelector('.cm-node:not(.kind-captain) .cm-line')).fontSize),
     saved: { positions: config.crewMap.positions, projectPositions: config.crewMap.projectPositions, projectOrder: config.crewMap.projectOrder, plan: config.crewMap.plan },
     hint: document.querySelector('.cm-hint').hidden ? '' : document.querySelector('.cm-hint').textContent,
@@ -141,7 +144,7 @@ function assertNeat(g, ownZoom) {
     if (!own.length) continue;
     const left = Math.min(...own.map((n) => n.x)), right = Math.max(...own.map((n) => n.x + n.w));
     for (const n of own) expect((n.x - left) % 304, `${n.id} on its frame's column grid`).toBe(0);
-    expect(left - f.x, `${f.key}: at least the frame's padding beside its cards`).toBeGreaterThanOrEqual(24);
+    expect(left - f.x, `${f.key}: at least the frame's padding beside its cards`).toBeGreaterThanOrEqual(16);
     expect(Math.abs((left - f.x) - (f.x + f.w - right)), `${f.key}: cards centred in the frame`).toBeLessThanOrEqual(1);
   }
   // every project's name shows whole, its tally whole beside it (short form allowed), neither on the other
@@ -149,7 +152,7 @@ function assertNeat(g, ownZoom) {
   for (const h of g.heads) {
     expect(h.nameScroll, `「${h.name}」 is not cut`).toBeLessThanOrEqual(h.nameClient);
     expect(h.tallyScroll, `${h.key}: tally is not cut`).toBeLessThanOrEqual(h.tallyClient);
-    expect(h.nameRight, `${h.key}: name clear of its tally`).toBeLessThanOrEqual(h.tallyLeft + 0.5);
+    expect(h.tallyTop >= h.nameBottom - 0.5 || h.nameRight <= h.tallyLeft + 0.5, `${h.key}: name clear of its tally (the tally on the line under it)`).toBe(true);
     expect(h.tallyRight, `${h.key}: tally inside the frame`).toBeLessThanOrEqual(h.frameRight + 0.5);
   }
   const lanes = new Map();
@@ -162,8 +165,8 @@ function assertNeat(g, ownZoom) {
   if (ownZoom) return; // a zoom the user set is theirs
   expect(g.view.scale, 'untouched, the map stands at its own 100%: 0.7 of the drawn size').toBeCloseTo(0.7, 5);
 }
-// the projects of a plan read row by row, the way they are filled in
-const byRow = (plan) => Array.from({ length: Math.max(0, ...plan.lanes.map((l) => l.length)) }, (_, r) => plan.lanes.filter((l) => l[r]).map((l) => l[r])).flat();
+// the projects of the map read like lines of text, the way they are filled in
+const byRow = (g) => g.order;
 // The whole map is inside the viewport with the fit's margin.
 function assertWhole(g) {
   const edge = 8 + 16 * g.view.scale - 0.5;
@@ -189,7 +192,7 @@ async function dragBy(locator, dx, dy) {
   await page.mouse.up();
 }
 
-test('项目框横排: frames stand across the window, four abreast where it is wide enough, at 100%, at five widths in both themes', async () => {
+test('项目框横排: frames stand left to right across the window, one or two cards wide, at 100%, at five widths in both themes', async () => {
   await launch(BIG);
   // a wide window: the four projects stand in one row, the big one several cards wide
   await open(1920, 1080, 'dark');
@@ -200,9 +203,9 @@ test('项目框横排: frames stand across the window, four abreast where it is 
   assertNeat(g);
   expect(g.pageFits).toBe(true);
   assertWhole(g);
-  expect(g.plan.lanes, 'four abreast').toEqual([['agentdeck'], ['hermes-savings'], ['type4me-windows'], ['vps-ops']]);
+  expect(g.plan.lanes, 'all four abreast').toEqual([['agentdeck'], ['hermes-savings'], ['type4me-windows'], ['vps-ops']]);
   expect(new Set(g.groups.map((f) => f.y)).size, 'one row: every frame starts on the same line').toBe(1);
-  expect(g.plan.caps.agentdeck, 'the big project is several cards wide, so its lane is no taller than the others').toBeGreaterThanOrEqual(3);
+  expect(g.plan.caps, 'ten sessions: two cards wide (never more); fewer than seven: one').toEqual({ agentdeck: 2, 'hermes-savings': 1, 'type4me-windows': 1, 'vps-ops': 1 });
   await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');
   expect(await linesClear()).toEqual([]);
   // the same seventeen cards one under another, the way it was, would need about twice the height
@@ -236,7 +239,8 @@ test('项目框横排: frames stand across the window, four abreast where it is 
     expect(await linesClear()).toEqual([]);
     expect(g.plan.lanes.length, `${w}: no more lanes than a wider window had`).toBeLessThanOrEqual(lanes);
     lanes = g.plan.lanes.length;
-    expect(byRow(g.plan), `${w}: the rows keep the projects in order`).toEqual(['agentdeck', 'hermes-savings', 'type4me-windows', 'vps-ops']);
+    expect(byRow(g), `${w}: read like text, the projects are in order`).toEqual(['agentdeck', 'hermes-savings', 'type4me-windows', 'vps-ops']);
+    expect(Math.max(...Object.values(g.plan.caps)), `${w}: no frame wider than two cards`).toBeLessThanOrEqual(2);
     if (w === 700) expect(lanes, '700: one lane').toBe(1);
     if (g.pageFits) assertWhole(g);
     else {
@@ -258,7 +262,7 @@ test('项目框横排: frames stand across the window, four abreast where it is 
   expect(g.pageFits).toBe(true);
   assertWhole(g);
   expect(g.plan.lanes).toEqual([['agentdeck']]);
-  expect(g.plan.caps.agentdeck, 'ten cards five wide in two rows: as wide as the window holds at 100%').toBe(5);
+  expect(g.plan.caps.agentdeck, 'ten sessions: two cards wide in five rows, however wide the window').toBe(2);
   for (const [w, h] of [[1440, 900], [1280, 800], [980, 700]]) for (const theme of ['dark', 'light']) {
     await open(w, h, theme); await settled();
     assertNeat(await read());
@@ -277,7 +281,7 @@ test('项目名完整显示: four projects with long names at 1920, 1440, 980 an
     assertNeat(g);
     // (frames are drawn lane by lane; with fewer than four lanes the fourth project stands under the first)
     expect(g.heads.map((x) => x.name).sort()).toEqual(['agentdeck', 'hermes-savings-center', 'type4me-windows-installer', '客户门户与数据工作台二期'].sort());
-    expect(byRow(g.plan)).toEqual(['agentdeck', 'hermes-savings-center', 'type4me-windows-installer', '客户门户与数据工作台二期']);
+    expect(byRow(g)).toEqual(['agentdeck', 'hermes-savings-center', 'type4me-windows-installer', '客户门户与数据工作台二期']);
     // the names are whole because the frames made room for them, not because the text was shrunk
     expect(await page.evaluate(() => [...document.querySelectorAll('.cm-project-name')].map((n) => getComputedStyle(n).fontSize))).toEqual(['17px', '17px', '17px', '17px']);
     expect(await linesClear()).toEqual([]);
@@ -365,13 +369,13 @@ test('智能一页: one click hands arrangement and zoom back to the window, at 
   await expect(page.locator('[data-cm="reset"]')).toHaveText('120%');
   await shot('map-smartpage-before-1920-dark');
   // a smaller window: the hand-placed map keeps its ground (same frames, same places) and its view
-  await size(1440, 900); await settled();
+  await size(1440, 600); await settled();
   const kept = await read();
   expect(kept.groups).toEqual(mine.groups);
   expect(kept.view).toEqual(mine.view);
   await shot('map-smartpage-before-1440-dark');
 
-  // 智能一页 at 1440x900: seventeen cards are taller than the page at 100%, so it stays at 100% and says so
+  // 智能一页 at 1440x600: seventeen cards are taller than the page at 100%, so it stays at 100% and says so
   await page.locator('[data-cm="fit"]').click();
   await settled();
   let g = await read();
@@ -496,7 +500,7 @@ test('一键整理: dragged frames and cards go back on the grid in the order th
   // the order the frames were left in: the one dragged to the far left now comes first, and it is remembered
   expect(g.saved.projectOrder[0]).toBe('vps-ops');
   expect(g.groups[0].key).toBe('vps-ops');
-  expect(byRow(g.plan)).toEqual(g.saved.projectOrder);
+  expect(byRow(g)).toEqual(g.saved.projectOrder);
   expect(g.view.scale, 'the zoom the user set stays').toBeCloseTo(zoomed.view.scale, 5);
   expect(g.moved).toBe(true);
   expect(g.canUndo).toBe(true);

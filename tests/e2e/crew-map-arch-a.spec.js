@@ -103,8 +103,8 @@ test('night and day: the sky palette, the grid that shows the whole map, finishe
     expect(g.canvas).toBe(theme === 'dark' ? 'rgb(6, 8, 15)' : 'rgb(243, 245, 252)');
     expect(g.card).toBe(theme === 'dark' ? 'rgb(22, 27, 44)' : 'rgb(255, 255, 255)');
     if (theme === 'light') expect(g.sock[0]).toBe('rgb(255, 241, 244)');
-    // seven cards, four wide (4 + 3): three wide would be three rows and no longer show whole in these windows
-    expect(g.cols).toBe(4);
+    // seven sessions: the project is two cards wide (PROJECT_TWO_COLUMNS_AT), four rows, never wider
+    expect(g.cols).toBe(2);
     // The whole map shows above the tray: 队长, every card and the project's frame keep the
     // fit's margin (its 8px inset + the 16px the map carries around itself) from every edge
     // of the viewport, the tray sits under it; no two cards overlapping, no text past its card
@@ -146,7 +146,7 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
     return { vp: rect(document.querySelector('.cm-viewport')), tray: rect(document.querySelector('.cm-tray')), cap: rect(document.querySelector('.cm-node.kind-captain')), scale: CrewMap.view().scale,
       pane: rect(document.querySelector('.cm-pane')), card: Object.fromEntries([...document.querySelectorAll('.cm-node:not(.kind-captain)')].map((n) => [n.dataset.nodeId, rect(n)])) };
   });
-  // 1280x560 cannot show seven cards whole at 100%: four wide, two rows (no sideways scrolling), the second cut by the tray's edge.
+  // 1280x560 cannot show seven cards whole at 100%: two wide, four rows (no sideways scrolling), a later row cut by the tray's edge.
   await open(1280, 560, 'dark'); await settled();
   const base = await read();
   expect(base.scale).toBeCloseTo(0.7, 5);

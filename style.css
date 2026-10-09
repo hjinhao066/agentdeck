@@ -2443,40 +2443,49 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #boardView[data-mode="crew"] #boardNewTask { display: none !important; }
 #boardView:not([data-mode="crew"]) #crewMap { display: none !important; }
 
-/* 终端架构图 (星图): the same sky as the task board, glass frames and cards, wiring that glows.
-   Whatever is running moves (its spinner, a light along its card's top edge, a light down its
-   line); everything else holds still, and all of it stops under prefers-reduced-motion.
+/* 终端架构图 (星图): a night dispatch board on the task board's sky. 队长 at the top with the whole crew
+   as one bar of colour; every project is a quiet pane with its own coloured line running down the
+   left of its cards like a metro line, each session a stop on it. Only what is running moves (its
+   spinner, a light along its card's top edge, a light down its line); everything else holds still,
+   and all of it stops under prefers-reduced-motion or the motion switch.
    No backdrop blur anywhere: the canvas pans and zooms, and a blur would repaint with it.
    Night and day share one structure; only the tokens below change. */
 #crewMap {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
+  --project-hue: 228;                     /* the legend's lines; every project sets its own */
   --cm-space: #06080f;
   --cm-card: #161b2c;
-  --cm-card-2: #10141f;
+  --cm-card-hi: #1a2033;
   --cm-pane: #0d111c;
-  --cm-rim: #252c45;
+  --cm-rim: #262d46;
   --cm-rim-hi: #3a4470;
   --cm-text: #eef1f9;
   --cm-text-2: #b6bed1;
   --cm-text-dim: #838ca3;
   --cm-work: #f7c456;
+  --cm-work-lit: #f7b733;
   --cm-done: #4fdea2;
   --cm-fail: #ff8194;
   --cm-fail-bg: #21151f;
   --cm-need: #ffa066;
   --cm-wait: #909bb6;
   --cm-cap: #b79cff;
-  --cm-cap-bg: #18152e;
+  --cm-cap-bg: #17142c;
   --cm-core: #8ea2ff;
-  --cm-wire: #6480f2;
-  --cm-wire-hi: #9db0ff;
-  --cm-spark: #f1f5ff;
+  --cm-wire: #6f84e8;
+  --cm-wire-hi: #a3b4ff;
+  --cm-spark: #f4f7ff;
   --cm-review: #bda2ff;
-  --cm-btn: #4f63ea;
-  --cm-sheen: rgba(190, 200, 255, .07);   /* the light a pane of glass catches along its top */
+  --cm-cta: linear-gradient(135deg, #4f63ea, #7d54e2);
+  --cm-sheen: rgba(200, 210, 255, .045);  /* the light a card catches along its top */
   --cm-glow: 62%;                         /* how much of a colour a numeral's or a line's glow keeps (none by day) */
   --cm-aura: 100%;                        /* strength of the coloured light around a lit card */
-  --cm-shadow: 0 12px 24px -14px rgba(0, 0, 0, 0.9);
+  --cm-breathe: 16%;                      /* how much gold a working card's top takes at the height of its breath */
+  --cm-line-l: 64%;                       /* a project line's lightness: bright on the night sky */
+  --cm-line-s: 70%;
+  --cm-pane-a: .055;                      /* how much of its colour a project pane takes */
+  --cm-shadow: 0 1px 0 rgba(255, 255, 255, .025) inset, 0 12px 26px -16px rgba(0, 0, 0, .92);
+  --cm-shadow-up: 0 1px 0 rgba(255, 255, 255, .04) inset, 0 18px 34px -16px rgba(0, 0, 0, .95);
   --cm-back: var(--cm-done);
   --cm-back-bad: var(--cm-fail);
   color: var(--cm-text);
@@ -2484,31 +2493,37 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 :root[data-theme="light"] #crewMap {
   --cm-space: #f3f5fc;
   --cm-card: #ffffff;
-  --cm-card-2: #ffffff;
+  --cm-card-hi: #ffffff;
   --cm-pane: #ffffff;
-  --cm-rim: #dde1ef;
+  --cm-rim: #dfe3f0;
   --cm-rim-hi: #c3cae2;
   --cm-text: #141a2e;
   --cm-text-2: #414a63;
   --cm-text-dim: #636c86;
   --cm-work: #9a5b06;
+  --cm-work-lit: #f0a11c;
   --cm-done: #0a7a4b;
   --cm-fail: #c2264b;
   --cm-fail-bg: #fff1f4;
   --cm-need: #c2410c;
   --cm-wait: #5d6781;
   --cm-cap: #6a3fd2;
-  --cm-cap-bg: #f5f1ff;
+  --cm-cap-bg: #f6f2ff;
   --cm-core: #4257e6;
-  --cm-wire: #5468f0;
+  --cm-wire: #5a6dea;
   --cm-wire-hi: #3d50de;
   --cm-spark: #1e2f9e;
   --cm-review: #7c5ce0;
-  --cm-btn: #4a5fe8;
-  --cm-sheen: rgba(255, 255, 255, .9);
+  --cm-cta: linear-gradient(135deg, #4a5fe8, #7446da);
+  --cm-sheen: rgba(255, 255, 255, 0);
   --cm-glow: 0%;
-  --cm-aura: 60%;
-  --cm-shadow: 0 1px 2px rgba(30, 40, 90, 0.06), 0 12px 24px -16px rgba(50, 60, 140, 0.45);
+  --cm-aura: 55%;
+  --cm-breathe: 8%;
+  --cm-line-l: 47%;
+  --cm-line-s: 68%;
+  --cm-pane-a: .05;
+  --cm-shadow: 0 1px 2px rgba(24, 34, 84, .05), 0 8px 20px -14px rgba(40, 52, 130, .32);
+  --cm-shadow-up: 0 2px 4px rgba(24, 34, 84, .06), 0 16px 30px -16px rgba(40, 52, 130, .42);
 }
 /* Backdrop: the sky (.star-sky), still while the canvas pans and zooms over it. */
 .cm-viewport {
@@ -2551,77 +2566,98 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M12 3 4 7.5v9L12 21l8-4.5v-9z'/%3E%3Cpath d='m4 7.5 8 4.5 8-4.5M12 12v9'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
-/* Project: a quiet pane tinted with the project's colour (frame, cube, a wash along the top).
-   The pane sits under the wiring; the frame with the title strip sits over it, and the labels
-   carry a solid backing so a line passing behind them is hidden, not drawn through the text. */
+/* Project: a quiet pane barely tinted with the project's colour, its colour drawn along the top
+   edge like the start of its line. The pane sits under the wiring; the frame with the title strip
+   sits over it. The title strip has two lines: the name (and the fold arrow on the right), then the
+   tally; the project's line comes down the left gutter beside them and never crosses them. */
 .cm-pane, .cm-project {
-  position: absolute; border-radius: 18px;
-  --project-color: hsl(var(--project-hue) 78% 66%);
-  --cm-headbg: color-mix(in srgb, hsl(var(--project-hue) 45% 58%) 11%, var(--cm-space));
+  position: absolute; border-radius: 16px;
+  --project-color: hsl(var(--project-hue) 78% 68%);
 }
 .cm-pane {
   pointer-events: none;
-  background-color: hsl(var(--project-hue) 46% 48% / 0.075);
-  background-image: radial-gradient(72% 140px at 28% 0, hsl(var(--project-hue) 88% 66% / 0.14), transparent), linear-gradient(180deg, var(--cm-sheen), transparent 46px);
-  border: 1px solid hsl(var(--project-hue) 46% 66% / 0.32);
-  box-shadow: inset 0 1px 0 hsl(var(--project-hue) 80% 82% / 0.18), 0 30px 60px -36px rgba(0, 0, 0, 0.95);
+  background-color: hsl(var(--project-hue) 55% 56% / var(--cm-pane-a));
+  background-image: linear-gradient(180deg, hsl(var(--project-hue) 80% 72% / 0.075), transparent 104px);
+  border: 1px solid hsl(var(--project-hue) 50% 72% / 0.17);
+  box-shadow: inset 0 1px 0 hsl(var(--project-hue) 80% 86% / 0.06), 0 28px 56px -38px rgba(0, 0, 0, 0.95);
 }
+.cm-pane::before {
+  content: ""; position: absolute; left: 22px; width: min(46%, 150px); top: -1px; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--project-color), transparent);
+}
+.cm-pane.collapsed::before { width: 64px; }
 .cm-project { pointer-events: auto; touch-action: none; cursor: grab; background: transparent; }
-:root[data-theme="light"] .cm-pane, :root[data-theme="light"] .cm-project, :root[data-theme="light"] .cm-chip { --project-color: hsl(var(--project-hue) 70% 42%); }
-:root[data-theme="light"] .cm-pane, :root[data-theme="light"] .cm-project { --cm-headbg: color-mix(in srgb, hsl(var(--project-hue) 55% 50%) 8%, var(--cm-space)); }
+:root[data-theme="light"] .cm-pane, :root[data-theme="light"] .cm-project, :root[data-theme="light"] .cm-chip { --project-color: hsl(var(--project-hue) 70% 44%); }
 :root[data-theme="light"] .cm-pane {
-  background-color: hsl(var(--project-hue) 70% 52% / 0.055);
-  background-image: radial-gradient(72% 140px at 28% 0, hsl(var(--project-hue) 85% 56% / 0.12), transparent), linear-gradient(180deg, rgba(255, 255, 255, .65), transparent 46px);
-  border-color: hsl(var(--project-hue) 45% 46% / 0.30);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 30px 60px -40px rgba(50, 60, 140, 0.55);
+  background-image: linear-gradient(180deg, hsl(var(--project-hue) 85% 60% / 0.07), transparent 104px);
+  border-color: hsl(var(--project-hue) 40% 46% / 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85), 0 22px 46px -36px rgba(46, 58, 140, 0.5);
 }
 .cm-projects { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
-.cm-project-head { position: relative; z-index: 1; height: 48px; display: flex; align-items: center; gap: 6px; padding: 0 12px 0 10px; user-select: none; pointer-events: none; }
-.cm-project-head > * { pointer-events: auto; background: var(--cm-headbg); border-radius: 8px; }
-/* The tally always shows whole. When the name does not fit beside it the labels go first
-   (icon + number, the label left to the hover text and screen readers); a name still too
-   long for what is left ends in an ellipsis. */
-.cm-project-name { display: block; flex: 0 1 auto; min-width: 0; padding: 4px 8px 4px 6px; font-size: 17px; font-weight: 640; line-height: 22px; letter-spacing: 0.005em; color: var(--cm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-project-head {
+  position: relative; z-index: 1; height: 64px; box-sizing: border-box;
+  display: flex; flex-wrap: wrap; align-content: center; align-items: center; column-gap: 4px; row-gap: 3px;
+  padding: 2px 4px 6px 16px; user-select: none; pointer-events: none;
+}
+.cm-project-head > * { pointer-events: auto; }
+/* The name takes the first line whole (the fold arrow sits at its right end); the tally the second,
+   under the name. When the full tally does not fit its line the labels go first (icon + number,
+   the label left to the hover text and screen readers); a name still too long ends in an ellipsis. */
+.cm-project-name { order: 1; display: block; flex: 1 1 0; min-width: 0; font-size: 17px; font-weight: 650; line-height: 24px; letter-spacing: 0.002em; color: var(--cm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cm-project-name::before { vertical-align: -3px; margin-right: 9px; }
-.cm-project-summary { display: inline-flex; align-items: center; gap: 12px; flex: 0 9999 auto; min-width: 0; overflow: hidden; padding: 4px 8px; color: var(--cm-text-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
-.cm-project-head.compact .cm-project-summary { gap: 10px; padding: 4px 6px; }
+.cm-project-toggle { order: 2; flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--cm-text-dim); cursor: pointer; transition: color .15s ease, background .15s ease; }
+.cm-project-toggle:hover { color: var(--cm-text); background: color-mix(in srgb, var(--cm-text) 8%, transparent); }
+.cm-project-toggle:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 1px; }
+.cm-project-summary { order: 3; flex: 0 0 100%; display: flex; align-items: center; gap: 12px; min-width: 0; height: 20px; overflow: hidden; padding-left: 27px; box-sizing: border-box; color: var(--cm-text-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.cm-project-head.compact .cm-project-summary { gap: 11px; }
 .cm-project-head.compact .cm-count-sep { display: none; }
 .cm-project-head.compact .cm-count { position: relative; gap: 4px; }
 .cm-project-head.compact .cm-count-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .cm-project-summary .cm-count b { font-size: 13.5px; }
-/* measured off-screen: what a header needs for its whole name beside the short tally (the frame is laid out at least that wide) */
-.cm-project-head.cm-probe { position: absolute; left: 0; top: 0; width: max-content; visibility: hidden; pointer-events: none; }
+.cm-project-summary .cm-count.st-working b { color: var(--cm-work); }
+.cm-project-summary .cm-count.st-input b { color: var(--cm-need); }
+.cm-project-summary .cm-count.st-failed b { color: var(--cm-fail); }
+.cm-project.collapsed .cm-project-head { height: 68px; }
+/* measured off-screen, on one line: the name and the short tally apart (the frame is laid out at least as wide as either needs) */
+.cm-project-head.cm-probe { position: absolute; left: 0; top: 0; width: max-content; flex-wrap: nowrap; visibility: hidden; pointer-events: none; }
 .cm-probe .cm-project-name, .cm-probe .cm-project-summary { flex: none; overflow: visible; }
-.cm-project-toggle { flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; background: var(--cm-headbg); color: var(--cm-text-dim); cursor: pointer; transition: color .15s ease; }
-.cm-project-toggle:hover { color: var(--cm-text); }
-.cm-project-toggle:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
+.cm-probe .cm-project-summary { padding-left: 0; }
 
-/* Wiring: blue-violet light. A line that is running is brighter, sits in a soft glow and carries
-   a short bright stretch that travels it; ended lines hold still and fade. */
+/* Wiring. 队长's trunk and the main bus are a quiet silver-blue; from there every project's line is
+   its own colour, down the left of its cards, a stop (a small dot) where it enters each card. A line
+   whose session is working is brighter, sits in a soft glow of its colour and carries a short light
+   that travels it; a finished line is thinner, dimmer and still. */
 .cm-edges .cm-edge, .cm-halo, .cm-pulse, .cm-bus, .cm-hl-path { fill: none; stroke-linejoin: round; stroke-linecap: round; }
-.cm-edge.dispatch { stroke: var(--cm-wire); stroke-width: 1.2; opacity: 0.55; }
-.cm-edge.dispatch.st-working { stroke: var(--cm-wire-hi); stroke-width: 1.8; opacity: 1; }
-.cm-edge.dispatch.st-input { stroke: var(--cm-need); stroke-width: 1.5; opacity: 0.9; }
-.cm-edge.dispatch.st-queued { stroke: var(--cm-wait); stroke-width: 1.2; stroke-dasharray: 2 6; opacity: 0.7; }
-.cm-halos { opacity: 0.2; }
-.cm-halo { stroke: var(--cm-wire-hi); stroke-width: 9; }
-.cm-halo.core { stroke-width: 13; }
-:root[data-theme="light"] .cm-halos { opacity: 0.13; }
+.cm-edge.dispatch { stroke: hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)); stroke-width: 1.5; opacity: 0.5; }
+.cm-edge.dispatch.st-working { stroke-width: 2; opacity: 0.95; }
+.cm-edge.dispatch.st-input { stroke: var(--cm-need); stroke-width: 1.7; opacity: 0.9; }
+.cm-edge.dispatch.st-queued { stroke: var(--cm-wait); stroke-width: 1.3; stroke-dasharray: 2 6; opacity: 0.7; }
+.cm-edge.dispatch:is(.st-done, .st-stopped, .st-idle) { stroke-width: 1.2; opacity: 0.4; }
+.cm-edge.dispatch.st-failed { stroke: var(--cm-fail); stroke-width: 1.3; opacity: 0.5; }
+.cm-halos { opacity: 0.16; }
+.cm-halo { stroke: hsl(var(--project-hue) 90% 72%); stroke-width: 8; }
+.cm-halo.core { stroke: var(--cm-wire-hi); stroke-width: 12; }
+:root[data-theme="light"] .cm-halos { opacity: 0.12; }
+:root[data-theme="light"] .cm-halo { stroke: hsl(var(--project-hue) 85% 58%); }
 /* a short stretch of light, one lap in about six seconds */
 .cm-pulse { stroke: var(--cm-spark); stroke-width: 3; stroke-dasharray: 14 246; animation: cm-flow 6s linear infinite; }
 .cm-pulse.core { stroke-width: 3.6; stroke-dasharray: 18 242; }
+:root[data-theme="light"] .cm-pulse:not(.core) { stroke: hsl(var(--project-hue) 90% 36%); }
 @keyframes cm-flow { to { stroke-dashoffset: -260; } }
-.cm-bus { stroke: var(--cm-wire); stroke-width: 1.6; opacity: 0.6; }
-.cm-bus.active { stroke: var(--cm-wire-hi); stroke-width: 2.2; opacity: 1; }
+.cm-bus { stroke: var(--cm-wire); stroke-width: 1.6; opacity: 0.55; }
+.cm-bus.active { stroke: var(--cm-wire-hi); stroke-width: 2.2; opacity: 0.95; }
 .cm-hub { fill: var(--cm-space); stroke: var(--cm-wire); stroke-width: 1.8; }
 .cm-hub.active { fill: #fff; stroke: var(--cm-wire-hi); }
 .cm-hub-ring { fill: color-mix(in srgb, var(--cm-wire) 8%, transparent); stroke: color-mix(in srgb, var(--cm-wire) 28%, transparent); stroke-width: 1; }
 .cm-hub-ring.active { fill: color-mix(in srgb, var(--cm-wire-hi) 18%, transparent); stroke: color-mix(in srgb, var(--cm-wire-hi) 60%, transparent); }
 :root[data-theme="light"] .cm-hub.active { fill: var(--cm-wire-hi); }
 .cm-joint { fill: var(--cm-wire-hi); stroke: var(--cm-space); stroke-width: 1.5; }
-.cm-socket { fill: var(--cm-wire); stroke: var(--cm-space); stroke-width: 1.5; opacity: 0.6; }
-.cm-socket.st-working { fill: var(--cm-wire-hi); opacity: 1; }
+/* a stop: where a project's line enters its card */
+.cm-socket { fill: hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)); stroke: var(--cm-space); stroke-width: 1.6; opacity: 0.7; }
+.cm-socket.st-working { fill: hsl(var(--project-hue) 92% 76%); opacity: 1; }
+:root[data-theme="light"] .cm-socket.st-working { fill: hsl(var(--project-hue) 80% 44%); }
 .cm-socket.st-input { fill: var(--cm-need); opacity: 1; }
+.cm-socket.st-failed { fill: var(--cm-fail); opacity: 0.85; }
 .cm-socket.archived { opacity: 0.3; }
 /* review: purple dashes; they flow only while the reviewer is working */
 .cm-edge.review { stroke: var(--cm-review); stroke-width: 1.5; stroke-dasharray: 5 6; opacity: 0.5; }
@@ -2638,88 +2674,83 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #cmArrowBack path { fill: var(--cm-back); }
 #cmArrowBackBad path { fill: var(--cm-back-bad); }
 /* hovering a card: its own path stands out, the rest steps back */
-.cm-edges.cm-hovering .cm-edge:not(.hl), .cm-edges.cm-hovering .cm-bus, .cm-edges.cm-hovering .cm-socket, .cm-edges.cm-hovering .cm-chevron { opacity: 0.16; }
+.cm-edges.cm-hovering .cm-edge:not(.hl), .cm-edges.cm-hovering .cm-bus, .cm-edges.cm-hovering .cm-socket, .cm-edges.cm-hovering .cm-chevron { opacity: 0.14; }
 .cm-edges.cm-hovering .cm-halos, .cm-edges.cm-hovering .cm-pulses { opacity: 0.1; }
 .cm-hl-path { stroke: var(--cm-wire-hi); stroke-width: 2.6; }
+.cm-hl-path.dispatch { stroke: hsl(var(--project-hue) 95% 78%); }
+:root[data-theme="light"] .cm-hl-path.dispatch { stroke: hsl(var(--project-hue) 85% 40%); }
 .cm-hl-path.review { stroke: var(--cm-review); stroke-dasharray: 5 6; }
 .cm-hl-path.return { stroke: var(--cm-back); }
 :root[data-theme="light"] .cm-hl-path { stroke-width: 2.8; }
 
-/* Cards: a pane of glass on the sky. A rim brighter at the top, a light from the top edge in the
-   status colour (--st-c), a soft light around a card that needs watching. A working card's rim is
-   gold, its inner light breathes and a light travels along its top edge; a card waiting on an
-   answer is orange; a failure is red and tinted. Finished and idle cards are unlit.
-   The surface colour stays a plain background-color so its contrast with the text can be read. */
+/* Cards: a solid panel on the sky with a fine rim and the light it catches along its top. What a card
+   is doing reads at once from its first line (the status in its colour) and, when it wants watching,
+   from a line of that colour along its top edge: gold while it works (a light travels it and the
+   panel's top breathes), orange when it waits on an answer, red with a faint tint when it failed.
+   Finished and idle cards are unlit. The surface stays a plain background-color so its contrast
+   with the text can be read. */
 .cm-node {
-  position: absolute; z-index: 2; overflow: hidden;
-  display: flex; flex-direction: column; gap: 3px; text-align: left;
-  padding: 10px 14px 12px;
-  width: 280px; height: 172px;
-  --st-c: var(--cm-wait); --lit: 0%; --rim-top: var(--cm-rim-hi); --surface: var(--cm-card);
+  position: absolute; z-index: 2; overflow: hidden; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 5px; text-align: left;
+  padding: 11px 14px 11px 14px;
+  width: 280px; height: 110px;
+  --st-c: var(--cm-wait); --edge: transparent; --surface: var(--cm-card);
   background-color: var(--surface);
-  background-image:
-    radial-gradient(78% 64px at 50% 0, color-mix(in srgb, var(--st-c) var(--lit), transparent), transparent),
-    linear-gradient(180deg, var(--cm-sheen), transparent 38%),
-    linear-gradient(var(--surface), var(--surface)),
-    linear-gradient(180deg, var(--rim-top), var(--cm-rim) 52%, color-mix(in srgb, var(--cm-rim) 70%, var(--surface)));
-  background-clip: padding-box, padding-box, padding-box, border-box; background-origin: border-box;
+  background-image: linear-gradient(180deg, var(--cm-sheen), transparent 46%);
   color: var(--cm-text);
-  border: 1px solid transparent;
-  border-radius: 13px;
-  box-shadow: var(--cm-shadow);
+  border: 1px solid var(--cm-rim);
+  border-radius: 12px;
+  box-shadow: inset 0 2px 0 -0.5px var(--edge), var(--cm-shadow);
   cursor: pointer; touch-action: none; user-select: none;
-  transition: box-shadow .15s ease;
+  transition: box-shadow .14s ease, border-color .14s ease, background-color .14s ease;
 }
-.cm-node.st-working {
-  --st-c: var(--cm-work); --lit: 15%; --rim-top: var(--cm-work);
-  box-shadow: var(--cm-shadow), 0 0 0 1px color-mix(in srgb, var(--cm-work) 28%, transparent), 0 0 30px -10px color-mix(in srgb, var(--cm-work) var(--cm-aura), transparent);
-}
-:root[data-theme="light"] .cm-node.st-working { --st-c: #f0a11c; --rim-top: #f0a11c; --lit: 13%; }
-.cm-node.st-input { --st-c: var(--cm-need); --lit: 13%; --rim-top: var(--cm-need); box-shadow: var(--cm-shadow), 0 0 26px -12px color-mix(in srgb, var(--cm-need) var(--cm-aura), transparent); }
-.cm-node.st-queued { background-image: none; border-style: dashed; border-color: var(--cm-rim-hi); }
-.cm-node.st-done, .cm-node.st-stopped { --st-c: var(--cm-done); --rim-top: color-mix(in srgb, var(--cm-done) 34%, var(--cm-rim-hi)); }
-.cm-node.st-failed {
-  --st-c: var(--cm-fail); --lit: 16%; --rim-top: var(--cm-fail); --surface: var(--cm-fail-bg);
-  box-shadow: var(--cm-shadow), 0 0 26px -12px color-mix(in srgb, var(--cm-fail) var(--cm-aura), transparent);
-}
-/* running work: the inner light breathes and a light travels along the top edge (opacity and transform only) */
+.cm-node.st-working { --st-c: var(--cm-work); --edge: var(--cm-work-lit); }
+.cm-node.st-input { --st-c: var(--cm-need); --edge: var(--cm-need); }
+.cm-node.st-failed { --st-c: var(--cm-fail); --edge: var(--cm-fail); --surface: var(--cm-fail-bg); border-color: color-mix(in srgb, var(--cm-fail) 26%, var(--cm-rim)); }
+.cm-node.st-queued { border-style: dashed; border-color: var(--cm-rim-hi); background-image: none; }
+.cm-node.st-done, .cm-node.st-stopped { --st-c: var(--cm-done); }
+.cm-node.st-done .cm-title { color: var(--cm-text-2); }
+/* a lit card throws a little of its colour round it at night */
+.cm-node:is(.st-working, .st-input, .st-failed):not(.kind-captain) { box-shadow: inset 0 2px 0 -0.5px var(--edge), var(--cm-shadow), 0 0 26px -14px color-mix(in srgb, var(--st-c) var(--cm-aura), transparent); }
+/* running work: the top of the panel breathes and a light travels along its top edge (opacity and transform only) */
 .cm-node.st-working:not(.kind-captain)::after {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: .15;
-  background: radial-gradient(92% 86px at 50% 0, color-mix(in srgb, var(--st-c) 22%, transparent), transparent);
+  background: radial-gradient(88% 64px at 50% 0, color-mix(in srgb, var(--cm-work-lit) var(--cm-breathe), transparent), transparent);
   animation: cm-breathe 3.8s ease-in-out infinite;
 }
 .cm-node.st-working:not(.kind-captain)::before {
-  content: ""; position: absolute; top: 0; left: 0; width: 34%; height: 2px; pointer-events: none;
+  content: ""; position: absolute; top: 0; left: 0; width: 34%; height: 2px; pointer-events: none; z-index: 1;
   background: linear-gradient(90deg, transparent, #fff6d8 50%, transparent); transform: translateX(-110%);
   animation: cm-edge-flow 3.4s cubic-bezier(.45, 0, .55, 1) infinite;
 }
+:root[data-theme="light"] .cm-node.st-working:not(.kind-captain)::before { background: linear-gradient(90deg, transparent, #ffd36e 50%, transparent); }
 @keyframes cm-breathe { 0%, 100% { opacity: .12; } 50% { opacity: 1; } }
 @keyframes cm-edge-flow { to { transform: translateX(305%); } }
 .cm-node.archived::before, .cm-node.archived::after { display: none; }
-.cm-node:hover { --rim-top: var(--cm-wire-hi); box-shadow: var(--cm-shadow), 0 0 0 1px color-mix(in srgb, var(--cm-wire-hi) 55%, transparent), 0 0 26px -12px var(--cm-wire-hi); }
+.cm-node:hover { --surface: var(--cm-card-hi); border-color: color-mix(in srgb, hsl(var(--project-hue, 228) 80% 70%) 45%, var(--cm-rim-hi)); box-shadow: inset 0 2px 0 -0.5px var(--edge), var(--cm-shadow-up); }
+.cm-node.st-failed:hover { --surface: var(--cm-fail-bg); }
 .cm-node.dragging { z-index: 8; cursor: grabbing; box-shadow: 0 18px 36px -12px rgba(0, 0, 0, 0.6), 0 0 0 2px color-mix(in srgb, var(--cm-wire-hi) 50%, transparent); transition: none; }
 .cm-node:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
 .cm-node.review { border-left: 3px solid var(--cm-review); }
 
-/* 队长: the one purple card, a crest, the live tally. */
+/* 队长: the one violet panel, a crest, the live tally, and under it the whole crew as one bar of colour. */
 .cm-node.kind-captain {
   overflow: visible; --st-c: var(--cm-cap);
-  display: grid; grid-template-columns: 52px auto 1fr; grid-template-rows: 24px 40px; column-gap: 14px; row-gap: 8px;
+  display: grid; grid-template-columns: 52px auto 1fr; grid-template-rows: 24px 40px 4px; column-gap: 14px; row-gap: 9px;
   align-content: center; align-items: center;
-  padding: 0 20px 0 18px;
+  padding: 0 22px 0 20px;
   background-color: var(--cm-cap-bg);
   background-image:
-    radial-gradient(60% 120% at 0 0, color-mix(in srgb, var(--cm-cap) 26%, transparent), transparent 70%),
-    radial-gradient(50% 120% at 100% 100%, color-mix(in srgb, var(--cm-wire-hi) 16%, transparent), transparent 70%),
+    radial-gradient(60% 130% at 0 0, color-mix(in srgb, var(--cm-cap) 22%, transparent), transparent 70%),
+    radial-gradient(50% 120% at 100% 100%, color-mix(in srgb, var(--cm-wire-hi) 12%, transparent), transparent 70%),
     linear-gradient(180deg, var(--cm-sheen), transparent 46%);
-  background-clip: padding-box; background-origin: padding-box;
-  border: 1.5px solid color-mix(in srgb, var(--cm-cap) 74%, transparent); border-radius: 18px;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cm-cap) 11%, transparent), 0 0 44px -12px color-mix(in srgb, var(--cm-cap) var(--cm-aura), transparent), 0 14px 30px -16px rgba(0, 0, 0, 0.8);
+  border: 1px solid color-mix(in srgb, var(--cm-cap) 58%, transparent); border-radius: 18px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cm-cap) 9%, transparent), 0 0 46px -14px color-mix(in srgb, var(--cm-cap) var(--cm-aura), transparent), 0 16px 32px -18px rgba(0, 0, 0, 0.85);
 }
-:root[data-theme="light"] .cm-node.kind-captain { box-shadow: 0 0 0 4px color-mix(in srgb, var(--cm-cap) 9%, transparent), 0 0 44px -14px color-mix(in srgb, var(--cm-cap) 45%, transparent), 0 12px 26px -14px rgba(105, 65, 198, 0.4); }
+:root[data-theme="light"] .cm-node.kind-captain { box-shadow: 0 0 0 4px color-mix(in srgb, var(--cm-cap) 7%, transparent), 0 0 40px -16px color-mix(in srgb, var(--cm-cap) 40%, transparent), 0 12px 26px -16px rgba(105, 65, 198, 0.36); }
 .cm-node.kind-captain:hover { border-color: var(--cm-cap); }
 .cm-crest {
-  grid-row: 1 / 3; grid-column: 1; width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; color: #fff;
+  grid-row: 1 / 3; grid-column: 1; width: 52px; height: 52px; border-radius: 15px; display: grid; place-items: center; color: #fff;
   background: linear-gradient(140deg, #9b8cff, #6a56e4);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 0 22px -4px color-mix(in srgb, var(--cm-cap) var(--cm-glow), transparent);
 }
@@ -2727,23 +2758,32 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-node.kind-captain .cm-title {
   grid-row: 1; grid-column: 2; align-self: center;
   font-size: 18px; font-weight: 680; line-height: 24px; letter-spacing: 0.02em;
-  display: block; flex: none; min-height: 0; white-space: nowrap;
+  display: block; min-height: 0; white-space: nowrap;
 }
 .cm-node.kind-captain .cm-top { grid-row: 1; grid-column: 3; height: 24px; gap: 10px; padding-right: 0; }
 .cm-node.kind-captain .cm-status { flex: 1; font-size: 12.5px; }
 /* 「几个在干活」: the line that has to read at a glance */
 .cm-node.kind-captain .cm-line {
   grid-row: 2; grid-column: 2 / 4;
-  display: flex; align-items: center; gap: 8px; flex: none; min-height: 0; height: 40px; overflow: hidden;
-  font-size: 13.5px; font-weight: 500; line-height: 40px; color: var(--cm-text-2); font-style: normal;
+  display: flex; align-items: center; gap: 8px; min-height: 0; height: 40px; overflow: hidden;
+  font-size: 13.5px; font-weight: 500; line-height: 40px; color: var(--cm-text-2); white-space: nowrap;
 }
 .cm-node.kind-captain .cm-count {
-  height: 38px; gap: 7px; padding: 0 12px 0 10px; border-radius: 10px;
-  background: color-mix(in srgb, var(--cm-text) 5%, transparent); border: 1px solid var(--cm-rim);
+  height: 38px; gap: 7px; padding: 0 12px 0 10px; border-radius: 10px; box-sizing: border-box;
+  background: color-mix(in srgb, var(--cm-text) 4.5%, transparent); border: 1px solid color-mix(in srgb, var(--cm-rim) 85%, transparent);
 }
 .cm-node.kind-captain .cm-count .cm-ico { width: 17px; height: 17px; }
+/* the crew as one bar: a segment per state, as long as its share; it sits under the tally */
+.cm-fleet { grid-row: 3; grid-column: 2 / 4; display: flex; gap: 2px; height: 4px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--cm-text) 6%, transparent); }
+.cm-fleet i { flex: 1 1 0; min-width: 3px; height: 100%; background: var(--cm-wait); }
+.cm-fleet .st-working { background: var(--cm-work-lit); }
+.cm-fleet .st-input { background: var(--cm-need); }
+.cm-fleet .st-failed { background: var(--cm-fail); }
+.cm-fleet .st-done { background: var(--cm-done); }
+.cm-fleet .st-stopped { background: color-mix(in srgb, var(--cm-done) 45%, var(--cm-wait)); }
+.cm-fleet .st-idle { background: var(--cm-core); }
 /* a narrow window: 队长's tally stands on two rows instead of being cut */
-.cm-cap-wrap .cm-node.kind-captain { grid-template-rows: 24px auto; }
+.cm-cap-wrap .cm-node.kind-captain { grid-template-rows: 24px auto 4px; }
 .cm-cap-wrap .cm-node.kind-captain .cm-line { height: auto; flex-wrap: wrap; row-gap: 8px; overflow: visible; }
 .cm-node.kind-captain .cm-count { --n: var(--cm-text); }
 .cm-node.kind-captain .cm-count.st-working { --n: var(--cm-work); }
@@ -2751,21 +2791,22 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-node.kind-captain .cm-count.st-failed { --n: var(--cm-fail); }
 .cm-node.kind-captain .cm-count.st-done { --n: var(--cm-done); }
 .cm-node.kind-captain .cm-count b { font-size: 22px; line-height: 1; letter-spacing: -0.02em; text-shadow: 0 0 14px color-mix(in srgb, var(--n) var(--cm-glow), transparent); }
-.cm-node.kind-captain .cm-count.st-working { background: color-mix(in srgb, var(--cm-work) 11%, transparent); border-color: color-mix(in srgb, var(--cm-work) 32%, transparent); color: var(--cm-text); }
+.cm-node.kind-captain .cm-count.st-working { background: color-mix(in srgb, var(--cm-work) 10%, transparent); border-color: color-mix(in srgb, var(--cm-work) 30%, transparent); color: var(--cm-text); }
 .cm-node.kind-captain .cm-count.st-working b { color: var(--cm-work); }
-.cm-node.kind-captain .cm-count.st-input { background: color-mix(in srgb, var(--cm-need) 12%, transparent); border-color: color-mix(in srgb, var(--cm-need) 36%, transparent); color: var(--cm-text); }
+.cm-node.kind-captain .cm-count.st-input { background: color-mix(in srgb, var(--cm-need) 11%, transparent); border-color: color-mix(in srgb, var(--cm-need) 34%, transparent); color: var(--cm-text); }
 .cm-node.kind-captain .cm-count.st-input b { color: var(--cm-need); }
-.cm-node.kind-captain .cm-count.st-failed { background: color-mix(in srgb, var(--cm-fail) 10%, transparent); border-color: color-mix(in srgb, var(--cm-fail) 32%, transparent); }
+.cm-node.kind-captain .cm-count.st-failed { background: color-mix(in srgb, var(--cm-fail) 9%, transparent); border-color: color-mix(in srgb, var(--cm-fail) 30%, transparent); }
 .cm-node.kind-captain .cm-count.st-failed b { color: var(--cm-fail); }
 .cm-node.kind-captain .cm-count.st-done b { color: var(--cm-done); }
 
-.cm-node.kind-waiting { background: transparent; box-shadow: none; }
+.cm-node.kind-waiting { background-color: transparent; box-shadow: none; }
 .cm-node.archived { opacity: 0.5; border-style: dashed; border-color: var(--cm-rim-hi); background-image: none; box-shadow: none; }
 .cm-node.archived:hover { opacity: 0.9; }
-.cm-top { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 0 auto; height: 20px; padding-right: 34px; }
-.cm-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; font-size: 12.5px; font-weight: 600; color: var(--cm-text-2); white-space: nowrap; overflow: hidden; height: 20px; }
+/* first line: the status (always whole) on the left, the model and account on the right, ··· in the corner */
+.cm-top { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 0 auto; height: 18px; padding-right: 26px; }
+.cm-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; font-size: 12.5px; font-weight: 600; letter-spacing: 0.01em; color: var(--cm-text-2); white-space: nowrap; overflow: hidden; height: 18px; }
 .cm-status-text { overflow: hidden; text-overflow: ellipsis; }
-/* 高优先级: a solid flag chip leading the card's title, in a blue no status uses. The card keeps its status rim and light. */
+/* 高优先级: a solid flag chip leading the card's title, in a blue no status uses. The card keeps its status edge and light. */
 .cm-prio { display: inline-flex; align-items: center; gap: 3px; height: 18px; margin-right: 7px; padding: 0 7px 0 5px; border-radius: 6px; background: var(--prio); color: var(--prio-ink); font-size: 11px; font-weight: 700; line-height: 18px; white-space: nowrap; vertical-align: 2px; }
 .cm-prio svg { flex: 0 0 auto; }
 /* On a card the status is always whole: it takes the width its words need and the model badge beside it gives way. */
@@ -2775,44 +2816,46 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .st-done > .cm-top .cm-status { color: var(--cm-done); }
 .st-failed > .cm-top .cm-status { color: var(--cm-fail); }
 .cm-node.archived .cm-ico svg, .cm-node.archived .cm-ico::after { animation: none; }
-/* model badge: a small capsule; the brand colour stays in its icon */
-.cm-agent { flex: 0 1 auto; min-width: 0; margin-left: auto; display: inline-flex; align-items: center; font-size: 11px; color: var(--cm-text-2); max-width: 130px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* model badge: plain small text with its brand icon, no capsule; the account follows it */
+.cm-agent { flex: 0 1 auto; min-width: 0; margin-left: auto; display: inline-flex; align-items: center; font-size: 11.5px; color: var(--cm-text-2); max-width: 140px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .cm-agent > span { display: flex; min-width: 0; max-width: 100%; }
-.cm-agent .cn-badge {
-  margin-right: 0; min-width: 0; max-width: min(130px, 100%); padding: 2px 9px 2px 7px; gap: 5px; border-radius: 999px;
-  background: color-mix(in srgb, var(--cm-text) 6%, transparent); border: 1px solid var(--cm-rim);
-}
-.cm-agent .cn-badge .agent-model-label { min-width: 0; max-width: 104px; font-weight: 550; color: var(--cm-text); }
+.cm-agent .cn-badge { margin-right: 0; min-width: 0; max-width: min(140px, 100%); padding: 0; gap: 5px; border: 0; background: transparent; }
+.cm-agent .cn-badge .agent-model-label { min-width: 0; max-width: 104px; font-weight: 550; color: var(--cm-text-2); }
 .cm-node.kind-captain .cm-agent { margin-left: 0; }
+.cm-node.kind-captain .cm-agent .cn-badge { padding: 2px 9px 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--cm-text) 6%, transparent); border: 1px solid var(--cm-rim); }
+.cm-node.kind-captain .cm-agent .cn-badge .agent-model-label { color: var(--cm-text); }
 .cm-more {
-  position: absolute; top: 3px; right: 5px; z-index: 1; width: 32px; height: 32px; padding: 0; display: grid; place-items: center;
-  border: 0; border-radius: 9px; background: transparent; color: var(--cm-text-2); cursor: pointer;
+  position: absolute; top: 2px; right: 2px; z-index: 2; width: 36px; height: 36px; padding: 0; display: grid; place-items: center;
+  border: 0; border-radius: 10px; background: transparent; color: var(--cm-text-dim); cursor: pointer; transition: color .12s ease, background .12s ease;
 }
-.cm-more:hover, .cm-more:focus-visible { color: var(--cm-text); background: color-mix(in srgb, var(--cm-text) 10%, transparent); }
+.cm-more:hover, .cm-more:focus-visible { color: var(--cm-text); background: color-mix(in srgb, var(--cm-text) 9%, transparent); }
 .cm-more:focus-visible { outline: 2px solid var(--cm-core); outline-offset: -2px; }
 .cm-title {
-  font-size: 15.5px; font-weight: 650; line-height: 20px; letter-spacing: -0.005em;
+  font-size: 15px; font-weight: 640; line-height: 20px; letter-spacing: -0.003em;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word;
   flex: 0 0 40px; min-height: 40px;
 }
-.cm-line {
-  font-size: 13px; line-height: 18px; color: var(--cm-text-2);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word;
-  flex: 0 0 36px; min-height: 36px;
-}
+/* last line: one line of news, cut on the card (whole on hover and in the popover), and when */
+.cm-meta { display: flex; align-items: center; gap: 10px; min-width: 0; height: 18px; margin-top: auto; flex: 0 0 auto; }
+.cm-line { flex: 1 1 auto; min-width: 0; height: 18px; font-size: 12.5px; line-height: 18px; color: var(--cm-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-line.k-live::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 7px 1px 1px; border-radius: 50%; background: hsl(var(--project-hue, 228) 85% 70%); vertical-align: middle; }
+:root[data-theme="light"] .cm-line.k-live::before { background: hsl(var(--project-hue, 228) 75% 46%); }
 .cm-line.empty { color: var(--cm-text-dim); }
-.st-failed > .cm-line:not(.empty) { color: color-mix(in srgb, var(--cm-fail) 75%, var(--cm-text)); }
-.cm-live { font-family: var(--mono); font-size: 11px; color: var(--cm-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto; height: 16px; line-height: 16px; }
-.cm-foot { flex: 0 0 auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--cm-text-dim); white-space: nowrap; overflow: hidden; height: 28px; margin-top: auto; display: flex; align-items: center; gap: 10px; }
-.cm-time { display: inline-flex; align-items: center; gap: 5px; }
-.cm-returned { color: var(--cm-done); font-size: 12px; margin-left: auto; }
+.cm-line.k-question { color: var(--cm-need); }
+.cm-line.k-failed { color: color-mix(in srgb, var(--cm-fail) 75%, var(--cm-text)); }
+.cm-foot { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--cm-text-dim); white-space: nowrap; }
+.cm-foot:empty { display: none; }
+.cm-time { color: var(--cm-text-dim); }
+.cm-returned { display: inline-grid; place-items: center; width: 14px; height: 14px; color: var(--cm-done); }
+.cm-returned svg { display: block; }
 .cm-view {
-  margin-left: auto; height: 28px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
-  font-size: 12.5px; font-weight: 600; color: var(--cm-fail); cursor: pointer;
-  background: transparent; border: 1px solid color-mix(in srgb, var(--cm-fail) 75%, transparent); border-radius: 8px;
+  height: 22px; padding: 0 7px 0 9px; display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
+  font-size: 12px; font-weight: 600; color: var(--cm-fail); cursor: pointer;
+  background: color-mix(in srgb, var(--cm-fail) 8%, transparent); border: 1px solid color-mix(in srgb, var(--cm-fail) 55%, transparent); border-radius: 7px;
 }
-.cm-returned + .cm-view { margin-left: 4px; }
-.cm-view:hover { background: color-mix(in srgb, var(--cm-fail) 14%, transparent); }
+.cm-view::before { content: ""; position: absolute; inset: -8px -6px; }
+.cm-view { position: relative; }
+.cm-view:hover { background: color-mix(in srgb, var(--cm-fail) 16%, transparent); }
 .cm-view:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
 .cm-fold {
   position: absolute; z-index: 2; padding: 0 14px;
@@ -2829,8 +2872,8 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 
 /* Detail popover: sits in the viewport next to the card and does not zoom with the canvas. */
 .cm-pop {
-  position: absolute; z-index: 12; width: 340px; max-width: calc(100% - 16px); display: flex; flex-direction: column;
-  background: var(--cm-card); border: 1px solid var(--cm-rim-hi); border-radius: 14px; box-shadow: 0 18px 40px -14px rgba(0, 0, 0, 0.55), var(--cm-shadow);
+  position: absolute; z-index: 12; width: 344px; max-width: calc(100% - 16px); display: flex; flex-direction: column;
+  background: var(--cm-card); border: 1px solid var(--cm-rim-hi); border-radius: 14px; box-shadow: 0 22px 48px -18px rgba(0, 0, 0, 0.6), var(--cm-shadow);
   cursor: default; user-select: text;
 }
 .cm-pop.st-failed { border-color: color-mix(in srgb, var(--cm-fail) 55%, var(--cm-rim-hi)); }
@@ -2840,20 +2883,22 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-pop.st-input .cm-status { color: var(--cm-need); }
 .cm-pop.st-done .cm-status { color: var(--cm-done); }
 .cm-pop.st-failed .cm-status { color: var(--cm-fail); }
+.cm-pop .cm-agent .cn-badge { padding: 2px 9px 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--cm-text) 6%, transparent); border: 1px solid var(--cm-rim); }
 .cm-pop-x { flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--cm-text-2); cursor: pointer; }
 .cm-pop-x:hover { color: var(--cm-text); background: color-mix(in srgb, var(--cm-text) 10%, transparent); }
 .cm-pop-x:focus-visible, .cm-pop-open:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
-.cm-pop-body { max-height: 280px; overflow-y: auto; padding: 4px 14px 8px; display: flex; flex-direction: column; gap: 8px; }
+.cm-pop-body { max-height: 300px; overflow-y: auto; padding: 4px 14px 10px; display: flex; flex-direction: column; gap: 8px; }
 .cm-pop-title { margin: 0; font-size: 15.5px; line-height: 21px; font-weight: 650; word-break: break-word; }
 .cm-pop-receipt { font-size: 13px; line-height: 20px; color: var(--cm-text-2); white-space: pre-wrap; word-break: break-word; }
 .cm-pop-receipt.empty { color: var(--cm-text-dim); }
 .cm-pop.st-failed .cm-pop-receipt:not(.empty) { color: color-mix(in srgb, var(--cm-fail) 75%, var(--cm-text)); }
+.cm-pop-progress { font-size: 13px; line-height: 20px; color: var(--cm-text); word-break: break-word; }
 .cm-pop-live { font-family: var(--mono); font-size: 11.5px; color: var(--cm-text-dim); word-break: break-word; }
 .cm-pop-files { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
 .cm-pop-files li { max-width: 100%; padding: 2px 8px; border: 1px solid var(--cm-rim); border-radius: 6px; font-family: var(--mono); font-size: 11.5px; color: var(--cm-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cm-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px 12px; color: var(--cm-text-dim); font-size: 12px; border-top: 1px solid var(--cm-rim); }
-.cm-pop-open { height: 32px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--cm-btn); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; }
-.cm-pop-open:hover { filter: brightness(1.1); }
+.cm-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 14px 12px; color: var(--cm-text-dim); font-size: 12px; border-top: 1px solid var(--cm-rim); }
+.cm-pop-open { height: 32px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--cm-cta); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 6px 16px -8px rgba(79, 99, 234, .8); }
+.cm-pop-open:hover { filter: brightness(1.08); }
 
 /* Bottom tray: projects with nothing running, one chip each */
 .cm-tray {
@@ -2871,12 +2916,11 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-tray-chips { display: flex; align-items: center; gap: 8px; margin-left: auto; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 2px; }
 .cm-tray-chips::-webkit-scrollbar { display: none; }
 .cm-chip {
-  --project-color: hsl(var(--project-hue) 78% 66%);
+  --project-color: hsl(var(--project-hue) 78% 68%);
   flex: 0 0 auto; height: 34px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px 0 10px; cursor: pointer;
   background: var(--cm-card); border: 1px solid var(--cm-rim); border-radius: 9px; color: var(--cm-text); font-size: 13px; font-weight: 550;
   transition: border-color .15s ease, background .15s ease;
 }
-:root[data-theme="light"] .cm-chip { --project-color: hsl(var(--project-hue) 70% 42%); }
 .cm-chip .cm-cube { width: 16px; height: 16px; }
 .cm-chip:hover { border-color: color-mix(in srgb, var(--project-color) 60%, var(--cm-rim)); }
 .cm-chip[aria-pressed="true"] { border-color: var(--project-color); background: color-mix(in srgb, var(--project-color) 12%, var(--cm-card)); }
@@ -2887,7 +2931,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 /* Legend row: what the marks mean on the left; zoom, fit and the rest on the right */
 .cm-legend {
   flex: 0 0 52px; display: flex; align-items: center; gap: 14px; user-select: none;
-  padding: 0 14px; border-top: 1px solid var(--cm-rim);
+  padding: 0 14px; border-top: 1px solid color-mix(in srgb, var(--cm-rim) 80%, transparent);
   background: var(--cm-space); color: var(--cm-text-2); font-size: 12px; white-space: nowrap;
 }
 .cm-legend-keys { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 14px; overflow: hidden; }
@@ -2905,7 +2949,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   background: var(--cm-pane); border: 1px solid var(--cm-rim); border-radius: 11px; cursor: default;
 }
 .cm-controls button {
-  min-width: 32px; height: 32px; padding: 0 6px; border: none; border-radius: 8px;
+  position: relative; min-width: 32px; height: 32px; padding: 0 6px; border: none; border-radius: 8px;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   background: transparent; color: var(--cm-text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: pointer;
   transition: background .15s ease, color .15s ease;
@@ -2915,10 +2959,13 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-controls button.on { background: color-mix(in srgb, var(--cm-core) 18%, transparent); color: var(--cm-text); }
 .cm-controls button[hidden] { display: none; }
 .cm-controls .cm-zoom { min-width: 52px; font-family: var(--mono); color: var(--cm-text); }
+/* 智能一页: lit while the map arranges itself for the window; a dot on it once something was placed by hand */
 .cm-controls .cm-fit { color: var(--cm-wire-hi); background: color-mix(in srgb, var(--cm-wire-hi) 13%, transparent); }
 .cm-controls .cm-fit:hover { background: color-mix(in srgb, var(--cm-wire-hi) 24%, transparent); color: var(--cm-text); }
+.cm-controls .cm-fit[data-state="manual"] { color: var(--cm-text-2); background: transparent; }
+.cm-controls .cm-fit[data-state="manual"]::after { content: ""; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--cm-work-lit); box-shadow: 0 0 0 2px var(--cm-pane); }
 .cm-controls [data-cm="undo"] { color: var(--cm-work); }
-/* A word from the map itself (智能一页 that cannot fit a page): bottom centre of the canvas, gone in a few seconds. */
+/* A word from the map itself (智能一页 that cannot fit a page, a first move by hand): bottom centre of the canvas, gone in a few seconds. */
 .cm-hint {
   position: absolute; z-index: 11; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100% - 32px);
   padding: 8px 14px; border: 1px solid var(--cm-rim-hi); border-radius: 12px; background: var(--cm-pane); color: var(--cm-text);

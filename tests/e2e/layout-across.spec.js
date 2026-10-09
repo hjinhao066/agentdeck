@@ -4,8 +4,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// 终端架构图 and 任务看板 across the window: project frames 3–4 abreast and stacked
-// row after row, the map's own 100%, and the board's project chips over the full
+// 终端架构图 and 任务看板 across the window: project frames left to right, as many abreast
+// as the window holds, the rest under the lane that ends highest, the map's own 100%, and the board's project chips over the full
 // width. Real renderer, isolated userData, PTYs running only the stand-in TUI.
 // Set AGENTDECK_LAYOUT_SHOTS to keep PNGs at three window widths.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
@@ -128,15 +128,14 @@ const readMap = () => page.evaluate(() => {
   const rect = (n) => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
   const lay = CrewMap.layout();
   return { vp: rect(document.querySelector('.cm-viewport')), view: CrewMap.view(), plan: CrewMap.plan(), pageFits: CrewMap.pageFits(), label: document.querySelector('[data-cm="reset"]').textContent,
-    groups: lay.groups.map((g) => ({ key: g.key, x: g.x, y: g.y, w: g.w, h: g.h, lane: g.lane })),
+    groups: lay.groups.map((g) => ({ key: g.key, x: g.x, y: g.y, w: g.w, h: g.h, lane: g.lane })), order: CrewMapCore.orderByPlace(lay.groups),
     frames: [...document.querySelectorAll('.cm-pane')].map((n) => ({ key: n.dataset.project, ...rect(n) })), captain: rect(document.querySelector('.cm-node.kind-captain')),
     cardPx: document.querySelector('.cm-node:not(.kind-captain)').getBoundingClientRect().width };
 });
-const byRow = (plan) => Array.from({ length: Math.max(0, ...plan.lanes.map((l) => l.length)) }, (_, r) => plan.lanes.filter((l) => l[r]).map((l) => l[r])).flat();
-// lanes at 1920, 1440 and 980 wide windows
-const LANES = { 1: [1, 1, 1], 4: [4, 4, 2], 9: [4, 4, 2] };
+// lanes at 1920, 1440 and 980 wide windows: every frame here is one card wide (fewer than seven sessions), so as many as the width holds
+const LANES = { 1: [1, 1, 1], 4: [4, 4, 2], 9: [6, 4, 2] };
 
-for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构图: ${label} 个项目 stand across the window at 100%, up to four abreast, row after row`, async () => {
+for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构图: ${label} 个项目 stand across the window at 100%, as many abreast as it holds, the rest under them`, async () => {
   await launch(crew);
   const keys = crew.map(([project]) => project);
   for (const [i, [name, w, h]] of WIDTHS.entries()) {
@@ -148,7 +147,8 @@ for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构
     expect(g.label).toBe('100%');
     expect(g.cardPx, `${name}: a card is 196px wide on screen (what 70% used to show)`).toBeCloseTo(196, 0);
     expect(g.plan.lanes.length, `${name}: lanes across`).toBe(LANES[label][i]);
-    expect(byRow(g.plan), `${name}: projects fill the rows from the left, in order`).toEqual(keys);
+    expect(g.order, `${name}: projects fill the window from the left, in order, read like text`).toEqual(keys);
+    expect(Object.values(g.plan.caps).every((c) => c === 1), `${name}: fewer than seven sessions, one card wide`).toBe(true);
     // the first row stands on one line; every later frame is close under the one above it in its lane
     const lanes = g.plan.lanes.map((lane) => lane.map((key) => g.groups.find((f) => f.key === key)));
     expect(new Set(lanes.map((lane) => lane[0].y)).size, `${name}: the first row on one line`).toBe(1);

@@ -85,8 +85,8 @@ test('state changes show up on the next status tick', async () => {
   await expect.poll(() => status('c2003'), { timeout: 5000 }).toBe('done');
 });
 
-test('a canvas: cards drag and stay put, the view pans and zooms, all kept in config', async () => {
-  // 代码审查 sits alone on its row: room to move sideways inside the project
+test('a canvas: cards drag and stay put inside their own frame, the view pans and zooms, all kept in config', async () => {
+  // 代码审查's project is one card wide (fewer than seven sessions): the card moves a little and never leaves its frame
   const card = page.locator('.cm-node[data-node-id="c2003"]');
   const before = await card.evaluate((n) => [n.offsetLeft, n.offsetTop]);
   const box = await card.boundingBox();
@@ -95,7 +95,9 @@ test('a canvas: cards drag and stay put, the view pans and zooms, all kept in co
   await page.mouse.move(box.x + 130, box.y + 90, { steps: 6 });
   await page.mouse.up();
   const after = await card.evaluate((n) => [n.offsetLeft, n.offsetTop]);
-  expect(after[0]).toBeGreaterThan(before[0] + 50);
+  expect(after[0]).toBeGreaterThan(before[0]);
+  expect(after[1]).toBeGreaterThan(before[1]);
+  expect(await page.evaluate(() => { const l = CrewMap.layout(), b = l.nodes.get('c2003'), g = l.groups.find((x) => x.key === b.project); return b.x >= g.x && b.x + b.w <= g.x + g.w && b.y >= g.y && b.y + b.h <= g.y + g.h; })).toBe(true);
   // dragging is not a click: the board stays open
   expect(await page.evaluate(() => activeView)).toBe('board');
   expect(await page.evaluate(() => config.crewMap.positions.c2003)).toEqual({ x: after[0], y: after[1] });

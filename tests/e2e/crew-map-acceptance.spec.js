@@ -27,7 +27,7 @@ async function geometry() {
     const viewport = rect(document.querySelector('.cm-viewport'));
     const nodes = [...document.querySelectorAll('.cm-node')].map((n) => ({ id: n.dataset.nodeId, ...rect(n) }));
     const groups = [...document.querySelectorAll('.cm-project')].map((n) => { const pane = document.querySelector(`.cm-pane[data-project="${CSS.escape(n.dataset.project)}"]`); return { id: n.dataset.project, ...rect(n), color: getComputedStyle(pane).backgroundColor, border: getComputedStyle(pane).borderColor }; });
-    const texts = [...document.querySelectorAll('.cm-node')].flatMap((card) => [...card.querySelectorAll('.cm-top, .cm-title, .cm-line, .cm-live, .cm-foot')].filter((n) => !n.hidden).map((n) => ({ id: card.dataset.nodeId, cls: n.className, captain: card.classList.contains('kind-captain'), ...rect(n), parent: rect(card), lineHeight: parseFloat(getComputedStyle(n).lineHeight), localHeight: n.offsetHeight, clamp: getComputedStyle(n).webkitLineClamp })));
+    const texts = [...document.querySelectorAll('.cm-node')].flatMap((card) => [...card.querySelectorAll('.cm-top, .cm-title, .cm-line, .cm-live, .cm-foot')].filter((n) => !n.hidden).map((n) => ({ id: card.dataset.nodeId, cls: n.className, captain: card.classList.contains('kind-captain'), ...rect(n), parent: rect(card), lineHeight: parseFloat(getComputedStyle(n).lineHeight), localHeight: n.offsetHeight, clamp: getComputedStyle(n).webkitLineClamp, wrap: getComputedStyle(n).whiteSpace, overflow: getComputedStyle(n).textOverflow })));
     const heads = [...document.querySelectorAll('.cm-project-head')].map((h) => { const sum = h.querySelector('.cm-project-summary'), name = h.querySelector('.cm-project-name'); return { id: h.parentElement.dataset.project, ...rect(h), sumClient: sum.clientWidth, sumScroll: sum.scrollWidth, sumRight: sum.getBoundingClientRect().right, counts: [...sum.querySelectorAll('.cm-count')].map((c) => ({ cls: c.className, ...rect(c.querySelector('b')) })), nameCut: name.scrollWidth > name.clientWidth + 1, nameOverflow: getComputedStyle(name).textOverflow }; });
     const below = [...document.querySelectorAll('.cm-tray, .cm-legend')].filter((n) => !n.hidden).map((n) => n.getBoundingClientRect().y);
     return { viewport, nodes, groups, heads, below, texts, scale: CrewMap.view().scale, fits: CrewMap.pageFits() };
@@ -70,9 +70,14 @@ async function assertLayout() {
   expect(cap.y, '队长 stays in view').toBeGreaterThanOrEqual(g.viewport.y + 8 - 0.5);
   for (const t of g.texts) {
     expect(t.bottom, `${t.id} ${t.cls} fits card`).toBeLessThanOrEqual(t.parent.bottom - 2);
-    if (['cm-title', 'cm-line'].includes(t.cls) && !t.captain) {
+    // a title shows up to two lines; the news under it is one line, cut with an ellipsis (whole in its tooltip and the popover)
+    if (t.cls === 'cm-title' && !t.captain) {
       expect(t.clamp).toBe('2');
       expect(t.localHeight).toBe(t.lineHeight * 2);
+    }
+    if (/^cm-line\b/.test(t.cls) && !t.captain) {
+      expect([t.wrap, t.overflow]).toEqual(['nowrap', 'ellipsis']);
+      expect(t.localHeight).toBe(t.lineHeight);
     }
   }
   const controls = await page.evaluate(() => [...document.querySelectorAll('.cm-controls button, .cm-return-toggle, .cm-project-toggle, .cm-more, .cm-tray-arrow, #boardViewBtn, #navCollapseBtn')].filter((n) => !n.hidden).map((n) => ({ label: n.getAttribute('aria-label'), title: n.title, icon: !!n.querySelector('svg'), text: n.textContent.trim(), cm: n.dataset.cm || '' })));

@@ -6,12 +6,14 @@
 // touches a terminal; clicking a card opens that real column.
 //
 // Arrangement and view are one system with two layers:
-// - Where things stand. Untouched, the map arranges itself for the window:
-//   project frames across it, up to four abreast as its width holds, the
-//   rest stacked under them row after row (CrewMapCore.planAcross).
+// - Where things stand. Untouched (智能一页, the default), the map arranges
+//   itself for the window and again whenever the window changes: project
+//   frames left to right, as many abreast as its width holds, each one card
+//   wide (two from CrewMapCore.PROJECT_TWO_COLUMNS_AT sessions on) and growing
+//   down; the rest go under the lane that ends highest (CrewMapCore.planAcross).
 //   Once the user drags a card or a frame, that plan is kept under their
-//   moves until they tidy, so a window resize never pulls the ground from
-//   under a hand-placed map.
+//   moves until they tidy or go back to 智能一页, so a window resize never
+//   pulls the ground from under a hand-placed map.
 // - How it is seen. Untouched, the map stands at its own 100% (C.BASE_SCALE
 //   of the drawn size), centred, from the top when it is taller than the
 //   window; once the user pans or zooms, the view is theirs.
@@ -23,17 +25,21 @@
   'use strict';
   const C = window.CrewMapCore;
   const SVG = 'http://www.w3.org/2000/svg';
-  const NODE = { nodeW: 280, nodeH: 172, captainW: 420, captainH: 104, gapX: 24, clusterGap: 32, fanY: 48, gapY: 20, pad: 16, lane: 12 };
-  const GRID = { padX: 24, padBottom: 20, rowGap: 20, reviewGap: 40 };   // card grid inside a project
+  // A card: status and model on top, the title in up to two lines, then one line of news and its time.
+  const NODE = { nodeW: 280, nodeH: 110, captainW: 440, captainH: 112, gapX: 24, clusterGap: 32, fanY: 48, gapY: 20, pad: 16, lane: 12 };
+  // card grid inside a project; headH: the frame's two-line title strip (name, then the tally);
+  // rails: every card hangs off its project's line down the left of its column (railX left of the
+  // cards, entering each by its status row, entryTop down from its top)
+  const GRID = { padX: 16, padBottom: 16, rowGap: 12, reviewGap: 36, headH: 64, rails: true, railX: 8, entryTop: 20 };
   // The scale the map arrives at and is arranged for: its own 100%. What does not fit at this
   // scale is reached by panning (drag, wheel, trackpad).
   const FIT = C.BASE_SCALE;
   const MOVE_MS = 280;    // frames and cards gliding to a new place (shorter than the view's own glide)
   // Spacing given up when the roomy map just misses the window at 100% and this brings all of it in.
-  const TIGHT = { captainH: 92, fanY: 40, rowGap: 12, padBottom: 12 };
+  const TIGHT = { captainH: 104, fanY: 40, rowGap: 10, padBottom: 12 };
   const DRAG_PX = 4;
   let host = null;
-  let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, projectsEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn, undoBtn, hintEl, trayEl, popEl;
+  let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, projectsEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn, undoBtn, fitBtn, hintEl, trayEl, popEl;
   let mode = 'crew';
   let showArchived = false;
   let showReturn = false;
@@ -85,7 +91,8 @@
       const i = info(c);
       return {
         id: c.id, title: host.columnLabel(c), alive: !!(entry && entry.alive), state: entry ? entry.state || 'plain' : 'plain',
-        live: entry && entry.lastScreen ? host.activityLine(entry.lastScreen) : '',
+        // whole lines (a narrow column wraps them), so a CLI's update notice is known for what it is
+        live: entry && (entry.liveScreen || entry.lastScreen) ? host.activityLine(entry.liveScreen || entry.lastScreen) : '',
         provider: i.provider || '', model: i.shortModel || '', lastReceipt: c.lastReceipt || null, captainCrew: !!c.captainCrew, project: c.project, reviews: c.reviews,
         important: host.isPriority(c),
       };
@@ -125,6 +132,8 @@
     n.tabIndex = 0;
     n.dataset.nodeId = node.id;
     n.dataset.status = node.status;
+    // the card wears its project's colour where it touches the project's line (its stop, its live dot, its rim on hover)
+    if (!captain) n.style.setProperty('--project-hue', String(C.projectHue(node.project)));
     place(n, box);
     const top = el('div', 'cm-top');
     const st = el('span', 'cm-status');
@@ -145,39 +154,45 @@
       title.prepend(flag);
       n.classList.add('prio');
     }
-    const line = el('div', 'cm-line', node.line || (waiting ? '同时干活的会话满了，有空位就自动开' : node.status === 'working' ? '干活中，还没有回执' : captain ? '' : '还没有回执'));
-    line.classList.toggle('empty', !node.line);
-    const liveLine = el('div', 'cm-live', node.live ? '▸ ' + node.live : '');
-    liveLine.hidden = !node.live;
-    const foot = el('div', 'cm-foot');
-    foot.hidden = captain || waiting;
-    if (!foot.hidden) {
-      const clock = el('span', 'cm-time');
-      clock.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.8"/><path d="M8 4.7V8l2.2 1.5"/></svg>';
-      clock.append(el('span', '', ago(node.ts)));
-      foot.append(clock);
-      if (node.returned) {
-        const returned = el('span', 'cm-returned', '✓ 已交回');
-        returned.title = '结果已交回队长';
-        foot.appendChild(returned);
-      }
-      if (node.status === 'failed') {
-        const look = el('button', 'cm-view', '查看');
-        look.type = 'button';
-        look.title = `查看失败详情：${node.title}`;
-        look.setAttribute('aria-label', look.title);
-        look.innerHTML += '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>';
-        guard(look, () => togglePop(node.id));
-        foot.appendChild(look);
-      }
-    }
-    n.append(top, title, line, liveLine, foot);
     if (captain) {
+      // 队长: its crest, name and model, the live tally, and the whole crew as one bar of colour under it
+      const line = el('div', 'cm-line', node.line);
       tally(line, node.line);
       const crest = el('i', 'cm-crest');
       crest.setAttribute('aria-hidden', 'true');
       crest.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8 4.2 3.6L12 5l4.3 6.6L20.5 8l-1.7 9.5H5.2z"/><path d="M6 20.5h12"/></svg>';
-      n.prepend(crest);
+      n.append(crest, top, title, line, fleet(lastMap ? lastMap.counts : {}));
+    } else {
+      // one row under the title: the news on the left, when on the right (a failure: its 查看 instead)
+      const meta = el('div', 'cm-meta');
+      const line = el('div', 'cm-line');
+      fillLine(line, node);
+      const foot = el('span', 'cm-foot');
+      if (!waiting) {
+        if (node.returned) {
+          const back = el('i', 'cm-returned');
+          back.setAttribute('role', 'img');
+          back.title = '结果已交回队长';
+          back.setAttribute('aria-label', back.title);
+          back.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.2 3.6 3.4 6.4l2.8 2.8"/><path d="M3.6 6.4h6.1a3 3 0 0 1 0 6H8"/></svg>';
+          foot.append(back);
+        }
+        if (node.status === 'failed') {
+          const look = el('button', 'cm-view', '查看');
+          look.type = 'button';
+          look.title = `查看失败详情：${node.title}`;
+          look.setAttribute('aria-label', look.title);
+          look.innerHTML += '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>';
+          guard(look, () => togglePop(node.id));
+          foot.append(look);
+        } else {
+          const clock = el('span', 'cm-time', ago(node.ts));
+          if (node.ts) clock.title = (node.status === 'working' ? '开始于 ' : '最后更新 ') + new Date(node.ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          foot.append(clock);
+        }
+      }
+      meta.append(line, foot);
+      n.append(top, title, meta);
     }
     if (!captain && !waiting) {
       const more = el('button', 'cm-more');
@@ -204,6 +219,25 @@
       n.addEventListener('focusout', () => hover(null));
     }
     return n;
+  }
+  // A card's one line of news (CrewMapCore.cardLine: what it is doing, asks, failed on or handed back),
+  // cut to one line on the card and whole in its tooltip. Called again on every status tick.
+  function fillLine(line, node) {
+    const l = C.cardLine(node);
+    if (line.textContent !== l.text) line.textContent = l.text;
+    const cls = 'cm-line k-' + l.kind + (l.kind === 'empty' ? ' empty' : '');
+    if (line.className !== cls) line.className = cls;
+    const tip = l.kind === 'empty' ? '' : l.kind === 'live' ? [node.live, node.progress].filter(Boolean).join('\n') : node.full || l.text;
+    if (line.title !== tip) line.title = tip;
+  }
+  // The whole crew at a glance under 队长's tally: one thin bar, a segment per state as long as its share.
+  const FLEET = ['working', 'input', 'queued', 'failed', 'stopped', 'idle', 'done'];
+  function fleet(counts) {
+    const bar = el('div', 'cm-fleet');
+    bar.setAttribute('aria-hidden', 'true');
+    FLEET.filter((k) => counts && counts[k]).forEach((k) => { const seg = el('i', 'st-' + k); seg.style.flexGrow = String(counts[k]); bar.append(seg); });
+    bar.hidden = !bar.childNodes.length;
+    return bar;
   }
   // A button inside a card: it neither drags nor opens the column; it does its own thing.
   function guard(btn, fn) {
@@ -336,7 +370,7 @@
     edgesEl.classList.toggle('cm-hovering', !!hoverId && !!lit);
     if (!hoverId || !lit) return;
     const mine = routeList.filter((r) => (r.from === hoverId || r.to === hoverId) && (r.type !== 'return' || showReturn));
-    mine.forEach((r) => svg('path', { class: 'cm-hl-path ' + r.type, d: rounded(r.points) }, lit));
+    mine.forEach((r) => svg('path', { class: 'cm-hl-path ' + r.type, d: rounded(r.points), ...(r.type === 'dispatch' ? { style: `--project-hue: ${C.projectHue(r.project)}` } : {}) }, lit));
     edgesEl.querySelectorAll('.cm-edge').forEach((p) => { if (p.dataset.from === hoverId || p.dataset.to === hoverId) p.classList.add('hl'); });
   }
   function redrawEdges() { if (lay) drawEdges(); }
@@ -440,21 +474,26 @@
     saveView();
   }
 
-  // What each project's header needs to show its whole name beside its tally in the short form
-  // (icons and numbers). The layout keeps every frame at least that wide, so a name is cut only
-  // when it alone is longer than HEAD_MAX.
+  // What each project's header needs: its whole name on the first line, its tally in the short form
+  // (icons and numbers) on the second. The layout keeps every frame at least that wide, so a name is
+  // cut only when it alone is longer than HEAD_MAX.
   const HEAD_MAX = 2 * NODE.nodeW + NODE.gapX + 2 * GRID.padX;
   function headNeeds(map) {
     const probes = map.projects.map((p) => {
       const head = el('div', 'cm-project-head compact cm-probe');
       const text = C.summaryLine(p.counts), summary = el('span', 'cm-project-summary', text);
       tally(summary, text);
-      head.append(el('button', 'cm-project-toggle'), el('span', 'cm-project-name', p.name), summary);
+      const toggle = el('button', 'cm-project-toggle'), name = el('span', 'cm-project-name', p.name);
+      head.append(toggle, name, summary);
       projectsEl.appendChild(head);
-      return [p.key, head];
+      return [p.key, head, toggle, name, summary];
     });
     const out = {};
-    probes.forEach(([key, head]) => { out[key] = Math.min(HEAD_MAX, head.offsetWidth + 2); });
+    // (the probe stands on one line: the name and the tally are measured apart, the tally's line starts under the name)
+    probes.forEach(([key, head, toggle, name, summary]) => {
+      const cs = getComputedStyle(head), indent = toggle.offsetWidth + (parseFloat(cs.columnGap) || 0);
+      out[key] = Math.min(HEAD_MAX, Math.ceil(indent + Math.max(name.offsetWidth, summary.offsetWidth) + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 2));
+    });
     probes.forEach(([, head]) => head.remove());
     return out;
   }
@@ -478,7 +517,7 @@
     if (!hasManual() && saved().plan) { saved().plan = null; host.save(); }   // nothing hand-placed is left to stand on it
     const size = { w: (vw - FIT_INSET.left - FIT_INSET.right) / FIT };
     const pick = (tight) => {
-      const p = C.planAcross(map, size, { ...base, ...(tight ? tightly : {}), keep: plan && planW === vw ? plan.lanes.length : 0 });
+      const p = C.planAcross(map, size, { ...base, ...(tight ? tightly : {}), keep: plan && planW === vw && !!plan.tight === tight ? plan : null });
       const next = { lanes: p.lanes, caps: p.caps, tight };
       return { plan: next, lay: build(next) };
     };
@@ -525,6 +564,8 @@
     if (!drag || e.pointerId !== drag.id) return;
     const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
     if (!drag.moved && Math.hypot(dx, dy) < DRAG_PX) return;
+    // the first move by hand off the map's own arrangement can be taken back (撤销) to it
+    if (!drag.moved && drag.kind !== 'pan') drag.before = arranged() ? snapshot() : null;
     drag.moved = true;
     if (drag.kind === 'pan') {
       hush();
@@ -556,14 +597,17 @@
     vpEl.classList.remove('panning');
     if (!d.moved) return;
     if (d.kind === 'pan') { userView = true; saveView(); return; }
-    // a move by hand: the arrangement it was made on stays under it, and what 整理 replaced is gone
+    // a move by hand: the arrangement it was made on stays under it, and what 整理 replaced is gone;
+    // a first move off the map's own arrangement can be taken back to it
     if (!saved().plan && plan) saved().plan = plan;
-    setUndo(null);
+    setUndo(d.before, d.before ? UNDO_DRAG : '');
+    if (d.before) say('已按你拖的位置摆放；点「撤销」或「智能一页」回到自动排法');
     if (d.kind === 'project') {
       const old = saved().projectPositions[d.group.key] || { x: 0, y: 0 };
       saved().projectPositions[d.group.key] = { x: old.x + d.dx, y: old.y + d.dy };
       lay.nodes.forEach((b, id) => { if (b.project === d.group.key && saved().positions[id]) saved().positions[id] = { x: b.x, y: b.y }; });
       host.save();
+      syncFit();
       return;
     }
     d.n.classList.remove('dragging');
@@ -571,6 +615,7 @@
     setTimeout(() => { delete d.n.dataset.dragged; }, 0);
     saved().positions[d.node.id] = { x: d.box.x, y: d.box.y };
     host.save();
+    syncFit();
   }
   function onWheel(e) {
     if (mode !== 'crew' || !view || e.target.closest('.cm-pop')) return;
@@ -660,6 +705,7 @@
     body.append(el('h3', 'cm-pop-title', node.title));
     const receipt = el('div', 'cm-pop-receipt' + (node.full ? '' : ' empty'), node.full || '还没有回执');
     body.append(receipt);
+    if (node.progress) body.append(el('div', 'cm-pop-progress', '进展：' + node.progress));
     if (node.live) body.append(el('div', 'cm-pop-live', '▸ ' + node.live));
     if (node.files && node.files.length) {
       const files = el('ul', 'cm-pop-files');
@@ -737,6 +783,7 @@
     if (!view || !userView) fit(!!(opts && opts.smooth)); else applyView();
     if (before) settle(before);
     if (popId) { fillPop(); placePop(); }
+    syncFit();
   }
 
   // ---- 一键整理, 智能一页, 撤销 ----
@@ -767,9 +814,24 @@
       .forEach((n) => { if (n) moved += move(n, 'group:' + g.key, g); }));
     if (moved) edgesEl.animate([{ opacity: 0 }, { opacity: 0, offset: 0.6 }, { opacity: 1 }], { duration: MOVE_MS + 60, easing: 'ease-out' });
   }
-  function setUndo(snap) {
+  const UNDO_ARRANGE = '撤销：回到整理前的位置和缩放', UNDO_DRAG = '撤销：回到智能一页，放弃刚才的拖动';
+  function setUndo(snap, label) {
     undo = snap || null;
     undoBtn.hidden = !undo;
+    const text = label || UNDO_ARRANGE;
+    if (undoBtn.title !== text) { undoBtn.title = text; undoBtn.setAttribute('aria-label', text); }
+    syncFit();
+  }
+  // Arranged by the map itself for this window (智能一页): nothing placed by hand, no order of the user's own.
+  const arranged = () => !hasManual() && !saved().projectOrder.length;
+  const FIT_ON = '智能一页：已开启，项目按窗口宽度从左往右排开，窗口变了自动重排；点一下回到 100% 和顶部';
+  const FIT_OFF = '智能一页：回到自动排法，放弃手动拖动的位置和先后，缩放回到 100%（可撤销）';
+  // The button says which it is: lit while the map arranges itself, a dot on it once things were placed by hand.
+  function syncFit() {
+    if (!fitBtn) return;
+    const on = arranged(), text = on ? FIT_ON : FIT_OFF;
+    fitBtn.dataset.state = on ? 'auto' : 'manual';
+    if (fitBtn.title !== text) { fitBtn.title = text; fitBtn.setAttribute('aria-label', text); }
   }
   const snapshot = () => ({ positions: { ...saved().positions }, projectPositions: { ...saved().projectPositions }, projectOrder: saved().projectOrder.slice(), plan: saved().plan, view: view && { ...view }, userView });
   function say(text) {
@@ -825,13 +887,10 @@
     const map = collect();
     if (C.signature(map) + '|' + showArchived !== lastSig) { render({ smooth: true }); return; }
     lastMap = map;
+    // the live line and the session's own progress change without a rebuild: the card's news follows them
     map.nodes.forEach((n) => {
-      const node = nodesEl.querySelector(`.cm-node[data-node-id="${CSS.escape(n.id)}"]`);
-      const live = node && node.querySelector('.cm-live');
-      if (!live) return;
-      const text = n.live ? '▸ ' + n.live : '';
-      if (live.textContent !== text) live.textContent = text;
-      live.hidden = !n.live;
+      const line = nodesEl.querySelector(`.cm-node[data-node-id="${CSS.escape(n.id)}"] .cm-meta > .cm-line`);
+      if (line) fillLine(line, n);
     });
     if (popId) { fillPop(); placePop(); }
   }
@@ -867,6 +926,7 @@
     archBtn = rootEl.querySelector('[data-cm="archived"]');
     returnBtn = rootEl.querySelector('[data-cm="return"]');
     undoBtn = rootEl.querySelector('[data-cm="undo"]');
+    fitBtn = rootEl.querySelector('[data-cm="fit"]');
     hintEl = rootEl.querySelector('.cm-hint');
     trayEl = rootEl.querySelector('.cm-tray');
     popEl = rootEl.querySelector('.cm-pop');
