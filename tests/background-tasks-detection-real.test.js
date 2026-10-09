@@ -75,6 +75,23 @@ test('after the work ended, the old folded "running" row does not keep the sessi
   assert.equal(terminalIdle({ cmd: CMD }, { ...entry, lastScreen: ENDED }), true);
 });
 
+// 10-09 06:04, Claude Code 2.1.294 in this repo's real-app check: an effort hint and a
+// rule carrying the session name sit between the status row and the prompt.
+const REAL_2_1_294 = ['✻ Worked for 2s · done 11:04 PM · 1 ', '  shell still running', '                  ◐ medium · /effort',
+  '────────────────────────── verify-bg ─', '❯ ', '──────────────────────────────────────'];
+test('Claude 2.1.294: the effort hint and a named rule under the status row do not hide its count', () => {
+  for (const footer of ['  ⏵⏵ bypass permissions on · 1 shell', '  ⏵⏵ bypass permissions on']) {
+    assert.equal(M.claudeBackgroundTasks([...REAL_2_1_294, footer].join('\n'), CMD), true, footer);
+  }
+  const apart = ['✻ Worked for 2s · done 11:04 PM · 1 shell still running', '', '                  ◐ medium · /effort', ...REAL_2_1_294.slice(3), '  ⏵⏵ bypass permissions on'];
+  assert.equal(M.claudeBackgroundTasks(apart.join('\n'), CMD), true);
+  const entry = tick([...REAL_2_1_294, '  ⏵⏵ bypass permissions on'].join('\n'));
+  assert.equal(entry.state, 'working');
+  assert.equal(M.workingForSend(entry), false);
+  // Once the work is over the same layout reads idle.
+  assert.equal(M.claudeBackgroundTasks(['✻ Worked for 2s · done 11:09 PM', '                  ◐ medium · /effort', ...REAL_2_1_294.slice(3), '  ⏵⏵ bypass permissions on'].join('\n'), CMD), false);
+});
+
 test('only the background-agent wait is blanked: another live "Waiting for …" spinner is still work', () => {
   const live = worker(['⏺ 正在调接口。', '', '✻ Waiting for the API response… (12s · esc to interrupt)']);
   assert.equal(tick(live).state, 'working');

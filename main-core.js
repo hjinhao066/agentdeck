@@ -879,13 +879,15 @@
   //   ✻ Baked for 40s · done 8:27 AM · 1 shell, 1 monitor still running
   // A narrow column folds it onto up to five rows ("✻ Churned for 3m 55s · done" /
   // "9:16 PM · 1 shell still" / "running"), and Claude may add "Update available!"
-  // between it and the rule. While a background agent runs, the row reads
+  // between it and the rule, Claude 2.1 its effort hint ("◐ medium · /effort"), and the
+  // rule may carry the session name. While a background agent runs, the row reads
   // "✻ Waiting for 1 background agent to finish". It is live only while
   // nothing else sits between it and the prompt: a later reply, tool row or
   // user message means a newer turn, and the old row is history.
   const CLAUDE_DONE_ROW = /^\s*[✻✽✳✶✢✺*]\s*[^\s·]+\s+for\s+(?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/;
   const CLAUDE_WAIT_ROW = /^\s*[✻✽✳✶✢✺*·]\s*Waiting\s+for\b/i;
-  const CLAUDE_FOLD_END = /^\s*(?:[─━═]{3,}\s*$|Update available\b|[⏺●❯›>⎿✻✽✳✶✢✺∴])/i;
+  const CLAUDE_CHROME = /^\s*(?:$|[─━═]{3,}|Update available\b|[◐◑◒◓○]\s+\S+\s+·\s+\/effort\s*$)/i;
+  const CLAUDE_FOLD_END = /^\s*(?:[─━═]{3,}|Update available\b|[◐◑◒◓○]\s+\S+\s+·\s+\/effort\s*$|[⏺●❯›>⎿✻✽✳✶✢✺∴])/i;
   const CLAUDE_BG_RUNNING = /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i;
   const CLAUDE_BG_WAITING = /\bWaiting for [1-9]\d* background\b/i;
   // Each status row with the rows it was folded onto: { start, end, text }.
@@ -903,7 +905,7 @@
   function claudeStatusRowRunning(above) {
     const rows = above.slice(-10);
     const block = claudeStatusBlocks(rows).at(-1);
-    if (!block || rows.slice(block.end).some((row) => !/^\s*$|^\s*[─━═]{3,}\s*$|^\s*Update available\b/i.test(row))) return false;
+    if (!block || rows.slice(block.end).some((row) => !CLAUDE_CHROME.test(row))) return false;
     return CLAUDE_BG_RUNNING.test(block.text) || CLAUDE_BG_WAITING.test(block.text);
   }
   // Claude's completed-turn rows and its background-agent wait are never a spinner,
