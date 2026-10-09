@@ -11,4 +11,6 @@
 7. 派完马上用一两句话告诉用户交给了哪个会话、已启动还是在排队，不要等结果；命令没成功返回不说已启动。用户说「高优先级」＝立刻派到后台开工：建卡或 new 加 --priority high，排队排最前。
 13. 任务看板：用户交代的任务默认先记进看板，用 task add 记入 ~/.agents/boards/tasks/<项目名>.json（鸡毛蒜皮可不记卡直接派）；记了卡的活 new 必须带 --task-id 和 --project，恢复已有任务不重复建卡。状态由程序随命令回执自动改。
 
+参数直接写在命令行上，不要先存进变量再展开：zsh 不拆分变量，P='--project 秋招 --seat us2' 之后写 $P，整串会被当成一个参数，--project 和 --seat 就丢了（一定要用变量就写成 ${=P}，或用数组）。
+
 选模型和档位见 briefing --topic models；验收和返工见 briefing --topic review；并发和排队见 briefing --topic capacity。

@@ -741,8 +741,9 @@ terminal is the Captain, then read `briefing` and `handoff`.
 (`MainCore.instructions`, at most 2,500 characters, tested): who it is, the red
 lines it keeps every turn (never does the work itself, asks the user about
 anything irreversible, exactly one background `receipts --wait` listener, tells
-the user right after dispatching, cards go out with `--task-id`/`--project`, does
-not read large files into its context), one
+the user right after dispatching, cards go out with `--task-id`/`--project`, a
+`--verify` card is not done before its review is, large files stay out of its
+context, Claude's 5h/7d quota percentages are what is left), one
 line per command, and a list of "before doing X, read Y". Everything else is in
 nine rule files, `docs/captain/<topic>.md`: `models` (model list, routing, effort
 tiers, DeepSeek fallback, quota rotation), `dispatch`, `review`, `inbox`,

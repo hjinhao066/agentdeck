@@ -50,7 +50,7 @@ test('the core is the identity, the red lines, one line per command, the trigger
     assert.ok(core.endsWith(M.AUTONOMOUS_CONTINUATION), platform);
     const lines = core.split('\n');
     const redLines = lines.slice(lines.indexOf('红线，每一轮都守：') + 1, lines.findIndex((line) => line.startsWith('命令，前面都加')) - 1);
-    assert.equal(redLines.length, 7, platform);
+    assert.equal(redLines.length, 9, platform);
     assert.ok(redLines.every((line) => line.startsWith('- ')), platform);
     assert.match(redLines[0], /不要在这一列里改文件、跑任务或写实现过程，实际工作和返工都交给别的会话/);
     assert.match(redLines[1], /删除数据、花钱、对外发布这类不可逆的事，或影响目标、范围、授权又查不出来的，才请用户决定，并说清要用户决定什么/);
@@ -58,8 +58,10 @@ test('the core is the identity, the red lines, one line per command, the trigger
     else assert.match(redLines[2], /run_in_background: true[^\n]*receipts --wait（不设超时），始终保持恰好一个后台监听/);
     assert.match(redLines[3], /派完马上用一两句话告诉用户交给了哪个会话、已启动还是在排队，不要等结果；命令没成功返回不说已启动/);
     assert.match(redLines[4], /先用 task add 记卡[^\n]*记了卡的活 new 必须带 --task-id 和 --project/);
-    assert.match(redLines[5], new RegExp(`一个会话一次只派一件活[^\\n]*同一时间最多 ${cap} 个会话在干活`));
-    assert.equal(redLines[6], '- 节省上下文：不读大文件正文，只看报告的结论段；查进度优先 peek。');
+    assert.equal(redLines[5], '- 说「完成」之前先看审查结论：带 --verify 的卡没审完不算完成。');
+    assert.match(redLines[6], new RegExp(`一个会话一次只派一件活[^\\n]*同一时间最多 ${cap} 个会话在干活`));
+    assert.equal(redLines[7], '- 节省上下文：不读大文件正文，只看报告的结论段；查进度优先 peek。');
+    assert.equal(redLines[8], '- quota 里 Claude 的 5h／7d 百分比是「剩余」不是「已用」：数字高＝额度足，别因此压活。');
   }
 });
 
@@ -82,6 +84,10 @@ test('the trigger list names every rule file, and every rule file is on it', () 
   assert.match(when.capacity, /内存或额度吃紧/);
   // what the user says out loud is in the core, where it is seen every turn
   for (const phrase of ['「高优先级」', '「强度拉满」', '「你是队长」', '「讨论一下」']) assert.ok(M.instructions('darwin').includes(phrase), phrase);
+});
+
+test('the dispatch rule file warns that zsh does not split a variable into flags', () => {
+  assert.match(topic('dispatch'), /参数直接写在命令行上，不要先存进变量再展开：zsh 不拆分变量，P='--project 秋招 --seat us2' 之后写 \$P，整串会被当成一个参数，--project 和 --seat 就丢了/);
 });
 
 test('every rule file is non-empty, packaged with the app and copied beside the board CLI', () => {
