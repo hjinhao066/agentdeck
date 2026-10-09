@@ -211,7 +211,7 @@ usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存和第
 不依赖席位有没有会话，也不碰队长/队员的输入、进程或 Relay 状态。启动查询期间显示未知。
 取数是 Claude Code 原生 `/usage` 同源的只读
 `GET https://api.anthropic.com/api/oauth/usage`；不启动 Claude、不调用模型、不登录、
-不续 token，也不改现有凭据。macOS 在内存中读取该席位的独立 Keychain 项，
+访问令牌过期时，只在该席位当前没有在跑的 Claude（AgentDeck 自己的列——包括空闲的队长——和能认出席位的外部会话；认不出就当有）时才续一次并写回该席位凭据，续令牌与 AgentDeck 在该席位起 Claude 串行；有在跑的就只读，额度显示未知，等那个会话自己续。macOS 在内存中读取该席位的独立 Keychain 项，
 无项时读取其 `.credentials.json`；Windows 读取该席位自己的凭据文件。
 过期、缺少 profile scope、缺登录、网络错误、429、非 200 或无实际窗口数据均显示未知；
 不重试、不借另一个席位的登录、不从旧缓存补数字。某席位失败不阻止另一席位采样。

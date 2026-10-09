@@ -5,7 +5,7 @@ const S = require('./claude-seats-core');
 
 const CONFIRM_MS = 30_000;
 // A seat nobody signs back into is rechecked quickly at first, then slowly:
-// every check reads the seat's credential or starts the provider's CLI.
+// every check refreshes a dead token or starts the provider's CLI.
 const FAST_RECHECK_MS = 10 * 60_000, SLOW_RECHECK_MS = 2 * 60_000;
 const quote = (value, platform) => "'" + value.replace(/'/g, platform === 'win32' ? "''" : "'\\''") + "'";
 function loginCommand(provider, seat, home, platform = process.platform) {
