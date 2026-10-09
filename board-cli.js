@@ -210,9 +210,68 @@ async function automationCommand(args) {
   process.stdout.write(`${response.result || ''}\n`);
 }
 
+// Every command lists the flags it takes. A flag outside the list is refused, never dropped:
+// `new --model … --verify` once ran a default model with no review and nobody noticed.
+// inbox and automation check their own flags above.
+const SUBCOMMANDS = ['task', 'queue', 'settings', 'worktree', 'discuss'];
+const COMMAND_FLAGS = {
+  'create-child': ['title', 'task', 'agent', 'command', 'cwd', 'relationship', 'timeout'],
+  'spawn-child': ['title', 'task', 'agent', 'command', 'cwd', 'relationship', 'timeout'],
+  wait: ['task', 'timeout'],
+  send: ['task', 'message'],
+  progress: ['message', 'install-id', 'target-version'],
+  complete: ['result', 'files', 'failed'],
+  ask: ['question'],
+  'session-exit': ['code'],
+  'notify-user': ['message', 'urgent', 'test'],
+  'queue list': [],
+  'queue cancel': ['task-id'],
+  'task add': ['project', 'title', 'detail', 'id', 'depends', 'verify', 'priority'],
+  'task list': ['project', 'status', 'priority'],
+  'task move': ['id', 'status'],
+  'task priority': ['id', 'level'],
+  'task archive': ['done', 'project'],
+  stop: ['id'],
+  archive: ['id'],
+  ledger: [],
+  receipts: ['wait', 'timeout', 'snapshot', 'ack'],
+  new: ['title', 'task', 'project', 'reviews', 'task-id', 'cwd', 'worktree', 'base', 'branch', 'priority', 'seat', 'agent', 'command', 'web-mode'],
+  tell: ['to', 'message', 'replace', 'now'],
+  answer: ['to', 'key'],
+  peek: ['id', 'lines'],
+  read: ['id', 'turns', 'find'],
+  'settings battery': ['mode', 'cap', 'boost', 'for', 'until'],
+  status: [],
+  quota: [],
+  briefing: [],
+  handoff: [],
+  'worktree clean': ['apply', 'path', 'root'],
+  'discuss start': ['topic', 'topic-file', 'gemini', 'participants-file', 'summarizer', 'max-rounds'],
+  'discuss status': ['id'],
+  'discuss wait': ['id', 'timeout'],
+  'discuss cancel': ['id'],
+  'discuss resume': ['id', 'retry', 'accept-saved', 'metadata-file', 'job', 'result-file', 'model', 'tier', 'effort', 'confirmed-ended'],
+  'discuss help': [],
+};
+const NEW_FLAG_HINT = '模型和档位写在 --command 里，例如 --command "claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high"；要验收先 task add --verify 再 new --task-id。';
+
+function rejectUnknownFlags(args) {
+  const action = args._[0];
+  const key = SUBCOMMANDS.includes(action) && args._[1] ? `${action} ${args._[1]}` : action;
+  const allowed = COMMAND_FLAGS[key];
+  if (!allowed) return; // an unknown command or operation gets its own error below
+  const extra = Object.keys(args).filter((name) => name !== '_' && !allowed.includes(name));
+  if (!extra.length) return;
+  fail(`${key} 不认识参数 ${extra.map((name) => `--${name}`).join('、')}（已拒绝，什么都没执行）。` +
+    (allowed.length ? `${key} 支持的参数：${allowed.map((name) => `--${name}`).join(' ')}。` : `${key} 不带任何参数。`) +
+    (action === 'new' ? NEW_FLAG_HINT : '') +
+    (action === 'task' && extra.includes('priority') ? ' --priority is high or normal, on task add and task list. Change a card with task priority --id <id> --level high|normal.' : ''));
+}
+
 function usage() {
   process.stdout.write(
     'AgentDeck managed-terminal bridge\n\n' +
+    '  Each command takes only the flags listed here; an unknown flag is refused (exit 1), never ignored.\n\n' +
     '  create-child --title "Task" --task "Instructions" [--agent claude|agy|cursor|grok] [--cwd path]\n' +
     '  spawn-child --title "Task" --task "Instructions" [--agent claude|agy|cursor|grok]\n' +
     '  wait --task <task-id>\n' +
@@ -252,6 +311,7 @@ function usage() {
     '  briefing                                 current Captain instructions, read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
     '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
+    '                                           model and effort go inside --command (…--model claude-opus-5-5 --effort high); new has no --model/--effort/--verify\n' +
     '  worktree clean [--apply --path copy]      list copies a person may remove; deletion needs --apply and each --path\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
@@ -275,6 +335,7 @@ async function main() {
   if (!action || action === 'help' || args.help) { usage(); return; }
 
   if (action === 'automation') { await automationCommand(args); return; }
+  rejectUnknownFlags(args);
 
   if (action === 'discuss') {
     // The existing read-only action authenticates the Captain even when this
@@ -533,6 +594,9 @@ async function main() {
       repo = path.resolve(raw);
       if (args.branch) { try { Worktree.assertBranch(args.branch.trim()); } catch (error) { fail(error.message); } }
     }
+    if (String(args.agent).toLowerCase() === 'claude' && !(typeof args.command === 'string' && args.command.trim())) {
+      process.stderr.write('[AgentDeck Board] 警告：未指定模型，将用本机默认模型（--agent claude 没带 --command）。\n');
+    }
     const response = await request({
       action: 'main-new', title, task,
       ...(args['web-mode'] !== undefined ? { webMode: args['web-mode'] } : {}),
@@ -587,8 +651,6 @@ async function main() {
 
   if (action === 'settings') {
     if (args._[1] !== 'battery' || args._.length > 2) fail('settings only has battery: settings battery [--mode off|auto] [--cap 1-10].');
-    const extra = Object.keys(args).find((key) => !['_', 'mode', 'cap', 'boost', 'for', 'until'].includes(key));
-    if (extra) fail(`settings battery does not take --${extra}. Use --boost on|off, --mode off|auto and/or --cap 1-10.`);
     const input = {};
     if (args.boost !== undefined) {
       if (args.boost !== 'on' && args.boost !== 'off') fail('settings battery --boost is on or off.');
