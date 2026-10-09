@@ -1395,6 +1395,11 @@ preserve pending edits, including changes made by other local board writers.
 Older revisioned task snapshots restored by Git keep their older revision when
 submitted, so they cannot silently replace newer server edits.
 Repeated operations do not increment a card revision or add a second conflict.
+The hub answers a replayed operation from its receipt for 30 days. A transcript
+upload's receipt names the record (hash and time) instead of copying it; a hub
+file written by an older hub has its whole-record receipts shrunk when it loads.
+(Copies per save of a growing chat took the live hub file to 608 MB, past what
+Node can read, on 2026-10-09.)
 All conflicting alternatives and captain turns are retained. Older transcript
 prefixes cannot shorten newer history; divergent saves retain the prior version
 in the history record's `alternatives`. Credential-shaped fields are stripped,

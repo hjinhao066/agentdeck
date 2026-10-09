@@ -83,9 +83,11 @@ test('captain history ignores a duplicate upload and strips credential fields', 
   const { hub } = store(t);
   const turns = [{ prompt: '继续看板', token: 'must-not-land', nested: { apiKey: 'nope', note: '留着' } }];
   const first = hub.pushHistory({ opId: 'op-hist-0001', sessionId: 'cap-mac', deviceId: 'dev-mac', contentHash: 'a'.repeat(64), summary: '继续看板', turns });
-  assert.equal(first.body.record.turns[0].token, undefined);
-  assert.equal(first.body.record.turns[0].nested.apiKey, undefined);
-  assert.equal(first.body.record.turns[0].nested.note, '留着');
+  assert.equal(first.status, 200);
+  const saved = hub.snapshot().history[0];
+  assert.equal(saved.turns[0].token, undefined);
+  assert.equal(saved.turns[0].nested.apiKey, undefined);
+  assert.equal(saved.turns[0].nested.note, '留着');
   const again = hub.pushHistory({ opId: 'op-hist-0002', sessionId: 'cap-mac', deviceId: 'dev-mac', contentHash: 'a'.repeat(64), summary: '继续看板', turns });
   assert.equal(again.body.duplicate, true);
   assert.equal(hub.snapshot().history.length, 1);

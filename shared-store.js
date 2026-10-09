@@ -8,6 +8,9 @@ const crypto = require('crypto');
 
 const LEASE_MS = 45_000;
 const TRAIL_CAP = 100;
+// A retried operation is answered from its receipt for this long; a client
+// offline longer resends work whose answer it never got, and that is applied again.
+const RECEIPT_KEEP_MS = 30 * 24 * 60 * 60_000;
 const DEVICE_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const SESSION_ID = /^[A-Za-z0-9._-]{1,160}$/;
 // Fields a client may try to change. `updated` is omitted on purpose: every
@@ -74,6 +77,13 @@ function turnExtends(next, previous) {
     if (key === 'end' && value == null) return true;
     return same(next[key], value);
   });
+}
+
+// The answer kept for a replayed transcript upload names the record, it does not
+// copy it: a copy per save of a growing chat made the file grow with the square of
+// its saves (608 MB on the live hub, 2026-10-09).
+function historyReceipt(record, duplicate) {
+  return { sessionId: record.sessionId, deviceId: record.deviceId, contentHash: record.contentHash, updatedAt: record.updatedAt || null, duplicate: !!duplicate };
 }
 
 function publicCard(card) {
@@ -146,6 +156,14 @@ class SharedStore {
     // IDs are untrusted keys, including __proto__ and inherited method names.
     // JSON.parse restores ordinary objects, so rebuild every index on load too.
     for (const key of ['devices', 'cards', 'ops', 'history']) data[key] = Object.assign(Object.create(null), data[key]);
+    // Older hubs kept the whole transcript in each upload's receipt, and no time.
+    const at = new Date(this.now()).toISOString();
+    for (const saved of Object.values(data.ops)) {
+      if (!saved || typeof saved !== 'object') continue;
+      const record = saved.body && saved.body.record;
+      if (record && typeof record === 'object') saved.body = historyReceipt(record, saved.body.duplicate);
+      if (typeof saved.at !== 'string') saved.at = at;
+    }
     data.seq = Number.isInteger(data.seq) ? data.seq : 0;
     return data;
   }
@@ -154,7 +172,14 @@ class SharedStore {
     atomicWrite(this.file, JSON.stringify(this.data));
   }
   _remember(opId, status, body) {
-    const saved = { status, body: clone(body) };
+    const now = this.now();
+    if (now - (this.prunedAt || 0) >= 60 * 60_000) {
+      this.prunedAt = now;
+      for (const [id, saved] of Object.entries(this.data.ops)) {
+        if (!(now - Date.parse(saved && saved.at) < RECEIPT_KEEP_MS)) delete this.data.ops[id];
+      }
+    }
+    const saved = { status, body: clone(body), at: new Date(now).toISOString() };
     this.data.ops[opId] = saved;
     return saved;
   }
@@ -266,14 +291,14 @@ class SharedStore {
     const key = sessionId + '@' + deviceId;
     const existing = this.data.history[key];
     if (existing && existing.contentHash === contentHash) {
-      const saved = this._remember(opId, 200, { record: existing, duplicate: true });
+      const saved = this._remember(opId, 200, historyReceipt(existing, true));
       this._save();
       return saved;
     }
     const cleanTurns = stripSecrets(Array.isArray(turns) ? turns : []);
     // A delayed older save cannot shorten history already accepted by the hub.
     if (existing && cleanTurns.length <= existing.turns.length && cleanTurns.every((turn, i) => turnExtends(existing.turns[i], turn))) {
-      const saved = this._remember(opId, 200, { record: existing, duplicate: true });
+      const saved = this._remember(opId, 200, historyReceipt(existing, true));
       this._save();
       return saved;
     }
@@ -293,7 +318,7 @@ class SharedStore {
       }
     }
     this.data.history[key] = record;
-    const saved = this._remember(opId, 200, { record, duplicate: false });
+    const saved = this._remember(opId, 200, historyReceipt(record, false));
     this._save();
     return saved;
   }
