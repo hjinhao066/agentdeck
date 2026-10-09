@@ -288,3 +288,25 @@ test('cli: a descendant that left the process group is also ended on timeout', {
   assert.equal(result.code, 124);
   assert.equal(alive(tree.descendantPid()), false, 'escaped descendant survived the timeout');
 });
+
+test('cli: a detached helper left behind by a run that ends normally is ended before the slot is released', { skip: process.platform === 'win32' }, async (t) => {
+  const dir = tempDir(t);
+  const tree = stubbornTree(dir, { detached: true, parentExits: true });
+  const result = await cli(dir, ['--', process.execPath, tree.parent], GRACE).done;
+  assert.equal(result.code, 0);
+  assert.equal(alive(tree.descendantPid()), false, 'detached helper survived the run');
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'slots')), []);
+  assert.match(result.out(), /清理残留的子进程/);
+});
+
+test('cli: the next group never starts while a detached helper of the previous one is alive', { skip: process.platform === 'win32' }, async (t) => {
+  const dir = tempDir(t);
+  const tree = stubbornTree(dir, { detached: true, parentExits: true });
+  const first = cli(dir, ['--', process.execPath, tree.parent], { AGENTDECK_E2E_KILL_GRACE_MS: '800' });
+  await waitFor(() => fs.existsSync(tree.pidFile));
+  const second = cli(dir, ['--', process.execPath, '-e',
+    `process.stdout.write('HELPER-ALIVE-WHEN-SECOND-STARTED=' + (() => { try { process.kill(${tree.descendantPid()}, 0); return true; } catch { return false; } })())`]);
+  assert.equal((await first.done).code, 0);
+  const result = await second.done;
+  assert.match(result.out(), /HELPER-ALIVE-WHEN-SECOND-STARTED=false/);
+});

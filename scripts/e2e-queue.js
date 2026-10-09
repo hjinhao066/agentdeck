@@ -47,62 +47,111 @@ function playwrightCommand(args) {
 }
 
 const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
-const groupAlive = (pgid) => { try { process.kill(-pgid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const TAG_VAR = 'AGENTDECK_E2E_RUN_TAG';
 
-// pid and every process below it, read from the process table before its parents die and
-// the children are re-parented (a child that left the process group is still found).
-function descendants(root) {
-  if (process.platform === 'win32') return [];
-  const result = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' });
-  const kids = new Map();
+// One read of the process table: pid, parent, process group and start time.
+function processTable() {
+  const result = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,pgid=,lstart='], { encoding: 'utf8' });
+  const rows = [];
   for (const line of (result.stdout || '').split('\n')) {
-    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
-    if (pid && ppid) kids.set(ppid, [...(kids.get(ppid) || []), pid]);
+    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
+    if (m) rows.push({ pid: +m[1], ppid: +m[2], pgid: +m[3], start: m[4] });
   }
+  return rows;
+}
+
+// Processes that carry this run's tag in their environment. A helper that detached from
+// the process group and whose parent already exited can no longer be found through the
+// process tree, but it still has the environment it was started with.
+function taggedPids(tag) {
+  const needle = `${TAG_VAR}=${tag}`;
   const found = [];
-  const walk = (pid) => { for (const kid of kids.get(pid) || []) { found.push(kid); walk(kid); } };
-  walk(root);
+  if (fs.existsSync('/proc/self/environ')) {
+    for (const name of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(name)) continue;
+      try { if (fs.readFileSync(`/proc/${name}/environ`, 'latin1').split('\0').includes(needle)) found.push(+name); } catch {}
+    }
+    return found;
+  }
+  const result = spawnSync('ps', ['-E', '-A', '-ww', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  for (const line of (result.stdout || '').split('\n')) {
+    const m = /^\s*(\d+)\s/.exec(line);
+    if (m && new RegExp(`(^|\\s)${needle}(\\s|$)`).test(line)) found.push(+m[1]);
+  }
   return found;
 }
 
-function signalTree(child, extra, signal) {
-  if (!child.pid) return;
-  if (process.platform === 'win32') { spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); return; }
-  try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch {} }
-  for (const pid of extra) { try { process.kill(pid, signal); } catch {} }
+// Everything that still belongs to the run: its process group, everything below it in the
+// process tree, everything seen below it earlier (pid + start time, so a reused pid is not
+// mistaken for it), and everything carrying its tag.
+function runMembers(run) {
+  if (process.platform === 'win32' || !run.pid) return [];
+  const table = processTable();
+  const members = new Set();
+  const kids = new Map();
+  for (const row of table) {
+    kids.set(row.ppid, [...(kids.get(row.ppid) || []), row.pid]);
+    if (row.pgid === run.pid) members.add(row.pid);
+    const earlier = run.seen.get(row.pid);
+    if (earlier && earlier === row.start) members.add(row.pid);
+  }
+  const walk = (pid) => { for (const kid of kids.get(pid) || []) { members.add(kid); walk(kid); } };
+  walk(run.pid);
+  for (const pid of taggedPids(run.tag)) members.add(pid);
+  for (const row of table) if (members.has(row.pid)) run.seen.set(row.pid, row.start);
+  members.delete(process.pid);
+  return [...members].filter(isAlive);
+}
+
+function signalRun(run, signal, members = runMembers(run)) {
+  if (!run.pid) return;
+  if (process.platform === 'win32') { spawnSync('taskkill', ['/pid', String(run.pid), '/T', '/F'], { stdio: 'ignore' }); return; }
+  try { process.kill(-run.pid, signal); } catch {}
+  for (const pid of members) { try { process.kill(pid, signal); } catch {} }
 }
 
 // The slot may only be released once nothing of the run is left: a child that ignores
-// SIGTERM, or stray helpers of a finished run, would otherwise overlap the next group.
-async function reap(child, extra, graceMs) {
-  if (process.platform === 'win32' || !child.pid) return;
-  const anyLeft = () => groupAlive(child.pid) || extra.some(isAlive);
-  const waitGone = async (ms) => { for (let waited = 0; anyLeft() && waited < ms; waited += 100) await pause(100); return !anyLeft(); };
-  if (!anyLeft()) return;
-  say('清理残留的子进程');
-  signalTree(child, extra, 'SIGTERM');
-  if (await waitGone(graceMs)) return;
-  signalTree(child, extra, 'SIGKILL');
-  if (!(await waitGone(30000))) say('警告：仍有进程没能结束，不再等待');
+// SIGTERM, or helpers left behind by a run that ended normally, would otherwise overlap
+// the next group.
+async function reap(run, graceMs) {
+  if (process.platform === 'win32') return;
+  let members = runMembers(run);
+  if (!members.length) return;
+  say(`清理残留的子进程（${members.length} 个）`);
+  const gone = async (ms) => {
+    for (let waited = 0; waited < ms; waited += 100) {
+      if (!members.some(isAlive)) { members = runMembers(run); if (!members.length) return true; }
+      await pause(100);
+    }
+    members = runMembers(run);
+    return !members.length;
+  };
+  signalRun(run, 'SIGTERM', members);
+  if (await gone(graceMs)) return;
+  signalRun(run, 'SIGKILL', members);
+  if (!(await gone(30000))) say('警告：仍有进程没能结束，不再等待');
 }
 
 function runChild(command, lease, runMs, graceMs = 10000) {
   return new Promise((resolve) => {
+    const tag = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const child = spawn(command[0], command.slice(1), {
       cwd: process.cwd(), stdio: 'inherit', detached: process.platform !== 'win32',
-      env: { ...process.env, AGENTDECK_E2E_QUEUE_HELD: '1' },
+      env: { ...process.env, AGENTDECK_E2E_QUEUE_HELD: '1', [TAG_VAR]: tag },
     });
     lease.setChild(child.pid);
+    const run = { pid: child.pid, tag, seen: new Map() };
+    // Remember descendants while the run goes on (they may leave before the run ends).
+    const watch = setInterval(() => { try { runMembers(run); } catch {} }, 1000);
+    watch.unref();
     let timedOut = false;
-    let extra = [];
     let killer;
     const stop = (signal) => {
-      extra = [...new Set([...extra, ...descendants(child.pid)])];
-      signalTree(child, extra, signal);
+      signalRun(run, signal);
       // A child that ignores the polite signal gets the hard one after the grace period.
       clearTimeout(killer);
-      killer = setTimeout(() => signalTree(child, extra, 'SIGKILL'), graceMs);
+      killer = setTimeout(() => signalRun(run, 'SIGKILL'), graceMs);
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -112,8 +161,8 @@ function runChild(command, lease, runMs, graceMs = 10000) {
     const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => [signal, () => stop(signal === 'SIGINT' ? 'SIGINT' : 'SIGTERM')]);
     for (const [signal, handler] of handlers) process.on(signal, handler);
     const finish = async (code) => {
-      clearTimeout(timer); clearTimeout(killer);
-      await reap(child, extra, graceMs);
+      clearTimeout(timer); clearTimeout(killer); clearInterval(watch);
+      await reap(run, graceMs);
       for (const [signal, handler] of handlers) process.removeListener(signal, handler);
       resolve(timedOut ? 124 : code);
     };
