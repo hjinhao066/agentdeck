@@ -153,14 +153,14 @@
     if (m) return `Opus ${m[1]}${m[2] ? '.' + m[2] : ''}`;
     m = str.match(/sonnet[- ]?(\d{1,2})(?:[-.](\d{1,2}))?(?!\d)/i);
     if (m) return `Sonnet ${m[1]}${m[2] ? '.' + m[2] : ''}`;
-    m = str.match(/(?:claude[- ])?(\d+)[-.](\d+)[- ]?sonnet/i);
-    if (m) return `Sonnet ${m[1]}.${m[2]}`;
-    m = str.match(/(?:claude[- ])?(\d+)[-.](\d+)[- ]?opus/i);
-    if (m) return `Opus ${m[1]}.${m[2]}`;
+    m = str.match(/(?:claude[- ])?(\d{1,2})(?:[-.](\d{1,2}))?[- ]?sonnet/i);
+    if (m) return `Sonnet ${m[1]}${m[2] ? '.' + m[2] : ''}`;
+    m = str.match(/(?:claude[- ])?(\d{1,2})(?:[-.](\d{1,2}))?[- ]?opus/i);
+    if (m) return `Opus ${m[1]}${m[2] ? '.' + m[2] : ''}`;
     m = str.match(/haiku[- ]?(\d{1,2})(?:[-.](\d{1,2}))?(?!\d)/i);
     if (m) return `Haiku ${m[1]}${m[2] ? '.' + m[2] : ''}`;
-    m = str.match(/(?:claude[- ])?(\d+)[-.](\d+)[- ]?haiku/i);
-    if (m) return `Haiku ${m[1]}.${m[2]}`;
+    m = str.match(/(?:claude[- ])?(\d{1,2})(?:[-.](\d{1,2}))?[- ]?haiku/i);
+    if (m) return `Haiku ${m[1]}${m[2] ? '.' + m[2] : ''}`;
 
     // Gemini / Flash / Pro
     m = str.match(/gemini[- ]?(\d+)[-.](\d+)[- ]?flash/i);

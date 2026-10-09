@@ -357,3 +357,13 @@ test('dated model ids keep the real version, not the 8-digit date', () => {
   assert.equal(info.shortModel, 'Sonnet 4');
   assert.equal(info.tooltip, 'Claude · Claude Sonnet 4');
 });
+
+test('dated Claude 3 ids with the family after the version keep the family, not just "claude 3"', () => {
+  assert.equal(AgentInfo.shortModelName('claude-3-opus-20240229'), 'Opus 3');
+  assert.equal(AgentInfo.shortModelName('claude-3-haiku-20240307'), 'Haiku 3');
+  assert.equal(AgentInfo.shortModelName('claude-3-sonnet-20240229'), 'Sonnet 3');
+  assert.equal(AgentInfo.shortModelName('claude-3-5-sonnet-20241022'), 'Sonnet 3.5');
+  assert.equal(AgentInfo.shortModelName('claude-4-sonnet'), 'Sonnet 4');
+  const info = AgentInfo.resolveAgentInfo({ cmd: 'claude --model claude-3-haiku-20240307' }, null, '');
+  assert.equal(info.tooltip, 'Claude · Claude Haiku 3');
+});
