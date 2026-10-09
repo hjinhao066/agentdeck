@@ -146,4 +146,4 @@ if (require.main === module) {
   main().then((code) => process.exit(code), (error) => { console.error(`[e2e-remote-win] ${error.message}`); process.exit(2); });
 }
 
-module.exports = { parseArgs, makeRunId, queueCommand, makeJob, knownBasesCommand, HUB };
+module.exports = { main, parseArgs, makeRunId, queueCommand, makeJob, knownBasesCommand, HUB };

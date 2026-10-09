@@ -145,3 +145,9 @@ test('snapshotCommit: clean tree uses HEAD; dirty tree (modified + new file) bec
     assert.equal(git('stash', 'list'), '');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- the real modules e2e-auto calls must offer what it calls (a mismatch was hidden by the fallback) ----
+test('e2e-auto calls main() of e2e-remote-win and e2e-queue: both modules export it', () => {
+  assert.equal(typeof require('../scripts/e2e-remote-win').main, 'function');
+  assert.equal(typeof require('../scripts/e2e-queue').main, 'function');
+});
