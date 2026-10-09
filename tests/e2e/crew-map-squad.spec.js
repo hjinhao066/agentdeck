@@ -47,7 +47,9 @@ async function launch() {
       ...(parent ? { role: 'worker', captainCrew: false, parentTaskId: 'T-' + parent, taskTitle: title, initialPromptSent: true } : { role: 'manual', captainCrew: true, project }) });
     if (!status) return;
     const sentAt = now - (90 - i * 5) * 60_000;
-    tasks.push({ id: 'task-' + id, colId: id, gen: 1, status, title, project, sentAt, startedAt: sentAt + 30_000, doneAt: now - (40 - i) * 60_000, turnId: '',
+    // (finished a few minutes ago: one done over 10 minutes ago is archived once its terminal has been quiet a
+    // minute, and on a slow machine that comes before every terminal has drawn)
+    tasks.push({ id: 'task-' + id, colId: id, gen: 1, status, title, project, sentAt, startedAt: sentAt + 30_000, doneAt: now - (status === 'done' ? 3 : 40 - i) * 60_000, turnId: '',
       receipt: status === 'done' ? { summary: '同一轮只推一次，30 秒内不重复响铃。', files: [], explicit: true } : null });
   });
   fs.writeFileSync(specFile, JSON.stringify(screens));

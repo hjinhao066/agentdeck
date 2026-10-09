@@ -71,7 +71,9 @@ async function launch(cards = CREW) {
       : st === 'asking' ? { question: text, files: [] }
       : text === 'RESEND' ? { summary: RESEND, files: [], images: [], failed: '', explicit: true, checkpoint: true, source: 'restart' } : null;
     const progress = typeof text === 'string' && text.startsWith('PROGRESS:') ? { progress: text.slice(9) } : {};
-    tasks.push({ id: 'task-' + id, colId: id, gen: 1, status: st, title, project, sentAt, startedAt: sentAt + 30_000, doneAt: now - (60 - i * 2) * 60_000, turnId: '', receipt, ...progress });
+    // (a finished one finished a few minutes ago: one done over 10 minutes ago is archived once its terminal has been
+    // quiet a minute, and on a slow machine that comes before every terminal has drawn)
+    tasks.push({ id: 'task-' + id, colId: id, gen: 1, status: st, title, project, sentAt, startedAt: sentAt + 30_000, doneAt: now - (st === 'done' ? 3 + i % 3 : 60 - i * 2) * 60_000, turnId: '', receipt, ...progress });
   });
   fs.writeFileSync(specFile, JSON.stringify(screens));
   // These are layout states, not restartable tasks with a saved instruction.
