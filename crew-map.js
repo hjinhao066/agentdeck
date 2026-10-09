@@ -30,11 +30,12 @@
   // card grid inside a project; headH: the frame's two-line title strip (name, then the tally);
   // rails: every card hangs off its project's line down the left of its column (railX left of the
   // cards, entering each by its status row, entryTop down from its top)
-  const GRID = { padX: 16, padBottom: 16, rowGap: 12, reviewGap: 36, headH: 64, rails: true, railX: 8, entryTop: 20 };
+  const GRID = { padX: 16, padBottom: 16, rowGap: 12, reviewGap: 36, headH: 68, rails: true, railX: 8, entryTop: 20 };
   // The scale the map arrives at and is arranged for: its own 100%. What does not fit at this
   // scale is reached by panning (drag, wheel, trackpad).
   const FIT = C.BASE_SCALE;
   const MOVE_MS = 280;    // frames and cards gliding to a new place (shorter than the view's own glide)
+  const GRAIN = 28;       // canvas px between the dots of the grid under the map
   // Spacing given up when the roomy map just misses the window at 100% and this brings all of it in.
   const TIGHT = { captainH: 104, fanY: 40, rowGap: 10, padBottom: 12 };
   const DRAG_PX = 4;
@@ -119,6 +120,9 @@
     if (col) {
       const inner = el('span');
       host.renderBadge(inner, col);
+      // the account as a small text tag: its flag stays in the sidebar, its name and tooltip here
+      const seat = inner.querySelector('.agent-seat-label');
+      if (seat) seat.textContent = seat.textContent.replace(/^[^\p{L}\p{N}]+/u, '');
       if (!inner.hidden && inner.childNodes.length) { b.appendChild(inner); return b; }
     }
     b.textContent = [node.provider, node.model].filter(Boolean).join(' · ');
@@ -223,12 +227,14 @@
   // A card's one line of news (CrewMapCore.cardLine: what it is doing, asks, failed on or handed back),
   // cut to one line on the card and whole in its tooltip. Called again on every status tick.
   function fillLine(line, node) {
-    const l = C.cardLine(node);
-    if (line.textContent !== l.text) line.textContent = l.text;
+    const l = C.cardLine(node), was = line.textContent;
+    if (was !== l.text) line.textContent = l.text;
     const cls = 'cm-line k-' + l.kind + (l.kind === 'empty' ? ' empty' : '');
     if (line.className !== cls) line.className = cls;
     const tip = l.kind === 'empty' ? '' : l.kind === 'live' ? [node.live, node.progress].filter(Boolean).join('\n') : node.full || l.text;
     if (line.title !== tip) line.title = tip;
+    // news replacing news rises into place, so the eye catches which card moved on
+    if (was && was !== l.text && !reduceMotion()) line.animate([{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2, .8, .2, 1)' });
   }
   // The whole crew at a glance under 队长's tally: one thin bar, a segment per state as long as its share.
   const FLEET = ['working', 'input', 'queued', 'failed', 'stopped', 'idle', 'done'];
@@ -340,7 +346,8 @@
       const live = stOf(r) === 'working' && !/\barchived\b/.test(r.cls);
       if (live) svg('path', { class: 'cm-halo', d, style }, halos);
       svg('path', { class: 'cm-edge ' + r.cls, d, style, 'data-from': r.from, 'data-to': r.to }, lines);
-      if (live) svg('path', { class: 'cm-pulse', d, style }, pulses);
+      // a light travelling the line: a bright head with a faint tail behind it
+      if (live) { svg('path', { class: 'cm-trail', d, style }, pulses); svg('path', { class: 'cm-pulse', d, style }, pulses); }
       const [x, y] = r.points[r.points.length - 1];
       svg('circle', { class: 'cm-socket ' + r.cls, cx: x, cy: y, r: 3, style }, dots);
     });
@@ -351,12 +358,14 @@
       const d = rounded(pts);
       if (active) svg('path', { class: 'cm-halo core', d }, halos);
       svg('path', { class: `cm-bus ${cls}${active ? ' active' : ''}`, d }, core);
-      if (active) svg('path', { class: 'cm-pulse core', d }, core);
+      if (active) { svg('path', { class: 'cm-trail core', d }, core); svg('path', { class: 'cm-pulse core', d }, core); }
     };
     bus(sp.trunk, 'trunk', sp.active);
     if (sp.left) bus(sp.left.points, 'arm', sp.left.active);
     if (sp.right) bus(sp.right.points, 'arm', sp.right.active);
     sp.takeoffs.forEach(([x, y]) => svg('circle', { class: 'cm-joint', cx: x, cy: y, r: 2.6 }, dots));
+    // while the crew works, the hub under 队长 beats: a ring that widens and fades
+    if (sp.active) svg('circle', { class: 'cm-hub-beat', cx: sp.hub[0], cy: sp.hub[1], r: 9 }, dots);
     svg('circle', { class: 'cm-hub-ring' + (sp.active ? ' active' : ''), cx: sp.hub[0], cy: sp.hub[1], r: 9 }, dots);
     svg('circle', { class: 'cm-hub' + (sp.active ? ' active' : ''), cx: sp.hub[0], cy: sp.hub[1], r: 4.5 }, dots);
     hover(hoverId);
@@ -423,6 +432,10 @@
   // ---- canvas view ----
   function applyView() {
     canvasEl.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+    // the dot grid under the map moves and scales with it
+    vpEl.style.setProperty('--cm-grid', GRAIN * view.scale + 'px');
+    vpEl.style.setProperty('--cm-gx', view.x + 'px');
+    vpEl.style.setProperty('--cm-gy', view.y + 'px');
     const pct = C.zoomPercent(view.scale) + '%';
     zoomLabel.textContent = pct;
     zoomLabel.setAttribute('aria-label', `回到 100%（当前 ${pct}）`);
@@ -434,7 +447,8 @@
   function glide(on) {
     clearTimeout(smoothT);
     canvasEl.classList.toggle('cm-smooth', !!on);
-    if (on) smoothT = setTimeout(() => canvasEl.classList.remove('cm-smooth'), 400);
+    vpEl.classList.toggle('cm-smooth', !!on);   // the dot grid glides with it
+    if (on) smoothT = setTimeout(() => { canvasEl.classList.remove('cm-smooth'); vpEl.classList.remove('cm-smooth'); }, 400);
   }
   // Where the window's bottom edge (the tray, the legend row) cuts a map too tall for it:
   // a card shows whole with 16px to spare above the edge, or is plainly cut (24px or more

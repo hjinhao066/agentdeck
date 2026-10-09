@@ -8,7 +8,7 @@ const path = require('path');
 // holds, each one card wide (two from seven sessions on), the rest under the lane that
 // ends highest (项目框横排), 智能一页 (the arrangement for this window's width,
 // at the map's own 100%), 一键整理 (hand-dragged frames and cards back on the grid,
-// animated, with undo), and the look (the sky, glass cards, lit wiring, nothing
+// animated, with undo), and the look (the dot grid, quiet cards, lit wiring, nothing
 // moving under 减少动态效果). Real renderer, isolated userData, PTYs running
 // only the stand-in TUI. Set AGENTDECK_CREW_MAP_SHOTS to keep PNGs.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
@@ -89,8 +89,10 @@ async function shot(name) {
   fs.mkdirSync(shots, { recursive: true });
   await page.mouse.move(2, 2);
   await page.evaluate(() => {
-    const at = { 'cm-breathe': 0.5, 'cm-edge-flow': 0.45, 'cm-flow': 0.3, 'cm-flow-review': 0.3, 'cm-spin': 0.12, 'cm-ping': 0.2, 'sky-twinkle': 0.6 };
-    document.getAnimations().forEach((a, i) => {
+    const at = { 'cm-flow': 0.3, 'cm-trail': 0.3, 'cm-flow-review': 0.3, 'cm-spin': 0.12, 'cm-ping': 0.2, 'cm-beat': 0.3 };
+    // a line's light (head and tail) keeps one phase, picked from the line's own path
+    const phase = (n) => { let h = 0; for (const c of n.getAttribute('d') || '') h = (h * 31 + c.charCodeAt(0)) >>> 0; return (h % 4) * 0.17; };
+    document.getAnimations().forEach((a) => {
       const target = a.effect && a.effect.target;
       if (!target) return;
       const t = a.effect.getComputedTiming();
@@ -98,7 +100,7 @@ async function shot(name) {
       if (t.iterations !== Infinity) { a.finish(); return; }
       if (!document.getElementById('crewMap').contains(target)) return;
       a.pause();
-      a.currentTime = ((at[a.animationName] == null ? 0.5 : at[a.animationName]) + (a.animationName === 'cm-flow' ? (i % 4) * 0.17 : 0)) * t.duration;
+      a.currentTime = ((at[a.animationName] == null ? 0.5 : at[a.animationName]) + (['cm-flow', 'cm-trail'].includes(a.animationName) ? phase(target) : 0)) * t.duration;
     });
   });
   await page.screenshot({ path: path.join(shots, name + '.png'), animations: 'allow', scale: 'css' });
@@ -217,18 +219,20 @@ test('项目框横排: frames stand left to right across the window, one or two 
   await size(1920, 1080, 'light'); await settled();
   await shot('map-4projects-1920-light');
 
-  // the look: the sky sits under the canvas, nothing blurs what is behind it, and only running work moves
-  const look = await page.evaluate(() => { const root = document.getElementById('crewMap'), sky = root.querySelector('.star-sky'), vp = root.querySelector('.cm-viewport');
+  // the look: a dot grid under the canvas that pans and zooms with it (no starry sky on the map), nothing blurs what is
+  // behind it, the cards themselves hold still, and only the status icons of running or asking work move
+  const look = await page.evaluate(() => { const root = document.getElementById('crewMap'), vp = root.querySelector('.cm-viewport'), cs = getComputedStyle(vp), v = CrewMap.view();
     const endless = document.getAnimations().filter((a) => a.effect && root.contains(a.effect.target) && a.effect.getComputedTiming().iterations === Infinity);
-    const onCards = endless.filter((a) => a.effect.target.classList.contains('cm-node'));
-    return { sky: !!sky && Math.abs(sky.getBoundingClientRect().width - vp.getBoundingClientRect().width) < 1 && getComputedStyle(sky).pointerEvents === 'none',
+    const onCards = endless.filter((a) => a.effect.target.closest('.cm-node:not(.kind-captain)'));
+    return { sky: !!root.querySelector('.star-sky'), grid: /radial-gradient/.test(cs.backgroundImage) && Math.abs(parseFloat(cs.backgroundSize) - 28 * v.scale) < 0.01 && Math.abs(parseFloat(cs.backgroundPositionX) - v.x) < 0.01,
       blur: [...root.querySelectorAll('*')].filter((n) => getComputedStyle(n).backdropFilter !== 'none').length,
+      cardsThemselves: onCards.filter((a) => a.effect.target.classList.contains('cm-node')).length,
       cardAnimations: [...new Set(onCards.map((a) => a.animationName))].sort(),
       cardProps: [...new Set(onCards.flatMap((a) => a.effect.getKeyframes().flatMap((k) => Object.keys(k))))].filter((k) => !['offset', 'computedOffset', 'easing', 'composite'].includes(k)).sort(),
-      movingCards: new Set(onCards.map((a) => a.effect.target.dataset.status)).size === 1 && onCards[0].effect.target.dataset.status,
-      stillCard: document.querySelector('.cm-node.st-done').getAnimations().length };
+      movingCards: [...new Set(onCards.map((a) => a.effect.target.closest('.cm-node').dataset.status))].sort(),
+      stillCard: document.querySelector('.cm-node.st-done').getAnimations({ subtree: true }).length };
   });
-  expect(look).toEqual({ sky: true, blur: 0, cardAnimations: ['cm-breathe', 'cm-edge-flow'], cardProps: ['opacity', 'transform'], movingCards: 'working', stillCard: 0 });
+  expect(look).toEqual({ sky: false, grid: true, blur: 0, cardsThemselves: 0, cardAnimations: ['cm-ping', 'cm-spin'], cardProps: ['opacity', 'transform'], movingCards: ['input', 'working'], stillCard: 0 });
 
   // narrower windows give lanes up one at a time: the map stays at 100%, is never squeezed and never scrolls sideways
   let lanes = 4;
@@ -548,7 +552,7 @@ test('一键整理: dragged frames and cards go back on the grid in the order th
   await dragBy(frame('hermes-savings'), 70, 90);
   expect(await page.evaluate(() => { document.querySelector('[data-cm="relayout"]').click(); return [...document.querySelectorAll('.cm-node, .cm-pane, .cm-project, .cm-edges')].flatMap((n) => n.getAnimations()).length; })).toBe(0);
   assertNeat(await read());
-  expect(await page.evaluate(() => getComputedStyle(document.querySelector('.cm-node.st-working:not(.kind-captain)'), '::before').display)).toBe('none');
+  expect(await page.evaluate(() => [getComputedStyle(document.querySelector('.cm-trail')).display, getComputedStyle(document.querySelector('.cm-hub-beat')).display])).toEqual(['none', 'none']);
   expect(errors).toEqual([]);
 });
 
@@ -581,7 +585,7 @@ test('ten sessions in two projects: side by side at every width that holds them,
     expect(c.title, theme).toBeGreaterThan(7);
     for (const k of ['line', 'status', 'time', 'failed', 'failedLine']) expect(c[k], `${theme} ${k}`).toBeGreaterThanOrEqual(4.5);
   }
-  // 动效开关: the toolbar's icon button stills the map (lights on the lines, the breathing rims, the sky) and brings it back
+  // 动效开关: the toolbar's icon button stills the map (lights on the lines, the spinners, the hub's beat) and brings it back
   const toggle = page.locator('#crewMap [data-motion-toggle]');
   const moving = () => page.evaluate(() => document.getAnimations().filter((a) => a.effect && a.effect.target && document.getElementById('crewMap').contains(a.effect.target) && a.playState === 'running' && a.effect.getComputedTiming().iterations === Infinity).length);
   await expect(toggle).toHaveAttribute('aria-label', '关闭动效（卡片和连线保持静止）');
@@ -592,7 +596,7 @@ test('ten sessions in two projects: side by side at every width that holds them,
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-label', '开启动效（现在是静止的）');
   await expect.poll(moving).toBe(0);
-  expect(await page.evaluate(() => [getComputedStyle(document.querySelector('.cm-pulse')).display, getComputedStyle(document.querySelector('.cm-node.st-working:not(.kind-captain)'), '::before').display])).toEqual(['none', 'none']);
+  expect(await page.evaluate(() => [getComputedStyle(document.querySelector('.cm-pulse')).display, getComputedStyle(document.querySelector('.cm-trail')).display, getComputedStyle(document.querySelector('.cm-hub-beat')).display])).toEqual(['none', 'none', 'none']);
   // 一键整理 lands at once while it is off
   await dragBy(page.locator('.cm-project .cm-project-name').first(), 60, 70);
   expect(await page.evaluate(() => { document.querySelector('[data-cm="relayout"]').click(); return [...document.querySelectorAll('.cm-node, .cm-pane, .cm-project, .cm-edges')].flatMap((n) => n.getAnimations()).length; })).toBe(0);

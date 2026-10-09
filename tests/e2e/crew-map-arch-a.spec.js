@@ -78,7 +78,7 @@ test.afterAll(async () => {
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(launch);
 
-test('night and day: the sky palette, the grid that shows the whole map, finished projects in the tray, nothing overlapping or clipped', async () => {
+test('night and day: the canvas palette, the grid that shows the whole map, finished projects in the tray, nothing overlapping or clipped', async () => {
   for (const [width, height] of [[1920, 1080], [1440, 900]]) for (const theme of ['dark', 'light']) {
     await open(width, height, theme);
     await expect(page.locator('.cm-project')).toHaveCount(1);
@@ -100,8 +100,9 @@ test('night and day: the sky palette, the grid that shows the whole map, finishe
         sock: [...document.querySelectorAll('.cm-node.st-failed:not(.kind-captain)')].map((n) => getComputedStyle(n).backgroundColor),
       };
     });
-    expect(g.canvas).toBe(theme === 'dark' ? 'rgb(6, 8, 15)' : 'rgb(243, 245, 252)');
-    expect(g.card).toBe(theme === 'dark' ? 'rgb(22, 27, 44)' : 'rgb(255, 255, 255)');
+    // graphite by night, porcelain by day: the app's own neutral family
+    expect(g.canvas).toBe(theme === 'dark' ? 'rgb(15, 15, 18)' : 'rgb(243, 243, 245)');
+    expect(g.card).toBe(theme === 'dark' ? 'rgb(26, 26, 31)' : 'rgb(255, 255, 255)');
     if (theme === 'light') expect(g.sock[0]).toBe('rgb(255, 241, 244)');
     // seven sessions: the project is two cards wide (PROJECT_TWO_COLUMNS_AT), four rows, never wider
     expect(g.cols).toBe(2);

@@ -107,8 +107,10 @@ async function shot(name) {
   fs.mkdirSync(shots, { recursive: true });
   await page.mouse.move(Math.round(page.viewportSize().width * 0.48), 4);
   await page.evaluate(() => {
-    const at = { 'cm-breathe': 0.5, 'cm-edge-flow': 0.45, 'cm-flow': 0.3, 'cm-flow-review': 0.3, 'cm-spin': 0.12, 'cm-ping': 0.2, 'sky-twinkle': 0.6, 'tbv-breathe': 0.5, 'tbv-flow': 0.42, 'tbv-ping': 0.2 };
-    document.getAnimations().forEach((a, i) => {
+    const at = { 'cm-flow': 0.3, 'cm-trail': 0.3, 'cm-flow-review': 0.3, 'cm-spin': 0.12, 'cm-ping': 0.2, 'cm-beat': 0.3, 'sky-twinkle': 0.6, 'tbv-breathe': 0.5, 'tbv-flow': 0.42, 'tbv-ping': 0.2 };
+    // a line's light (head and tail) keeps one phase, picked from the line's own path
+    const phase = (n) => { let h = 0; for (const c of n.getAttribute('d') || '') h = (h * 31 + c.charCodeAt(0)) >>> 0; return (h % 4) * 0.17; };
+    document.getAnimations().forEach((a) => {
       const target = a.effect && a.effect.target;
       if (!target) return;
       const t = a.effect.getComputedTiming();
@@ -116,7 +118,7 @@ async function shot(name) {
       if (t.iterations !== Infinity) { a.finish(); return; }
       if (!target.closest('#crewMap, #taskBoardView')) return;
       a.pause();
-      a.currentTime = ((at[a.animationName] == null ? 0.5 : at[a.animationName]) + (a.animationName === 'cm-flow' ? (i % 4) * 0.17 : 0)) * t.duration;
+      a.currentTime = ((at[a.animationName] == null ? 0.5 : at[a.animationName]) + (['cm-flow', 'cm-trail'].includes(a.animationName) ? phase(target) : 0)) * t.duration;
     });
   });
   await page.screenshot({ path: path.join(shots, name + '.png'), animations: 'allow', scale: 'css' });

@@ -112,15 +112,17 @@ async function shot(name) {
   fs.mkdirSync(shots, { recursive: true });
   await page.mouse.move(2, 2);
   await page.evaluate(() => {
-    const at = { 'cm-breathe': 0.5, 'cm-edge-flow': 0.45, 'cm-flow': 0.3, 'cm-flow-review': 0.3, 'cm-spin': 0.12, 'cm-ping': 0.2, 'sky-twinkle': 0.6 };
-    document.getAnimations().forEach((a, i) => {
+    const at = { 'cm-flow': 0.3, 'cm-trail': 0.3, 'cm-flow-review': 0.3, 'cm-spin': 0.12, 'cm-ping': 0.2, 'cm-beat': 0.3 };
+    // a line's light (head and tail) keeps one phase, picked from the line's own path
+    const phase = (n) => { let h = 0; for (const c of n.getAttribute('d') || '') h = (h * 31 + c.charCodeAt(0)) >>> 0; return (h % 4) * 0.17; };
+    document.getAnimations().forEach((a) => {
       const target = a.effect && a.effect.target;
       if (!target) return;
       const t = a.effect.getComputedTiming();
       if (t.iterations !== Infinity) { a.finish(); return; }
       if (!document.getElementById('crewMap').contains(target)) return;
       a.pause();
-      a.currentTime = ((at[a.animationName] == null ? 0.5 : at[a.animationName]) + (a.animationName === 'cm-flow' ? (i % 4) * 0.17 : 0)) * t.duration;
+      a.currentTime = ((at[a.animationName] == null ? 0.5 : at[a.animationName]) + (['cm-flow', 'cm-trail'].includes(a.animationName) ? phase(target) : 0)) * t.duration;
     });
   });
   await page.screenshot({ path: path.join(shots, name + '.png'), animations: 'allow', scale: 'css' });
@@ -231,9 +233,16 @@ test('a card reads in three layers and its line is news: never a CLI update noti
   // nothing on its screen yet: what the session reported; a newer report shows on the next tick, in place
   expect(card('w23').line).toBe('只读核对 42 项删除清单，已核 30 项');
   const before = await page.locator('.cm-node[data-node-id="w23"]').elementHandle();
-  await page.evaluate(() => { MainSession.state().tasks.find((t) => t.colId === 'w23').progress = '已核完 42 项，没有误删'; CrewMap.refresh(); });
+  // (news replacing news rises into place: a short fade and lift, opacity and transform only)
+  const rise = await page.evaluate(() => { MainSession.state().tasks.find((t) => t.colId === 'w23').progress = '已核完 42 项，没有误删'; CrewMap.refresh();
+    return document.querySelector('.cm-node[data-node-id="w23"] .cm-meta > .cm-line').getAnimations().map((a) => [...new Set(a.effect.getKeyframes().flatMap((k) => Object.keys(k)))].filter((k) => ['opacity', 'transform'].includes(k)).sort()); });
+  expect(rise).toEqual([['opacity', 'transform']]);
   await expect(page.locator('.cm-node[data-node-id="w23"] .cm-meta > .cm-line')).toHaveText('已核完 42 项，没有误删');
   expect(await before.evaluate((n) => n.isConnected), 'updated in place, not rebuilt').toBe(true);
+  // the account is a small text tag on the card (its flag stays in the sidebar); its name and tooltip stay whole
+  const seats = await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .agent-seat-label')].map((n) => [n.textContent, n.getAttribute('aria-label') || '']));
+  expect(seats.length).toBeGreaterThan(0);
+  for (const [text, label] of seats) { expect(text).toMatch(/^(CN|US|US2)$/); expect(label).toMatch(/^当前账号：/); }
   // 队长's tally and the bar of the whole crew under it
   const fleet = await page.evaluate(() => [...document.querySelectorAll('.cm-node.kind-captain .cm-fleet i')].map((i) => [i.className, Number(i.style.flexGrow)]));
   expect(fleet).toEqual([['st-working', 15], ['st-input', 2], ['st-queued', 2], ['st-failed', 2], ['st-stopped', 1], ['st-done', 2]]);
@@ -254,6 +263,12 @@ test('智能一页 is the default and follows the window; a first drag leaves it
   const fit = page.locator('[data-cm="fit"]'), undo = page.locator('[data-cm="undo"]');
   await expect(fit).toHaveAttribute('data-state', 'auto');
   await expect(fit).toHaveAttribute('aria-label', /^智能一页：已开启/);
+  // the dot grid under the map is the map's own: it scales and moves with the view
+  const grid = () => page.evaluate(() => { const cs = getComputedStyle(document.querySelector('.cm-viewport')), v = CrewMap.view(); return [parseFloat(cs.backgroundSize) / v.scale, parseFloat(cs.backgroundPositionX) - v.x, parseFloat(cs.backgroundPositionY) - v.y].map((n) => Math.round(n * 100) / 100); });
+  expect(await grid()).toEqual([28, 0, 0]);
+  await page.locator('[data-cm="in"]').click(); await settled();
+  expect(await grid()).toEqual([28, 0, 0]);
+  await page.locator('[data-cm="reset"]').click(); await settled();
   expect(await fit.evaluate((n) => [n.title === n.getAttribute('aria-label'), !!n.querySelector('svg'), n.textContent.trim()])).toEqual([true, true, '']);
   const wide = await read();
   // the window narrows: the map arranges itself again, at 100%, still on its own
