@@ -459,13 +459,18 @@ function visibleInputBox(entry) {
     return MainCore.inputBoxText(plain, masked);
   } catch (_) { return null; }
 }
-function userComposing(id) {
+// ownText: what AgentDeck itself just typed into this box (ChatUI's check that it was submitted).
+// That text still sitting in the box, or its collapsed paste, is not the user's; keys the user
+// pressed, a draft, or any other text there still are.
+const flatBox = (text) => String(text || '').replace(/[\s│┃]+/g, '');
+function userComposing(id, ownText) {
   if (ChatUI.hasDraft(id)) return true;
   const entry = terms.get(id);
   if (!entry || !entry.typing) return false;
   const t = entry.typing;
   if (Date.now() - t.lastKeyAt < INPUT_QUIET || t.draft) return true;
   const box = visibleInputBox(entry);
+  if (box && typeof ownText === 'string' && (flatBox(ownText).includes(flatBox(box)) || /^(?:\[Pastedtext#\d+(?:\+\d+lines?)?\])+$/i.test(flatBox(box)))) return t.unknown;
   if (box) return true;
   if (box === '') t.unknown = false;
   return t.unknown;
