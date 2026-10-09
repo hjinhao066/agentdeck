@@ -528,6 +528,13 @@
       return w + (lanes.length === 1 && lanes[0].length > 1 ? o.clusterGap / 2 + o.lane * (lanes[0].length - 2) : 0);
     };
     const fits = (lanes) => lanes.length === 1 || across(lanes) <= availW + 0.5;
+    // one lane always stands, but no wider than the window: its line channel stands left of it, so its widest
+    // frames give up columns until the two fit (or every frame is one card wide)
+    const roomy = (lanes) => lanes.length > 1 || across(lanes) <= availW + 0.5 || lanes[0].every((p) => caps.get(p.key) === 1);
+    const narrow = (lanes) => {
+      while (!roomy(lanes)) { const p = lanes[0].filter((q) => caps.get(q.key) > 1).sort((a, b) => fr(b).w - fr(a).w)[0]; caps.set(p.key, caps.get(p.key) - 1); }
+      return lanes;
+    };
     const out = (lanes) => ({ lanes: lanes.map((lane) => lane.map((p) => p.key)), caps: Object.fromEntries(projects.map((p) => [p.key, caps.get(p.key)])) });
     // the plan given, as it stands (opts.exact): null when it no longer holds these frames in this order or fits
     const rank = new Map(projects.map((p, i) => [p.key, i]));
@@ -536,7 +543,7 @@
       const lanes = plan.lanes.map((lane) => lane.map((key) => projects[rank.get(key)]));
       const tops = lanes.map((lane) => rank.get(lane[0].key));
       const inOrder = lanes.every((lane) => lane.length) && tops.every((r, i) => r === i) && lanes.every((lane) => lane.every((p, k) => !k || rank.get(p.key) > rank.get(lane[k - 1].key)));
-      return inOrder && fits(lanes) ? lanes : null;
+      return inOrder && fits(lanes) && roomy(lanes) ? lanes : null;
     };
     if (o.exact) { const lanes = held(o.exact); return lanes ? out(lanes) : null; }
     // opts.count: that many lanes and no other (null when the frames cannot stand so)
@@ -553,7 +560,7 @@
         lanes[i].push(p);
         return true;
       });
-      if (placed) fresh = lanes;
+      if (placed) fresh = narrow(lanes);
     }
     if (!fresh) return null;
     // the plan in use, if it is still a plan for these frames in this order
