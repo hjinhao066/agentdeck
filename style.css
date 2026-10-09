@@ -2156,9 +2156,9 @@ body.linking-board .board-port.out::before {
 .dlv-actions {
   position: absolute; top: 50%; right: 4px; transform: translateY(-50%); display: flex;
   padding-left: 18px; background: linear-gradient(to right, transparent, var(--dlv-hover) 18px);
-  opacity: 0; pointer-events: none; transition: opacity .12s ease;
+  opacity: 0; transition: opacity .12s ease;
 }
-.dlv-row:hover .dlv-actions, .dlv-row:focus-within .dlv-actions { opacity: 1; pointer-events: auto; }
+.dlv-row:hover .dlv-actions, .dlv-row:focus-within .dlv-actions { opacity: 1; }
 .dlv-row:hover .dlv-time, .dlv-row:focus-within .dlv-time { visibility: hidden; }
 /* a file no longer on disk stays listed, greyed out; the tooltip says why */
 .dlv-row.gone .dlv-main { opacity: .5; cursor: default; }

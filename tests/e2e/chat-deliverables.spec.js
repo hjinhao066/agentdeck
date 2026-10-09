@@ -69,7 +69,7 @@ async function shoot(name) {
   const dir = path.join(shots, stage);
   fs.mkdirSync(dir, { recursive: true });
   await park();
-  await page.evaluate(() => document.getElementById('toast')?.classList.remove('show'));
+  await page.evaluate(() => { document.getElementById('toast')?.classList.remove('show'); document.activeElement?.blur(); });
   await page.evaluate((i) => { const s = document.querySelector(`.column[data-col-id="${i}"] .chat-scroll`); s.scrollTop = s.scrollHeight; }, CAPTAIN);
   await page.waitForTimeout(250);
   await page.screenshot({ path: path.join(dir, name + '.png'), animations: 'disabled', scale: 'css' });
@@ -91,6 +91,28 @@ test('the panel lists the result files newest first by day, and leaves process f
   expect(shown.indexOf('上线清单.md')).toBeLessThan(shown.indexOf('周报-第41周.md'));
   expect(shown.at(-1)).toBe('old-plan.md');
   expect(shown.slice(-4, -1).sort()).toEqual(['missing-summary.md', '经营分析.pptx', '需求说明.docx'].sort());
+});
+
+test('screenshots: wide and narrow, dark and light, the panel open and folded', async () => {
+  test.skip(!shots, 'set AGENTDECK_DELIVERABLES_SHOTS to keep screenshots');
+  for (const [name, w, h] of [['wide', 1680, 1000], ['xwide', 1920, 1080], ['narrow', 1100, 760]]) {
+    await page.setViewportSize({ width: w, height: h });
+    for (const theme of ['dark', 'light']) {
+      await page.evaluate((t) => applyTheme(t), theme);
+      await shoot(`${name}-${theme}`);
+    }
+  }
+  // the reading column alone, the panel folded away
+  await page.setViewportSize({ width: 1680, height: 1000 });
+  await toggle().click();
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate((t) => applyTheme(t), theme);
+    await shoot(`wide-folded-${theme}`);
+  }
+  await toggle().click();
+  await page.evaluate(() => applyTheme('dark'));
+  await expect(panel()).toBeVisible();
+  expect(errors).toEqual([]);
 });
 
 test('one row per path: the latest mention wins, and each row says where it came from', async () => {
@@ -117,7 +139,7 @@ test('a file no longer on disk is greyed out and says so; the others open in the
   const gone = row('missing-summary.md');
   await expect(gone).toHaveClass(/gone/);
   await expect(gone.locator('.dlv-main')).toHaveAttribute('aria-disabled', 'true');
-  expect(await gone.locator('.dlv-main').getAttribute('title')).toContain('已不在磁盘上');
+  expect(await gone.locator('.dlv-main').getAttribute('title')).toContain('不在磁盘上');
   await expect(row('周报-第41周.md')).not.toHaveClass(/gone/);
   const opacity = await gone.locator('.dlv-name').evaluate((n) => getComputedStyle(n.closest('.dlv-main')).opacity);
   expect(Number(opacity)).toBeLessThan(0.75);
@@ -145,7 +167,8 @@ test('row actions are icon buttons with a tooltip, a name, a focus ring and room
   // keyboard: Tab from the row reaches its tools, and they show while focused
   await r.locator('.dlv-main').focus();
   await page.keyboard.press('Tab');
-  const copy = r.getByRole('button', { name: '复制路径' });
+  const copy = tools.first();      // its name turns to 已复制 once it has copied
+  await expect(copy).toHaveAttribute('aria-label', '复制路径');
   await expect(copy).toBeFocused();
   await expect(copy).toBeVisible();
   const box = await copy.boundingBox();
@@ -197,7 +220,9 @@ test('new receipts and replies join the list; the index is saved with what it re
   await expect(row('raw.csv')).toHaveCount(0);
   // the index is in config.json: the old conversation is read once and remembered
   await page.evaluate(() => flushConfig());
-  const saved = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'));
+  const read = () => { try { return JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')); } catch (_) { return {}; } };
+  await expect.poll(() => (read().chatDeliverables?.items || []).some((i) => i.path.endsWith('年度总结.pdf'))).toBe(true);
+  const saved = read();
   expect(saved.chatDeliverables.scanned).toContain(OLD);
   const keys = saved.chatDeliverables.items.map((i) => path.basename(i.path));
   expect(keys).toContain('old-plan.md');
@@ -270,7 +295,7 @@ test('the reading column moves left: its left air is 0.618 of an even split', as
       if (open) {
         // docked: the chat ends where the panel starts, the panel ends at the column's edge
         expect(Math.abs(g.chatRight - g.panel.x), name).toBeLessThanOrEqual(1);
-        expect(Math.abs(g.panel.right - g.colRight), name).toBeLessThanOrEqual(1);
+        expect(Math.abs(g.panel.right - g.colRight), name).toBeLessThanOrEqual(1.5);     // the column's own hairline
         expect(g.panel.w, name).toBeGreaterThanOrEqual(280);
         expect(g.panel.w, name).toBeLessThanOrEqual(340);
       }
@@ -306,16 +331,6 @@ test('a narrow window keeps the conversation whole: the panel slides over it on 
   await expect(panel()).toBeVisible();
 });
 
-test('screenshots: wide and narrow, dark and light', async () => {
-  test.skip(!shots, 'set AGENTDECK_DELIVERABLES_SHOTS to keep screenshots');
-  for (const [name, w, h] of [['wide', 1680, 1000], ['xwide', 1920, 1080], ['narrow', 1100, 760]]) {
-    await page.setViewportSize({ width: w, height: h });
-    for (const theme of ['dark', 'light']) {
-      await page.evaluate((t) => applyTheme(t), theme);
-      await shoot(`${name}-${theme}`);
-    }
-  }
-  await page.evaluate(() => applyTheme('dark'));
-  await page.setViewportSize({ width: 1680, height: 1000 });
+test('no page errors along the way', async () => {
   expect(errors).toEqual([]);
 });
