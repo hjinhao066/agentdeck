@@ -59,8 +59,10 @@ jobs:
             dist/*.exe
             dist/*.dmg
           if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: test-results-${{ runner.os }}
           path: test-results/
+          retention-days: 7

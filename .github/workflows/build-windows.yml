@@ -53,6 +53,7 @@ jobs:
           name: AgentDeck-Windows-installer
           path: dist/*.exe
           if-no-files-found: error
+          retention-days: 7
 
       - name: Attach installer to release (tag builds only)
         if: startsWith(github.ref, 'refs/tags/')
