@@ -1,6 +1,6 @@
 // Background work under a terminal, read off the OS process table: the commands
-// Claude's Bash tool started (foreground or run_in_background) and whatever they run,
-// cmd /c and powershell -Command included. Claude's resident children and the
+// Claude's Bash or PowerShell tool started (foreground or run_in_background) and
+// whatever they run. Claude's resident children and the
 // terminal's own shell are not work, or no quiet session would ever be archived.
 // One listing serves every terminal for CACHE_MS, so the archive check does not
 // spawn ps / PowerShell on every tick.
@@ -50,13 +50,23 @@ function isShellCommand(command) {
   return false;
 }
 
-// Claude runs every Bash tool command through its shell snapshot: on the Mac
-// `/bin/zsh -c source …/shell-snapshots/snapshot-zsh-….sh … && eval '…'`, on Windows
-// Git Bash with snapshot-bash-….sh. Its other shell children are resident: on the
-// Windows PC the MCP server runs as `cmd.exe /d /s /c "npx -y tavily-mcp"` and the
-// status line as `bash.exe -c "npx -y ccstatusline@latest"`.
+// How Claude Code (2.1.294) starts a tool command:
+// - Bash tool, Mac and Git Bash on Windows: through its shell snapshot,
+//   `/bin/zsh -c source …/shell-snapshots/snapshot-zsh-….sh … && eval '…'`.
+// - PowerShell tool on Windows: through its launcher, `cmd.exe /d /s /c ""…\chcp.com"
+//   65001 >nul & "…\pwsh.exe" … -Command "$__claudeCodeScript =
+//   $env:CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT; …" > "…\tasks\<id>.output" 2>&1"` (the script
+//   itself travels in that variable); with the launcher off, pwsh itself with
+//   -NonInteractive … -EncodedCommand.
+// Its other shell children are resident: on the Windows PC the MCP server runs as
+// `cmd.exe /d /s /c "npx -y tavily-mcp"` and the status line as
+// `bash.exe -c "npx -y ccstatusline@latest"`.
 function isToolCommand(command) {
-  return isShellCommand(command) && /[\\/]shell-snapshots[\\/]snapshot-/.test(command);
+  if (!isShellCommand(command)) return false;
+  if (/[\\/]shell-snapshots[\\/]snapshot-|\bCLAUDE_CODE_SHELL_LAUNCHER_SCRIPT\b/.test(command)) return true;
+  const [first, ...args] = words(command, 8);
+  const flags = args.map((a) => a.toLowerCase());
+  return ['powershell', 'pwsh'].includes(program(first)) && flags.includes('-noninteractive') && flags.some((a) => /^-(?:e|ec|encodedcommand)$/.test(a));
 }
 
 // Pids of the background work under the terminal whose process is rootPid.

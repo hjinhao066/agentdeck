@@ -88,6 +88,45 @@ test('Windows: the Bash tool through Git Bash counts with its cmd /c and powersh
   assert.deepEqual(shellWork(parseProcessTable(JSON.stringify(npm), 'win32'), 10), [12]);
 });
 
+// The reviewer's winpc table (2026-10-09 06:4x UTC): an AgentDeck worker running
+// `bash run-spec.sh … captain.spec.js` in the background through Claude's PowerShell
+// tool. The capture cut lines at 200 characters; the rest follows the launcher Claude
+// Code 2.1.294 builds (cmd /d /s /c "chcp 65001 & pwsh … -Command <launcher> > output"),
+// with the script itself passed in CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT.
+const PWSH = 'C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe\\pwsh.exe';
+const LAUNCHER = '"$__claudeCodeScript = $env:CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT; $env:CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT = $null; Invoke-Expression -Command $__claudeCodeScript"';
+const TASK = 'C:\\Users\\hjinh\\AppData\\Local\\Temp\\claude\\C--Users-hjinh\\769540a1-e166-4ac8-bc38-4f2850e30048';
+const WIN_REVIEW_ROWS = [
+  { ProcessId: 26636, ParentProcessId: 4100, CommandLine: 'C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoExit -EncodedCommand JABlAG4AdgA6AA==' },
+  { ProcessId: 42372, ParentProcessId: 26636, CommandLine: '"D:\\npm-global\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" --resume 769540a1-e166-4ac8-bc38-4f2850e30048' },
+  { ProcessId: 40572, ParentProcessId: 42372, CommandLine: 'C:\\windows\\system32\\cmd.exe /d /s /c "npx ^"-y^" ^"tavily-mcp^""' },
+  { ProcessId: 51052, ParentProcessId: 40572, CommandLine: '\\??\\C:\\windows\\system32\\conhost.exe 0x4' },
+  { ProcessId: 29308, ParentProcessId: 40572, CommandLine: '"C:\\Program Files\\nodejs\\\\node.exe"  "C:\\Program Files\\nodejs\\\\node_modules\\npm\\bin\\npx-cli.js" "-y" "tavily-mcp"' },
+  { ProcessId: 50688, ParentProcessId: 29308, CommandLine: 'C:\\windows\\system32\\cmd.exe /d /s /c tavily-mcp' },
+  { ProcessId: 55408, ParentProcessId: 42372, CommandLine: `C:\\windows\\System32\\cmd.exe /d /s /c ""C:\\windows\\System32\\chcp.com" 65001 >nul & "${PWSH}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ${LAUNCHER} > "${TASK}\\tasks\\biv1ud5or.output" 2>&1"` },
+  { ProcessId: 44308, ParentProcessId: 55408, CommandLine: '\\??\\C:\\windows\\system32\\conhost.exe 0x4' },
+  { ProcessId: 20828, ParentProcessId: 55408, CommandLine: `"${PWSH}"  -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ${LAUNCHER}` },
+  { ProcessId: 28788, ParentProcessId: 20828, CommandLine: `"C:\\Program Files\\Git\\bin\\bash.exe" "${TASK}\\scratchpad\\run-spec.sh" "${TASK}\\scratchpad" captain.spec.js` },
+  { ProcessId: 38612, ParentProcessId: 42372, CommandLine: '"C:\\Program Files\\Git\\bin\\bash.exe" -c "npx -y ccstatusline@latest"' },
+  { ProcessId: 42708, ParentProcessId: 38612, CommandLine: '\\??\\C:\\windows\\system32\\conhost.exe 0x4' },
+  { ProcessId: 30340, ParentProcessId: 38612, CommandLine: '"C:\\Program Files\\Git\\bin\\..\\usr\\bin\\bash.exe" -c "npx -y ccstatusline@latest"' },
+];
+
+test('Windows: a background command through Claude\'s PowerShell tool counts (real winpc table); MCP and status line still do not', () => {
+  const rows = parseProcessTable(JSON.stringify(WIN_REVIEW_ROWS), 'win32');
+  assert.deepEqual(shellWork(rows, 26636).sort((a, b) => a - b), [20828, 28788, 44308, 55408]);
+  const idle = WIN_REVIEW_ROWS.filter((r) => ![55408, 44308, 20828, 28788].includes(r.ProcessId));
+  assert.deepEqual(shellWork(parseProcessTable(JSON.stringify(idle), 'win32'), 26636), []);
+  // Without the launcher (CLAUDE_CODE_DISABLE_WINDOWS_SHELL_LAUNCHER, or cmd unusable) Claude
+  // starts PowerShell itself with the script encoded.
+  const direct = [...idle, { ProcessId: 60001, ParentProcessId: 42372, CommandLine: `"${PWSH}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand UwB0AGEAcgB0AC0AUwBsAGUAZQBwACAAOQAwADAA` },
+    { ProcessId: 60002, ParentProcessId: 60001, CommandLine: 'node build.js' }];
+  assert.deepEqual(shellWork(parseProcessTable(JSON.stringify(direct), 'win32'), 26636).sort((a, b) => a - b), [60001, 60002]);
+  // The same words outside Claude (here: a query that searches for them) are not its work.
+  const outside = [...idle, { ProcessId: 60003, ParentProcessId: 26636, CommandLine: 'powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like \'*CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT*\' }"' }];
+  assert.deepEqual(shellWork(parseProcessTable(JSON.stringify(outside), 'win32'), 26636), []);
+});
+
 test('one process listing serves every terminal for a few seconds; a failed listing answers null', async () => {
   let at = 1_000, calls = [], fail = false;
   const execFile = (file, args, options, done) => { calls.push([file, args]); setImmediate(() => (fail ? done(new Error('denied')) : done(null, MAC_PS))); };
@@ -151,7 +190,9 @@ test('a quiet idle-looking session with a shell command still running under Clau
   assert.deepEqual((await archiveRun(null)).archived, ['worker'], 'a listing that failed leaves the decision to the screen');
 });
 
-test('the renderer asks the main process at most once per terminal every 10 seconds', async () => {
+// A busy answer is kept a minute: on Windows each listing starts PowerShell (1.2–1.7 s,
+// ~180 KB on the PC), and a background job can run for hours.
+test('the renderer asks at most once per terminal: every 10 seconds while idle, every minute while busy', async () => {
   const source = fs.readFileSync(require.resolve('../renderer.js'), 'utf8');
   let now = 50_000, answer = true;
   const calls = [];
@@ -168,11 +209,19 @@ test('the renderer asks the main process at most once per terminal every 10 seco
   assert.deepEqual(calls, ['worker']);
   assert.equal(context.ptyBackgroundWork(col), true);
   answer = false;
-  now += 9_000;
+  now += 59_000;
   assert.equal(context.ptyBackgroundWork(col), true);
+  assert.deepEqual(calls, ['worker']);
   now += 2_000;
   assert.equal(context.ptyBackgroundWork(col), undefined);
   await new Promise(setImmediate);
   assert.equal(context.ptyBackgroundWork(col), false);
   assert.deepEqual(calls, ['worker', 'worker']);
+  now += 9_000;
+  assert.equal(context.ptyBackgroundWork(col), false);
+  now += 2_000;
+  assert.equal(context.ptyBackgroundWork(col), undefined);
+  assert.deepEqual(calls, ['worker', 'worker']);
+  await new Promise(setImmediate);
+  assert.deepEqual(calls, ['worker', 'worker', 'worker']);
 });

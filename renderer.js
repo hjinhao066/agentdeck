@@ -3922,14 +3922,16 @@ function statusScreen(term) {
   return text.trimEnd();
 }
 // Background shell commands under a column's terminal, for the automatic archive
-// (pty-work.js in the main process). An answer is used for PTY_WORK_MS; until a
-// fresh one arrives the column reads undefined (unknown), null when the main
-// process could not list processes.
+// (pty-work.js in the main process). An answer is used for PTY_WORK_MS, a busy one
+// for PTY_WORK_BUSY_MS (on Windows each listing starts PowerShell, and a background
+// job can run for hours); until a fresh one arrives the column reads undefined
+// (unknown), null when the main process could not list processes.
 const PTY_WORK_MS = 10_000;
+const PTY_WORK_BUSY_MS = 60_000;
 const ptyWorkAnswers = new Map();
 function ptyBackgroundWork(col) {
   const known = ptyWorkAnswers.get(col.id);
-  if (known && !known.pending && Date.now() - known.at < PTY_WORK_MS) return known.busy;
+  if (known && !known.pending && Date.now() - known.at < (known.busy === true ? PTY_WORK_BUSY_MS : PTY_WORK_MS)) return known.busy;
   if (!known?.pending) {
     ptyWorkAnswers.set(col.id, { pending: true });
     const answer = (busy) => ptyWorkAnswers.set(col.id, { at: Date.now(), busy: typeof busy === 'boolean' ? busy : null });
