@@ -281,12 +281,18 @@ class TaskStore {
       if (input.updated !== undefined && input.updated !== card.updated) throw new Error('Card changed since it was read. Reload before editing.');
       const wasReview = card.status === 'review';
       const wasHeld = card.flag === 'held';
+      const isAutoRecover = input._autoRecoverReason !== undefined;
       if (input.status === 'doing') {
         if (card.depends_on.some((id) => this.find(docs, id).status !== 'done')) throw new Error('Predecessor cards are not all done.');
         if (wasReview) this.failure(card, card.review_round && card.exec_receipt ? AutoVerify.reviewAttemptId(card.id, card.review_round) : 'reject-' + (card.attempt_id || card.updated), '验收不通过，已打回返工', true);
-        else { card.flag = null; if (wasHeld) card.consecutive_failures = 0; }
+        else { card.flag = null; if (wasHeld && !isAutoRecover) card.consecutive_failures = 0; }
       } else card.flag = null;
       card.status = input.status;
+      // Record auto-recovery from done/archived/held
+      if (isAutoRecover && input.status === 'doing') {
+        card.last_auto_recovered_at = new Date().toISOString();
+        card.last_auto_recovered_from = input._autoRecoverReason;
+      }
       if (wasHeld && input.status === 'todo') card.consecutive_failures = 0;
       if (input.status === 'done') card.consecutive_failures = 0;
       // Keep unarchived sessions as an occupancy fence, including a finished
@@ -376,6 +382,13 @@ class TaskStore {
   }
   bind(input) {
     idValue(input.session_id); idValue(input.attempt_id);
+    // Auto-move done/archived/held cards back to doing when binding
+    const list = this.list({ archived: true });
+    const card = list.find(c => c.id === input.id);
+    if (card && (card.archived || card.flag === 'held' || card.status === 'done')) {
+      const priorStatus = card.status;
+      this.move({ id: input.id, status: 'doing', _autoRecoverReason: priorStatus });
+    }
     return this.mutate((docs) => {
       const card = this.find(docs, input.id); this.ready(docs, card);
       if (input.project && !sameProject(input.project, card.project)) throw new Error('--project differs from the card project.');
