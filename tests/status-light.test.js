@@ -310,6 +310,10 @@ test('Windows Captain: finished turn, wrapped into its truncated footer, is done
   ];
   const live = statusScreen(terminal(rows));
   assert.equal(classify(live, { state: 'working', hasWorked: true }, 'claude', true), 'done');
+  // 17:14 on 2.0: the same row wrapped without the wrap flag, so "running" stood alone.
+  const unflagged = statusScreen(terminal(['  Reply prose ends here.', '✻ Cooked for 7s · done 5:14 PM · 1 shell still', '  running', '', '─'.repeat(49), '❯ suggestion', '  ⏵⏵ bypass permissions on · 1 shell · ← 1 age…']));
+  assert.equal(classify(unflagged, { state: 'working', hasWorked: true }, 'claude', true), 'done');
+  assert.equal(classify('⠋ Running…\n❯ ', { hasWorked: true }, 'agy'), 'working');
   for (const marker of ['✻ Cooking… (3s · ↓ 1.2k tokens · esc to interrupt)', '✻ Cooking (3s · esc to interrupt)']) {
     assert.equal(classify(statusScreen(terminal([...rows.slice(0, 2), { text: marker }, ...rows.slice(4)])), { hasWorked: true }, 'claude', true), 'working', marker);
   }
