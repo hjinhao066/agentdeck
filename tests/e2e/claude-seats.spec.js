@@ -366,7 +366,8 @@ test('sidebar flags follow Captain Relay immediately while workers retain their 
   // The new seat must finish its continuation briefing before a direct TUI
   // command; otherwise readline batches /model into that first prompt.
   const fresh = await page.evaluate(() => config.mainSession.colId);
-  await expect.poll(() => promptsFor(fresh).some(p => p.startsWith('你是刚接任的队长：')), { timeout: 20000 }).toBe(true);
+  // The whole briefing (not a file pointer) is typed into the line-reading stand-in first, so the note follows later.
+  await expect.poll(() => promptsFor(fresh).some(p => p.startsWith('你是刚接任的队长：')), { timeout: 60000 }).toBe(true);
   await idle(fresh);
   await page.evaluate(() => { window.deck.ptyInput(config.mainSession.colId, '/model Opus 5.5\r'); window.deck.ptyInput('seat-worker', '/model Opus 5.5\r'); });
   await expect(page.locator('.captain-item .agent-model-label')).toHaveText('Opus 5.5');
