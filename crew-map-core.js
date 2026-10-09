@@ -12,6 +12,11 @@
   const STATUS_LABEL = { working: '干活中', input: '待补充', queued: '排队', done: '已完成', failed: '失败', stopped: '已停下', idle: '空闲' };
   const ACTIVE = ['working', 'input', 'queued'];
   const MAX_LINE = 140;
+  // A project's frame is one card wide; with this many sessions on the map or more it is two
+  // cards wide, and never wider: the rest of a big project goes down inside its own frame.
+  const PROJECT_TWO_COLUMNS_AT = 7;
+  const PROJECT_MAX_COLUMNS = 2;
+  const projectColumns = (sessions, at = PROJECT_TWO_COLUMNS_AT) => (sessions >= at ? PROJECT_MAX_COLUMNS : 1);
 
   const oneLine = (s, max = MAX_LINE) => {
     const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
@@ -39,29 +44,34 @@
     }
   }
 
+  // A restart's own bookkeeping (「重发：… 无法续上原对话」, the checkpoint note) is not news
+  // from the session: on the map it counts as no receipt at all.
+  const real = (r) => (r && !(r.checkpoint && !r.question && !r.failed) ? r : null);
+
   // The one line under a node: its newest receipt (question / failure / summary).
   function receiptLine(task, lastReceipt) {
-    const r = (task && task.receipt) || null;
+    const r = real(task && task.receipt), last = real(lastReceipt);
     if (r && r.question) return '提问：' + oneLine(r.question);
     if (r && r.failed) return '失败：' + oneLine(r.failed);
     if (r && r.summary) return oneLine(r.summary);
-    if (lastReceipt && lastReceipt.summary) return oneLine(lastReceipt.summary);
+    if (last && last.summary) return oneLine(last.summary);
     return '';
   }
 
   // The same receipt, whole, for the detail popover.
   function receiptFull(task, lastReceipt) {
-    const r = (task && task.receipt) || null;
+    const r = real(task && task.receipt), last = real(lastReceipt);
     const full = (s) => String(s == null ? '' : s).trim().slice(0, 4000);
     if (r && r.question) return '提问：' + full(r.question);
     if (r && r.failed) return '失败：' + full(r.failed);
     if (r && r.summary) return full(r.summary);
-    return lastReceipt && lastReceipt.summary ? full(lastReceipt.summary) : '';
+    return last && last.summary ? full(last.summary) : '';
   }
 
   // What came back to 队长 from a session: '' (nothing yet), 'ok', 'question', 'failed'.
   function returnKind(task, lastReceipt) {
-    const r = (task && task.receipt) || null;
+    const r = real(task && task.receipt);
+    lastReceipt = real(lastReceipt);
     if (r && r.question) return 'question';
     if ((r && r.failed) || (task && task.status === 'failed')) return 'failed';
     if (r || (task && ['done', 'stopped'].includes(task.status)) || (!task && lastReceipt)) return 'ok';
@@ -114,7 +124,8 @@
       const isArchived = !live.has(colId);
       const latest = list[list.length - 1] || null;
       const term = isArchived ? null : col;
-      const remembered = !latest && col.lastReceipt ? { status: col.lastReceipt.failed ? 'failed' : col.lastReceipt.explicit ? 'done' : 'stopped', receipt: col.lastReceipt } : null;
+      const kept = real(col.lastReceipt);
+      const remembered = !latest && kept ? { status: kept.failed ? 'failed' : kept.explicit ? 'done' : 'stopped', receipt: kept } : null;
       const { status, detail } = nodeStatus(latest || remembered, term);
       const sent = list.map((t) => t.sentAt || 0);
       all.push({
@@ -126,6 +137,8 @@
         line: receiptLine(latest || remembered, col.lastReceipt),
         full: receiptFull(latest || remembered, col.lastReceipt),
         live: !isArchived && status === 'working' ? oneLine(col.live, 90) : '',
+        // what the session last said about its own progress (board-cli progress), while it works
+        progress: !isArchived && status === 'working' && latest && typeof latest.progress === 'string' ? oneLine(latest.progress, 120) : '',
         archived: isArchived, review: false, taskCount: list.length,
         // 高优先级: the user named this work as urgent (a live session only).
         important: !isArchived && col.important === true,
@@ -142,7 +155,7 @@
         id: 'wait:' + t.id, kind: 'waiting', title: oneLine(t.title, 120) || '排队中的活',
         project: oneLine(t.project, 120), reviews: Array.isArray(t.reviews) ? t.reviews : [],
         provider: '', model: '', status: 'queued', statusLabel: STATUS_LABEL.queued, detail: '等空位',
-        line: '', full: '', live: '', archived: false, review: false, taskCount: 1, important: t.important === true,
+        line: '', full: '', live: '', progress: '', archived: false, review: false, taskCount: 1, important: t.important === true,
         firstSentAt: t.sentAt || 0, lastSentAt: t.sentAt || 0, ts: t.sentAt || 0, files: [], returned: '',
       });
     });
@@ -217,6 +230,24 @@
   function summaryLine(counts) {
     const order = ['working', 'input', 'queued', 'failed', 'done', 'stopped', 'idle'];
     return order.filter((s) => counts[s]).map((s) => `${counts[s]} ${STATUS_LABEL[s]}`).join(' · ') || '还没有派出去的活';
+  }
+
+  // The one line a card shows under its title: what the session is doing now (its terminal's
+  // newest line, else what it last reported), what it asks, why it failed, or what it handed back.
+  // kind: live | question | failed | receipt | empty (a quiet word, or nothing, where the status says it all).
+  // (a terminal's own bullet in front of a live line, ⏺ ⎿ ✻ …, goes: the card draws its own)
+  const bare = (s) => { const t = String(s || '').trim(); return t.replace(/^[\s⏺●•◦▸▹▪■◆◇✻✶✳✢⎿⏵*·>›❯–—-]+/u, '').trim() || t; };
+  function cardLine(node) {
+    if (!node) return { text: '', kind: 'empty' };
+    if (node.kind === 'waiting') return { text: '会话数满了，有空位就自动开', kind: 'empty' };
+    if (node.status === 'working') {
+      if (node.live || node.progress) return { text: bare(node.live || node.progress), kind: 'live' };
+      return node.line ? { text: node.line, kind: 'receipt' } : { text: '还没有进展', kind: 'empty' };
+    }
+    if (node.line) return { text: node.line, kind: /^提问：/.test(node.line) ? 'question' : /^失败：/.test(node.line) ? 'failed' : 'receipt' };
+    if (node.status === 'input') return { text: '在终端里等你回答', kind: 'empty' };
+    if (node.status === 'queued') return { text: '还没开始', kind: 'empty' };
+    return { text: '', kind: 'empty' };
   }
 
   // Is this project folded? A saved choice wins; otherwise finished projects
@@ -298,9 +329,10 @@
     // tally need); the cards then stand centred in it, `inset` in from where they would start.
     const cardsW = cols * o.nodeW + (cols - 1) * o.gapX + 2 * o.padX;
     const w = Math.max(collapsed ? 320 : cardsW, Math.ceil((o.headW && o.headW[p.key]) || 0));
-    return { p, collapsed, cols, rows, w, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), h: collapsed ? 56 : 52 + top + o.nodeH + o.padBottom };
+    return { p, collapsed, cols, rows, w, sessions: nodes.length, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), h: collapsed ? o.headH + 4 : o.headH + top + o.nodeH + o.padBottom };
   }
-  const LAYOUT = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, padX: 44, padBottom: 28, pad: 40, fold: false, collapsedProjects: {}, columnsPerProject: Infinity, grid: false, center: false, tray: false, lane: 7 };
+  // headH: the frame's title strip, above its first row of cards
+  const LAYOUT = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, padX: 44, padBottom: 28, pad: 40, headH: 52, fold: false, collapsedProjects: {}, columnsPerProject: Infinity, grid: false, center: false, tray: false, lane: 7 };
   // Projects in the user's own order (the keys in `order` first, in that order), the rest as the map lists them.
   function ordered(projects, order) {
     if (!Array.isArray(order) || !order.length) return projects;
@@ -356,7 +388,7 @@
         if (!f.collapsed) f.rows.forEach((row, r) => {
           const start = o.grid ? x + o.padX + f.inset : x + (f.w - row.items.length * o.nodeW - Math.max(0, row.items.length - 1) * o.gapX) / 2;
           row.items.forEach((n, i) => {
-            const bx = start + i * (o.nodeW + o.gapX), by = y + 52 + row.top;
+            const bx = start + i * (o.nodeW + o.gapX), by = y + o.headH + row.top;
             if (n) pos.set(n.id, { x: bx, y: by, anchorY: by, w: o.nodeW, h: o.nodeH, row: r + 1, project: f.p.key });
             else fold = { x: bx, y: by + o.nodeH / 2 - 16, w: 150, h: 32, project: f.p.key };
           });
@@ -380,24 +412,26 @@
       left.forEach((g, s) => feeds.set(g.key, { x: slot(left.length - 1 - s), y: g.y - o.clusterGap / 2 }));
       right.forEach((g, s) => feeds.set(g.key, { x: slot(left.length + s), y: g.y - o.clusterGap / 2 }));
     }
-    return { captain, nodes: pos, groups, fold, feeds, grid: !!o.grid, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
+    // rails: every card hangs off a line down the left of its column (see routes)
+    const rails = o.grid && o.rails ? { x: Number.isFinite(o.railX) ? o.railX : o.gapX / 2, headH: o.headH, entry: Number.isFinite(o.entryTop) ? o.entryTop : 20 } : null;
+    return { captain, nodes: pos, groups, fold, feeds, grid: !!o.grid, rails, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
   }
 
-  // Which lane each project stands in and how many cards wide each lane's frames are, for a
-  // window size.w wide (in the canvas's own units, at the scale the map is shown at). The
-  // projects fill the lanes row by row in their order: the first ones stand across the top, the
-  // next ones under them from the left again, each close under the frame above it. The tallest
-  // lane's frames then grow a card wider for as long as the width holds it and the map gets
-  // shorter by it. Of the lane counts the width holds (opts.maxLanes at most), the one with the
-  // most lanes whose map is no more than LANE_COST times as tall as the shortest: projects
-  // stand three or four abreast wherever they can, and one big project is not left a single
-  // card wide to make room for one more lane. opts.keep (the number of lanes in use) stays
-  // while its map is within LANE_KEEP of the shortest, so a card more or less does not move
-  // every frame. The window's height is never asked.
+  // Which lane each project stands in and how many cards wide its frame is, for a window size.w
+  // wide (in the canvas's own units, at the scale the map is shown at). A frame is one card wide,
+  // two from opts.twoColumnsAt sessions on (PROJECT_TWO_COLUMNS_AT), never wider. The projects
+  // stand across the top in their order, as many abreast as the width holds, one lane each. Every
+  // project after them goes under the lane that ends highest (of lanes ending within BAND of the
+  // highest, the leftmost): the width is used before the height, and a big project grows down in
+  // its own frame instead of pushing the others under it. Nothing is planned wider than the window,
+  // so the map never scrolls sideways: when what is left over fits under no lane, fewer stand
+  // across the top. opts.keep (the plan in use) stays while it still holds the same frames in the
+  // same order, fits the width and is no more than LANE_KEEP times as tall as a fresh one, so a card
+  // more or less does not move frames from lane to lane. The window's height is never asked.
   // Returns { lanes, caps }.
-  const LANE_COST = 1.3, LANE_KEEP = 1.5;
+  const BAND = 48, LANE_KEEP = 1.15;
   function planAcross(map, size, opts) {
-    const o = { ...LAYOUT, maxLanes: 4, maxCap: 6, ...opts };
+    const o = { ...LAYOUT, twoColumnsAt: PROJECT_TWO_COLUMNS_AT, ...opts };
     const shown = new Set(map.nodes.map((n) => n.id));
     const projects = ordered(map.projects, o.order).filter((p) => frame(p, o, shown, 1));
     const n = projects.length;
@@ -405,59 +439,63 @@
     const availW = Math.max(1, size.w) - 2 * o.pad;
     const sized = new Map();
     const at = (p, c) => { const k = c + '\u0001' + p.key; if (!sized.has(k)) sized.set(k, frame(p, o, shown, c)); return sized.get(k); };
-    const tall = (lanes, caps) => Math.max(...lanes.map((lane, l) => lane.reduce((h, p) => h + at(p, caps[l]).h, 0) + (lane.length - 1) * o.clusterGap));
+    // two cards wide from the threshold on, unless the window cannot hold even one such frame
+    const caps = new Map(projects.map((p) => { const c = projectColumns(at(p, 1).sessions, o.twoColumnsAt); return [p.key, c > 1 && at(p, c).w <= availW ? c : 1]; }));
+    const fr = (p) => at(p, caps.get(p.key));
+    const height = (lane) => lane.reduce((h, p) => h + fr(p).h, 0) + (lane.length - 1) * o.clusterGap;
     // the lanes' width the way layout() lays them
-    const across = (lanes, caps) => {
+    const across = (lanes) => {
       let w = 0;
-      lanes.forEach((lane, l) => { w += Math.max(...lane.map((p) => at(p, caps[l]).w)) + (l ? laneGap(o, lanes[l - 1].length - 1 + lane.length - 1) : 0); });
-      return w + (lanes.length === 1 && n > 1 ? o.clusterGap / 2 + o.lane * (n - 2) : 0);
+      lanes.forEach((lane, l) => { w += Math.max(...lane.map((p) => fr(p).w)) + (l ? laneGap(o, lanes[l - 1].length - 1 + lane.length - 1) : 0); });
+      return w + (lanes.length === 1 && lanes[0].length > 1 ? o.clusterGap / 2 + o.lane * (lanes[0].length - 2) : 0);
     };
-    const plans = [];
-    for (let K = Math.min(n, Math.max(1, o.maxLanes)); K >= 1; K--) {
-      const lanes = Array.from({ length: K }, () => []);
-      projects.forEach((p, i) => lanes[i % K].push(p));
-      const caps = new Array(K).fill(1);
-      if (K > 1 && across(lanes, caps) > availW + 0.5) continue;   // too wide even one card wide; a single lane always stands
-      let best = caps.slice(), least = tall(lanes, caps);
-      for (;;) {
-        const hs = lanes.map((lane, l) => tall([lane], [caps[l]])), t = hs.indexOf(Math.max(...hs));
-        if (caps[t] >= o.maxCap || !lanes[t].some((p) => !at(p, caps[t]).collapsed && at(p, caps[t] + 1).cols > caps[t])) break;
-        caps[t]++;
-        if (across(lanes, caps) > availW + 0.5) break;
-        const h = tall(lanes, caps);
-        if (h < least - 0.5) { best = caps.slice(); least = h; }
-      }
-      plans.push({ lanes, caps: best, h: least });
+    const fits = (lanes) => lanes.length === 1 || across(lanes) <= availW + 0.5;
+    const out = (lanes) => ({ lanes: lanes.map((lane) => lane.map((p) => p.key)), caps: Object.fromEntries(projects.map((p) => [p.key, caps.get(p.key)])) });
+    let fresh = null;
+    for (let K = n; K >= 1 && !fresh; K--) {
+      const lanes = projects.slice(0, K).map((p) => [p]);
+      if (!fits(lanes)) continue;
+      const placed = projects.slice(K).every((p) => {
+        const ends = lanes.map(height), low = Math.min(...ends), level = (i) => ends[i] <= low + BAND;
+        const order = lanes.map((_, i) => i).sort((a, b) => (level(b) - level(a)) || (level(a) ? a - b : ends[a] - ends[b] || a - b));
+        const i = order.find((j) => { lanes[j].push(p); const ok = fits(lanes); lanes[j].pop(); return ok; });
+        if (i === undefined) return false;
+        lanes[i].push(p);
+        return true;
+      });
+      if (placed) fresh = lanes;
     }
-    const shortest = Math.min(...plans.map((p) => p.h));
-    const pick = plans.find((p) => p.lanes.length === o.keep && p.h <= shortest * LANE_KEEP) || plans.find((p) => p.h <= shortest * LANE_COST);
-    const out = { lanes: pick.lanes.map((lane) => lane.map((p) => p.key)), caps: {} };
-    pick.lanes.forEach((lane, l) => lane.forEach((p) => { out.caps[p.key] = pick.caps[l]; }));
-    return out;
+    // the plan in use, if it is still a plan for these frames in this order
+    const rank = new Map(projects.map((p, i) => [p.key, i]));
+    const keep = o.keep && Array.isArray(o.keep.lanes) ? o.keep : null;
+    if (keep && keep.lanes.flat().length === n && keep.lanes.flat().every((key) => rank.has(key)) && projects.every((p) => keep.caps && keep.caps[p.key] === caps.get(p.key))) {
+      const lanes = keep.lanes.map((lane) => lane.map((key) => projects[rank.get(key)]));
+      const tops = lanes.map((lane) => rank.get(lane[0].key));
+      const inOrder = tops.every((r, i) => r === i) && lanes.every((lane) => lane.every((p, k) => !k || rank.get(p.key) > rank.get(lane[k - 1].key)));
+      if (inOrder && fits(lanes) && Math.max(...lanes.map(height)) <= Math.max(...fresh.map(height)) * LANE_KEEP + 0.5) return out(lanes);
+    }
+    return out(fresh);
   }
 
-  // The order the user has put the project frames in, read from where they stand now, the way
-  // planAcross fills them in: the top frame of every column from the left, then the second of
-  // every column, and so on. A frame belongs to the column whose frames it overlaps sideways
-  // by half its width or more, unless it stands beside one of them (dropped half over it):
-  // then it is a column of its own, read before or after that frame by its left edge.
+  // The order the user has put the project frames in, read from where they stand now the way
+  // planAcross fills them in, like lines of text: frames whose tops are within BAND of each other
+  // make one line, read from the left; the lines are read from the top.
   function orderByPlace(groups) {
-    const columns = [];
-    const beside = (a, b) => Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) >= Math.min(a.h, b.h) / 2;
-    groups.slice().sort((a, b) => a.x - b.x || a.y - b.y).forEach((g) => {
-      const col = columns.find((c) => Math.min(c.right, g.x + g.w) - Math.max(c.left, g.x) >= Math.min(g.w, c.right - c.left) / 2 && !c.items.some((it) => beside(it, g)));
-      if (col) { col.items.push(g); col.right = Math.max(col.right, g.x + g.w); }
-      else columns.push({ left: g.x, right: g.x + g.w, items: [g] });
+    const lines = [];
+    groups.slice().sort((a, b) => a.y - b.y || a.x - b.x).forEach((g) => {
+      const line = lines[lines.length - 1];
+      if (line && g.y <= line.top + BAND) line.items.push(g);
+      else lines.push({ top: g.y, items: [g] });
     });
-    columns.forEach((c) => c.items.sort((a, b) => a.y - b.y || a.x - b.x));
-    const rows = Math.max(0, ...columns.map((c) => c.items.length));
-    return Array.from({ length: rows }, (_, r) => columns.filter((c) => c.items[r]).map((c) => c.items[r].key)).flat();
+    return lines.flatMap((line) => line.items.sort((a, b) => a.x - b.x || a.y - b.y).map((g) => g.key));
   }
 
+  // A dragged card stays inside its own frame, clear of the frame's edge, and near its own row.
   function constrainPosition(lay, box, p) {
     const g = lay.groups.find((g) => g.key === box.project);
     if (!g) return p;
-    return { x: Math.max(g.x + 20, Math.min(g.x + g.w - box.w - 20, p.x)), y: Math.max(box.anchorY - 12, Math.min(box.anchorY + 12, p.y)) };
+    const edge = Math.min(20, Math.max(0, (g.w - box.w) / 2 - 4));
+    return { x: Math.max(g.x + edge, Math.min(g.x + g.w - box.w - edge, p.x)), y: Math.max(box.anchorY - 12, Math.min(box.anchorY + 12, p.y)) };
   }
 
   function translateProject(lay, key, dx, dy) {
@@ -549,9 +587,12 @@
     // projects when one is in the way), and each card hanging off its
     // project's bus. Lines of a tree share their trunk and buses on purpose.
     const laneUse = new Map();
+    const rails = lay.rails;
     const items = map.edges.filter((e) => e.type === 'dispatch' && box(e.to)).map((e) => {
       const b = box(e.to);
       const n = status.get(e.to);
+      // with rails every card is entered from the line down the left of its column, the first row too
+      if (rails) return { e, b, n, side: true, rail: true, lx: b.x - rails.x, hx: b.x - rails.x };
       const side = n.review || b.row > 1;
       // a review session is entered from the left, down the gap left of what it reviews
       const targets = n.review ? (reviewOf.get(e.to) || []).map(box) : [];
@@ -580,6 +621,13 @@
       const xs = p.items.map((d) => d.hx);
       p.yL = Math.max(yMain + 20, (p.g ? p.g.y : Math.min(...p.items.map((d) => d.b.y))) - 16);
       p.ideal = Math.min(Math.max(...xs), Math.max(Math.min(...xs), cx));
+      if (rails) {
+        // the project's own line comes down its left rail into the frame, then runs under the
+        // title strip to the rails of its other columns: no line crosses the title
+        p.rail = Math.min(...xs);
+        p.ideal = p.rail;
+        p.busY = (p.g ? p.g.y + rails.headH : Math.min(...p.items.map((d) => d.b.y))) - 8;
+      }
       p.fx = p.ideal;
       // a frame under another in its lane: the layout has said which gap its line comes down
       const feed = lay.feeds && lay.feeds.get(p.key);
@@ -606,17 +654,20 @@
     const minX = Math.min(cx, ...feeders), maxX = Math.max(cx, ...feeders);
     const R = 10;
     projects.forEach((p) => p.items.forEach((d) => {
-      const tail = d.side
-        ? [[d.lx, p.yL], [d.lx, d.b.y + d.b.h / 2 - 14], [d.b.x - 2, d.b.y + d.b.h / 2 - 14]]
-        : [[d.hx, p.yL], [d.hx, d.b.y - 2]];
+      // with rails: straight down the left rail when the feeder is there, else across above the frame to it first
+      const tail = d.rail
+        ? [...(Math.abs(p.fx - p.rail) < 0.5 ? [] : [[p.fx, p.yL], [p.rail, p.yL]]), [p.rail, p.busY], [d.lx, p.busY], [d.lx, d.b.y + rails.entry], [d.b.x - 2, d.b.y + rails.entry]]
+        : d.side
+          ? [[d.lx, p.yL], [d.lx, d.b.y + d.b.h / 2 - 14], [d.b.x - 2, d.b.y + d.b.h / 2 - 14]]
+          : [[d.hx, p.yL], [d.hx, d.b.y - 2]];
       // the outermost feeders turn off the end of the main bus; others branch off it
       const end = Math.abs(p.fx - cx) > 0.5 && (Math.abs(p.fx - minX) < 0.5 || Math.abs(p.fx - maxX) < 0.5);
       const cls = `dispatch st-${d.n.status}${d.n.archived ? ' archived' : ''}`;
       out.push({
         type: 'dispatch', from: d.e.from, to: d.e.to, cls, project: p.key,
         hub: [cx, yMain], feederX: p.fx,
-        points: tidy([[cx, sy], [cx, yMain], [p.fx, yMain], [p.fx, p.yL], ...tail]),
-        branch: tidy([[p.fx, yMain + (end ? Math.min(R, Math.abs(p.fx - cx) / 2) : 0)], [p.fx, p.yL], ...tail]),
+        points: tidy([[cx, sy], [cx, yMain], [p.fx, yMain], ...(d.rail ? [] : [[p.fx, p.yL]]), ...tail]),
+        branch: tidy([[p.fx, yMain + (end ? Math.min(R, Math.abs(p.fx - cx) / 2) : 0)], ...(d.rail ? [] : [[p.fx, p.yL]]), ...tail]),
       });
     }));
     // ---- 审查 ----
@@ -718,5 +769,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, PROJECT_TWO_COLUMNS_AT, PROJECT_MAX_COLUMNS, projectColumns, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
 });
