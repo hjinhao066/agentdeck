@@ -36,6 +36,35 @@ test('an in-place rewrite with the same size and the same mtime is still noticed
   } finally { t.done(); }
 });
 
+// Windows CI: NTFS timestamps step about every 16 ms, so the real ctime (and ino, size) can stay
+// the same across an in-place rewrite. Here every field of the key is pinned on any system.
+const coarseStat = (t, ctimeMs) => {
+  const real = fs.statSync;
+  t.mock.method(fs, 'statSync', function (file, opts) {
+    const s = real.call(this, file, opts);
+    return Object.assign(Object.create(Object.getPrototypeOf(s)), s, { ino: 7n, size: 14n, mtimeNs: 1n, ctimeNs: 2n, ctimeMs: ctimeMs() });
+  });
+};
+
+test('a rewrite inside one timestamp step (every key field the same) is still noticed', (t) => {
+  const f = fresh();
+  try {
+    let ctime = Date.now();
+    coarseStat(t, () => ctime);
+    fs.writeFileSync(f.file, '{"seat":"aaa"}');
+    const read = createJsonFileCache(f.file);
+    assert.equal(read().seat, 'aaa');
+    fs.writeFileSync(f.file, '{"seat":"bbb"}');
+    assert.equal(read().seat, 'bbb');
+    // the same step again, then the file settles: the change made while it was young is not lost
+    fs.writeFileSync(f.file, '{"seat":"ccc"}');
+    ctime = Date.now() - 60_000;
+    assert.equal(read().seat, 'ccc');
+    // settled and unchanged: parsed no more
+    assert.equal(countParses(() => { for (let i = 0; i < 20; i++) assert.equal(read().seat, 'ccc'); }), 0);
+  } finally { t.mock.restoreAll(); f.done(); }
+});
+
 test('an atomic replace (tmp file + rename, as main.js saves) with the same size and mtime is noticed', () => {
   const t = fresh();
   try {
