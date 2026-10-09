@@ -1498,7 +1498,16 @@
     const anomaly = M.exceptionReason(item);
     // Input/exit/quota events are deduplicated by task status/blockedAsked.
     // Never suppress a new task's failure or a decision the new Captain needs.
-    s.pending.push({ ...(anomaly ? { anomaly } : {}), taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
+    const col = host.columns().find((c) => c.id === task.colId);
+    const pendingItem = { ...(anomaly ? { anomaly } : {}), taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item };
+    // If this task comes from a child session (has a parent), find the parent's column and store reference
+    if (col && col.parentTaskId) {
+      const parentCol = host.columns().find((c) => c.taskId === col.parentTaskId);
+      if (parentCol) {
+        pendingItem.parentColId = parentCol.id; // Mark this as a child's receipt
+      }
+    }
+    s.pending.push(pendingItem);
     return true;
   }
   // Hand every pending receipt to 队长's model as text; they count as in
@@ -2644,7 +2653,31 @@
           t.receipt = { summary: archive ? '队长已结束终端并归档。' : '队长已请求中断当前操作。', files: [], images: [], failed: '', explicit: true, source: archive ? 'captain-archive' : 'captain-stop' };
           update(t);
         });
+        // When archiving a sub-captain, transfer child session receipts back to main captain
+        const childSessions = archive && col.parentTaskId === undefined ? host.columns().filter((c) => c.parentTaskId === col.taskId) : [];
+        const childReceipts = s.pending.filter((p) => {
+          const session = host.columns().find((c) => c.id === p.colId);
+          return session && session.parentTaskId === col.taskId;
+        });
         s.pending = s.pending.filter((p) => p.colId !== id);
+        // Re-add child receipts without the parent reference if sub-captain is being archived
+        if (archive && childReceipts.length > 0) {
+          const transferredReceipts = childReceipts.map((r) => {
+            const { parentColId, ...rest } = r;
+            return rest; // Remove parentColId to route back to main
+          });
+          s.pending.push(...transferredReceipts);
+          if (childSessions.length > 0) {
+            s.pending.push({
+              taskId: 'sub-captain-handoff-' + Date.now(),
+              colId: s.colId,
+              title: '小队长已结束',
+              ts: Date.now(),
+              summary: `「${host.columnLabel(col)}」已结束，下属 ${childSessions.length} 个工作线条已转移回你；${childSessions.map((c) => `「${host.columnLabel(c)}」`).join('、')}。`,
+              source: 'captain-handoff'
+            });
+          }
+        }
         if (col.executor === 'chatgpt-web') {
           try { await window.deck.chatgptWebCancel(id); }
           finally { if (entry) entry.webExecutorStopping = false; }
@@ -2655,7 +2688,7 @@
         save();
         const settled = archive && col.worktree ? await settleArchivedWorktree(col) : null;
         const note = settled?.reason ? ' ' + settled.reason : '';
-        return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。${note}` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
+        return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。${note}` + (childSessions.length > 0 ? `下属 ${childSessions.length} 个会话已转移。` : '') : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
       }
       case 'main-ledger': {
         const archived = (host.config.archived || []).length;
