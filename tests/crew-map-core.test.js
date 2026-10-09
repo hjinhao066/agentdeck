@@ -1359,3 +1359,13 @@ test('智能一页 with no project on the map (only 队长, as after the last pr
     assert.deepEqual(C.arrangePage(empty, { w, h }, { ...ARRANGE, dpr }, { plan: held.plan, planW: w, dpr }).plan.lanes, []);
   }
 });
+
+test('智能一页 with no project on the map and the board view not laid out yet (0×0, AgentDeck starting on 架构图) gives 队长 alone', () => {
+  // 2.0.2: this first drawing threw, and the page stopped before 任务看板 was set up
+  for (const dpr of [1, 2]) {
+    const r = C.arrangePage(crewOf({}), { w: 0, h: 0 }, { ...ARRANGE, dpr }, {});
+    assert.deepEqual(r.plan.lanes, []);
+    assert.ok(r.lay.captain && r.lay.groups.length === 0);
+    assert.equal(r.pageFits, false);
+  }
+});
