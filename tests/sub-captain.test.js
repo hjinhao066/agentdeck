@@ -23,7 +23,7 @@ function runtime() {
   const boardCard = { id: 'card-1', title: '秋招', project: '秋招', status: 'doing', session_id: null, attempt_closed: false };
   let turn = 0;
   const window = {
-    MainCore: M, BoardCore: B,
+    MainCore: M, BoardCore: B, ClaudeSeatsCore: require('../claude-seats-core'),
     QuotaCore: { quotaFallback: (_q, cmd) => ({ action: 'open', cmd }), commandQuota: () => ({ out: false }) },
     ChatUI: { addCard: (colId, task) => cards.push({ colId, taskId: task.id }), updateCard() {}, hasDraft: () => false, turnsOf: () => [], readFooter: () => '',
       sendPrompt: async (col, _text, _atts, opts) => { prompts.push({ colId: col.id, text: opts.prefix, guarded: opts.guardUserInput === true }); return true; } },

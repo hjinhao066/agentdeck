@@ -183,6 +183,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   while asleep or offline. Tests drive the clock and the events, never a real sleep. After a wake
   `receipts --wait` must stay waiting: the registry's `wake()` restarts every listener's timer, and
   every other exit prints its reason (only app restart / ended Captain terminal / `--timeout` stay silent).
+  A Claude "Not logged in" on a seat that a fresh check finds signed in is a blip, not a logout: the same
+  rules carry it (evidence `login`: about a minute, one nudge); only the same error below that nudge is a
+  failure receipt. A seat found signed out still gets the ordinary 未登录 receipt at once.
 - Relay handoff (`relay-handoff-core.js`, `docs/relay-handoff.md`): the app rewrites
   `agentdeck-captain-handoff.md` whole from one snapshot (board cards, dispatch records,
   live sessions, unread receipts); the Captain's `agentdeck-captain-decisions.md` is only

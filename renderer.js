@@ -2252,6 +2252,17 @@ function buildColumn(col, isFresh) {
             const entry = terms.get(spawnId);
             if (!entry || !entry.alive || col.id !== spawnId) return;
             if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
+            // Claude starts only on the seat this column is bound to. A seat that is gone or
+            // signed out starts nothing, and no other seat stands in for it.
+            const blocked = ClaudeSeatsCore.claudeLaunch(col.cmd) && ClaudeSeatsCore.launchBlock(col, config, await window.deck.claudeSeats().catch(() => []));
+            if (col.id !== spawnId || terms.get(spawnId) !== entry || !entry.alive) return;
+            if (blocked) {
+              entry.seatBlock = blocked;
+              entry.launchPending = false;
+              entry.term.write(`\r\n\x1b[33m[AgentDeck] ${blocked}，没有启动 Claude，也不会换到别的席位。登录这个席位后（设置 → 席位设置里有复制登录命令的图标），归档再恢复这一列就能接着原对话。\x1b[0m\r\n`);
+              MainSession.launchBlocked(col, `${blocked}：会话没有启动，任务没有送达，也没有换到别的席位。请用户先登录这个席位（席位设置里有复制登录命令的图标），再归档、用 tell 恢复它；急的话用 new --task-id … --seat 另一个已登录席位 改派。`);
+              return;
+            }
             const prepared = await window.deck.prepareLaunch(spawnId, launch).catch(() => null);
             if (col.id !== spawnId || terms.get(spawnId) !== entry || !entry.alive) return;
             if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
@@ -2856,8 +2867,18 @@ function sendWhenReady(col, text, opts) {
       o.onGiveUp?.(entry.exitReason || '这个会话的终端已经退出');
       return;
     }
+    // Its Claude never started (its seat is gone or signed out): there is nothing to type into.
+    if (entry?.seatBlock) {
+      if (o.onGiveUp) o.onGiveUp(entry.seatBlock);
+      else showToast(`没发出去：「${columnLabel(col)}」${entry.seatBlock}`);
+      return;
+    }
     if (entry && entry.alive) {
-      const idle = !entry.sendingPrompt && entry.state !== 'input' && !MainCore.workingForSend(entry) && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd);
+      // overLoginError: MainSession's one 「接着做」 after a login blip on a signed-in seat. The error
+      // row it answers would otherwise hold the column as a resource wait; any other wait still does.
+      const loginRowOnly = !!o.overLoginError && MainCore.resourceKind(entry.lastScreen, col.cmd) === 'auth';
+      const idle = !entry.sendingPrompt && entry.state !== 'input' && !MainCore.workingForSend(entry) &&
+        (loginRowOnly || entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd));
       const quiet = Date.now() - (entry.lastOutputAt || 0);
       const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
       // Cursor CLI initializes its TUI asynchronously and enables bracketed paste mode (?2004h)

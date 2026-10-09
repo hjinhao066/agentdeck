@@ -182,6 +182,9 @@ require(${JSON.stringify(path.join(__dirname, 'fixtures/fake-agent.js'))});`);
     : `#!${process.execPath}\nrequire(${JSON.stringify(script)});\n`, { mode: 0o700 });
   const sessionId = '11111111-1111-4111-8111-111111111111';
   const cmd = `"${executable}"`;
+  // A Claude session starts only on a signed-in seat: a stand-in login for the default seat.
+  fs.mkdirSync(path.join(profile2, 'seats-home', '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(profile2, 'seats-home', '.claude', '.credentials.json'), '{}');
   fs.mkdirSync(path.join(profile2, 'tasks'));
   fs.writeFileSync(path.join(profile2, 'tasks', 'fallback.json'), JSON.stringify({ version: 1, project: 'fallback', cards: [{
     id: 'fallback-card', project: 'fallback', title: 'fallback probe', detail: 'EXACT ORIGINAL CARD TASK', status: 'doing', flag: null,

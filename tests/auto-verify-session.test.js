@@ -48,7 +48,7 @@ function boot(w, persisted) {
       },
       memoryPressure: async () => ({ level: w.pressure }), saveLongPrompt: async () => '/tmp/long-task.txt', onTasksChanged() {},
     },
-    MainCore: M, BoardCore: B, AutoVerifyCore: AV,
+    MainCore: M, BoardCore: B, AutoVerifyCore: AV, ClaudeSeatsCore: require('../claude-seats-core'),
     QuotaCore: {
       commandQuota: (_store, cmd) => ({ out: [...w.out].some((p) => String(cmd).startsWith(p)) }),
       // Same out-set as commandQuota. This harness does not model same-tier switches.

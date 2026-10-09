@@ -168,6 +168,11 @@ async function loadCredential(seat, home, platform, exec) {
   }
   return { loc, account, raw, source, blocked: !raw && keychainUnknown };
 }
+// A Claude CLI on the seat renews its own token, and a second writer racing it for the seat's
+// Keychain item can sign it out. So an expired token is renewed only through deps.exclusive (the
+// seat gate: no Claude runs on the seat, and AgentDeck starts none until the renewal is written),
+// and the credential is read again inside it. Without the gate, or with a Claude running, it is
+// only read: the seat's usage stays unknown until a session on it renews the token.
 async function readCredentials(seat, home, platform = process.platform, exec = execFile, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now() : Date.now();
   const loaded = await loadCredential(seat, home, platform, exec);
@@ -197,6 +202,10 @@ async function readCredentials(seat, home, platform = process.platform, exec = e
     if (Number.isFinite(base?.expiresAt) && base.expiresAt <= now) deps.onAuth?.('logged-out');
     return null;
   }
+  if (!deps.inGate) {
+    if (typeof deps.exclusive !== 'function') return null;
+    return (await deps.exclusive(() => readCredentials(seat, home, platform, exec, { ...deps, exclusive: null, inGate: true }))) ?? null;
+  }
   let expectedUuid = null;
   try {
     const account = JSON.parse(await fs.readFile(loaded.loc.metadataPath, 'utf8')).oauthAccount;
@@ -211,6 +220,23 @@ async function readCredentials(seat, home, platform = process.platform, exec = e
   try { persisted = await persist(loaded.source, payload) === true; } catch (_) {}
   refreshedCredentials.set(loaded.loc.keychainService, { auth: next, source: loaded.source, payload, persisted });
   return next.accessToken;
+}
+// One renewal, or one Claude AgentDeck starts, at a time per seat. renew(seat, fn) runs fn only when
+// occupied(seat) says no Claude is on the seat (checked inside the queue, after whatever went before),
+// else resolves to null. launch(seatId, fn) runs fn after any renewal in progress on that seat.
+function createSeatGate({ occupied }) {
+  const tails = new Map();
+  function queue(key, fn) {
+    const run = (tails.get(key) || Promise.resolve()).then(fn);
+    const tail = run.catch(() => {});
+    tails.set(key, tail);
+    tail.then(() => { if (tails.get(key) === tail) tails.delete(key); });
+    return run;
+  }
+  return {
+    renew: (seat, fn) => queue(seat.id, async () => (await occupied(seat)) ? null : fn()),
+    launch: (seatId, fn) => queue(seatId, fn),
+  };
 }
 function officialUsage(data, seat, service, at) {
   const windows = [['fiveHour', '5 小时', data?.five_hour], ['weekly', '每周', data?.seven_day]].map(([key, label, w]) => {
@@ -344,4 +370,4 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
   }),
     dispose: () => { stopped = true; entries.clear(); } };
 }
-module.exports = { INTERVAL_MS, officialUsage, readCredentials, requestUsage, readSeat, createRefresh, refreshOauth, postRefresh, clearCredentialCache };
+module.exports = { INTERVAL_MS, officialUsage, readCredentials, requestUsage, readSeat, createRefresh, createSeatGate, refreshOauth, postRefresh, clearCredentialCache };

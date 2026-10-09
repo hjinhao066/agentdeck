@@ -328,113 +328,6 @@ function refreshResponse(over = {}) {
   return { access_token: 'fresh-access-token', refresh_token: 'rotated-refresh-token', expires_in: 28800,
     refresh_token_expires_in: 86400 * 30, scope: 'user:inference user:profile', ...over };
 }
-test('an idle seat refreshes an expired access token once and rewrites only that credential file', async (t) => {
-  const home = fixture(t), seat = S.normalize().find((item) => item.id === 'us'), loc = M.credentialLocation(seat, home);
-  const other = M.credentialLocation(S.normalize()[0], home), untouched = credential('cn-stays');
-  fs.writeFileSync(loc.credentialsPath, expiredCredential());
-  fs.writeFileSync(other.credentialsPath, untouched);
-  const posts = [], now = 1_700_000_000_000;
-  const post = async (body) => { posts.push(body); return refreshResponse(); };
-  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, now: () => now }), 'fresh-access-token');
-  assert.deepEqual(posts.map((body) => body.grant_type), ['refresh_token']);
-  assert.equal(posts[0].refresh_token, 'fake-refresh-token');
-  assert.equal(posts[0].client_id, '9d1c250a-e61b-44d9-88ed-5944d1962f5e');
-  assert.equal(posts[0].scope, 'user:inference user:profile');
-  const saved = JSON.parse(fs.readFileSync(loc.credentialsPath, 'utf8'));
-  assert.equal(saved.claudeAiOauth.accessToken, 'fresh-access-token');
-  assert.equal(saved.claudeAiOauth.refreshToken, 'rotated-refresh-token');
-  assert.equal(saved.claudeAiOauth.expiresAt, now + 28800000);
-  assert.equal(saved.claudeAiOauth.subscriptionType, 'pro');
-  assert.equal(saved.mcpOAuth.keep, 'yes');
-  // Windows has no group/other permission bits (stat reports 0o666, or 0o444 when
-  // read-only; access is by ACL inherited from the profile folder), so there the
-  // check is that the rewritten file is still a normal writable file.
-  const mode = fs.statSync(loc.credentialsPath).mode & 0o777;
-  if (process.platform === 'win32') assert.equal(mode & 0o200, 0o200);
-  else assert.equal(mode, 0o600);
-  assert.equal(fs.readFileSync(other.credentialsPath, 'utf8'), untouched);
-  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, now: () => now + 1000 }), 'fresh-access-token');
-  assert.equal(posts.length, 1);
-});
-test('a dead refresh token, a rejected refresh, or another account leaves the stored credential unchanged', async (t) => {
-  const home = fixture(t), seat = S.normalize().find((item) => item.id === 'us'), loc = M.credentialLocation(seat, home);
-  const posts = [];
-  const post = async (body) => { posts.push(body); return null; };
-  fs.writeFileSync(loc.credentialsPath, expiredCredential({ refreshTokenExpiresAt: 1 }));
-  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post }), null);
-  assert.equal(posts.length, 0);
-  const rejected = expiredCredential();
-  fs.writeFileSync(loc.credentialsPath, rejected);
-  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post }), null);
-  assert.equal(fs.readFileSync(loc.credentialsPath, 'utf8'), rejected);
-  assert.equal(posts.length, 1);
-  const mismatch = async () => refreshResponse({ account: { uuid: 'someone-else' } });
-  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post: mismatch }), null);
-  assert.equal(fs.readFileSync(loc.credentialsPath, 'utf8'), rejected);
-  fs.writeFileSync(loc.credentialsPath, credential('still-valid'));
-  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post: mismatch }), 'still-valid');
-});
-test('darwin keychain refresh passes the secret on stdin and keeps a rotated token in memory if the write fails', async (t) => {
-  const home = fixture(t), seat = S.normalize().find((item) => item.id === 'us'), raw = expiredCredential();
-  const keychain = (bin, args, opts, cb) => { assert.equal(bin, '/usr/bin/security'); assert.equal(args.at(-1), '-w'); cb(null, raw); };
-  const writes = [], posts = [];
-  const spawnImpl = (bin, args) => {
-    const child = new EventEmitter();
-    child.stdin = { write(chunk) { child.stdin.text = (child.stdin.text || '') + chunk; return true; }, end() {} };
-    child.kill = () => {};
-    writes.push({ bin, args, child });
-    queueMicrotask(() => child.emit('close', 1));
-    return child;
-  };
-  const token = await C.readCredentials(seat, home, 'darwin', keychain, {
-    post: async () => { posts.push('refresh'); return refreshResponse(); }, spawn: spawnImpl,
-  });
-  assert.equal(token, 'fresh-access-token');
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0].bin, '/usr/bin/security');
-  assert.deepEqual(writes[0].args.slice(0, 2).concat(writes[0].args.slice(3)), ['add-generic-password', '-a', '-s', M.credentialLocation(seat, home).keychainService, '-U', '-w']);
-  assert.equal(writes[0].args.includes('fresh-access-token') || writes[0].args.includes('rotated-refresh-token'), false);
-  const stored = writes[0].child.stdin.text;
-  assert.equal(stored, stored.split('\n')[0] + '\n' + stored.split('\n')[0] + '\n');
-  assert.equal(JSON.parse(stored.split('\n')[0]).claudeAiOauth.refreshToken, 'rotated-refresh-token');
-  assert.equal(JSON.parse(stored.split('\n')[0]).mcpOAuth.keep, 'yes');
-  assert.equal(fs.existsSync(M.credentialLocation(seat, home).credentialsPath), false);
-  assert.equal(await C.readCredentials(seat, home, 'darwin', keychain, {
-    post: async () => { posts.push('refresh'); return refreshResponse(); }, spawn: spawnImpl,
-  }), 'fresh-access-token');
-  assert.deepEqual(posts, ['refresh']);
-  assert.equal(writes.length, 2);
-});
-test('token refresh posts only to the pinned Claude Code token URL and drops auth and rate-limit bodies', async () => {
-  const calls = [];
-  const transport = (status, body) => (url, options, callback) => {
-    const req = new EventEmitter();
-    req.destroy = () => { req.destroyed = true; };
-    req.end = (payload) => {
-      calls.push({ url, options, payload });
-      queueMicrotask(() => {
-        const res = new EventEmitter();
-        res.statusCode = status; res.setEncoding = () => {}; res.destroy = () => { res.destroyed = true; };
-        callback(res);
-        if ([200, 400].includes(status) && !res.destroyed) { res.emit('data', body); res.emit('end'); }
-      });
-    };
-    return req;
-  };
-  const ok = await C.postRefresh({ grant_type: 'refresh_token', refresh_token: 'fake-refresh-token' }, transport(200, JSON.stringify({ access_token: 'fresh-access-token', expires_in: 10 })));
-  assert.equal(ok.access_token, 'fresh-access-token');
-  assert.equal(calls[0].url, 'https://platform.claude.com/v1/oauth/token');
-  assert.equal(calls[0].options.method, 'POST');
-  assert.equal(calls[0].options.agent, false);
-  assert.equal(JSON.parse(calls[0].payload).refresh_token, 'fake-refresh-token');
-  assert.deepEqual(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(401, '{"error":"invalid_grant","refresh_token":"fake-never-return"}')), { authStatus: 'logged-out' });
-  assert.deepEqual(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(400, '{"error":"invalid_grant","refresh_token":"fake-never-return"}')), { authStatus: 'logged-out' });
-  assert.equal(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(400, '{"error":"invalid_request"}')), null);
-  assert.equal(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(429, '{"error":"rate_limited"}')), null);
-  assert.equal(calls.length, 5);
-  assert.ok(!JSON.stringify(ok).includes('fake-refresh-token'));
-});
-
 test('only an explicit usage authentication rejection reports logout; success proves login', async () => {
   const rejected = await C.requestUsage('fake-access', transport(401, '{"secret":"fake-never-return"}', []));
   assert.equal(rejected.authStatus, 'logged-out');
@@ -444,7 +337,7 @@ test('only an explicit usage authentication rejection reports logout; success pr
   assert.equal(success.authStatus, 'logged-in');
 });
 
-test('credential absence and unusable expired credentials report logout; read failures and refresh network errors do not', async (t) => {
+test('credential absence, unusable expired credentials and a refused renewal report logout; read failures and network errors do not', async (t) => {
   const home = fixture(t), seat = S.normalize()[1], loc = M.credentialLocation(seat, home);
   const signals = [], deps = { onAuth: (status) => signals.push(status) };
   assert.equal(await C.readCredentials(seat, home, 'win32', undefined, deps), null);
@@ -459,13 +352,18 @@ test('credential absence and unusable expired credentials report logout; read fa
   fs.writeFileSync(loc.credentialsPath, expiredCredential({ refreshToken: undefined }));
   assert.equal(await C.readCredentials(seat, home, 'win32', undefined, deps), null);
   assert.deepEqual(signals.splice(0), ['logged-out']);
-  const rejectedCredential = expiredCredential();
-  fs.writeFileSync(loc.credentialsPath, rejectedCredential);
-  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { ...deps, post: async () => null }), null);
+  fs.writeFileSync(loc.credentialsPath, expiredCredential());   // the CLI on this seat can still renew it
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, deps), null);
   assert.deepEqual(signals, []);
-  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { ...deps, post: async () => ({ authStatus: 'logged-out' }) }), null);
+  fs.writeFileSync(loc.credentialsPath, expiredCredential({ refreshTokenExpiresAt: 1 }));
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, deps), null);
   assert.deepEqual(signals.splice(0), ['logged-out']);
-  assert.equal(fs.readFileSync(loc.credentialsPath, 'utf8'), rejectedCredential);
+  // renewing on a free seat: a refused refresh token is a logout, a network failure is not
+  fs.writeFileSync(loc.credentialsPath, expiredCredential());
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { ...deps, exclusive: (fn) => fn(), post: async () => null }), null);
+  assert.deepEqual(signals, []);
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { ...deps, exclusive: (fn) => fn(), post: async () => ({ authStatus: 'logged-out' }) }), null);
+  assert.deepEqual(signals.splice(0), ['logged-out']);
 });
 
 test('readSeat exposes credential logout even after account metadata is removed, without mistaking a custom null result', async (t) => {
@@ -501,3 +399,177 @@ test('refresh reports one auth observation per real poll; caches and concurrent 
   assert.equal(signals[1].checkedAt, signals[1].at);
   assert.notEqual(signals[1].failure, '未登录');
 });
+
+// Renewal goes through the seat gate (main.js: createSeatGate with the warm-up's process inventory).
+const free = (fn) => fn();          // no Claude runs on the seat
+const busy = async () => null;      // a Claude runs on it: the gate refuses
+
+test('an expired token is renewed only when no Claude runs on its seat; with one running it is only read', async (t) => {
+  const home = fixture(t), seat = S.normalize().find((item) => item.id === 'us'), loc = M.credentialLocation(seat, home);
+  const raw = expiredCredential(), posts = [], writes = [], signals = [];
+  const post = async (body) => { posts.push(body); return refreshResponse(); };
+  const spawn = (bin, args) => { writes.push(args); const child = new EventEmitter(); child.stdin = { write() { return true; }, end() {} }; child.kill = () => {}; queueMicrotask(() => child.emit('close', 0)); return child; };
+  const keychain = (_bin, _args, _opts, cb) => cb(null, raw);
+  fs.writeFileSync(loc.credentialsPath, raw);
+  // a Claude runs on the seat (the gate says no), or no gate at all: read only, the CLI renews its own token
+  for (const deps of [{ post, spawn, exclusive: busy }, { post, spawn }]) {
+    assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { ...deps, onAuth: (s) => signals.push(s) }), null);
+    assert.equal(await C.readCredentials(seat, home, 'darwin', keychain, { ...deps, onAuth: (s) => signals.push(s) }), null);
+  }
+  assert.equal(fs.readFileSync(loc.credentialsPath, 'utf8'), raw);
+  assert.deepEqual([posts.length, writes.length, signals], [0, 0, []]);
+  // nothing runs on the seat: renewed once and written back
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, spawn, exclusive: free }), 'fresh-access-token');
+  assert.equal(posts.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(loc.credentialsPath, 'utf8')).claudeAiOauth.accessToken, 'fresh-access-token');
+  // a token the seat's own CLI renewed while the gate was waited for is used as it is
+  C.clearCredentialCache();
+  fs.writeFileSync(loc.credentialsPath, raw);
+  const late = async (fn) => { fs.writeFileSync(loc.credentialsPath, credential('renewed-by-cli')); return fn(); };
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, spawn, exclusive: late }), 'renewed-by-cli');
+  assert.equal(posts.length, 1);
+});
+
+test('the seat gate renews only a free seat, and a renewal never overlaps AgentDeck starting Claude on that seat', async () => {
+  const log = []; let busySeat = false;
+  const gate = C.createSeatGate({ occupied: async (seat) => { log.push('check ' + seat.id); return busySeat; } });
+  const us2 = { id: 'us2' };
+  assert.equal(await gate.renew(us2, async () => 'renewed'), 'renewed');
+  busySeat = true;
+  assert.equal(await gate.renew(us2, async () => { log.push('must not run'); return 'renewed'; }), null);
+  assert.ok(!log.includes('must not run'));
+  busySeat = false;
+  // a renewal in progress holds a launch on the same seat until it is written; another seat goes on
+  let release; const writing = new Promise((resolve) => { release = resolve; });
+  log.length = 0;
+  const renewal = gate.renew(us2, async () => { log.push('renew'); await writing; log.push('written'); return 'ok'; });
+  const launch = gate.launch('us2', async () => log.push('launch us2'));
+  await gate.launch('cn', async () => log.push('launch cn'));
+  await new Promise(setImmediate);
+  assert.deepEqual([...log].sort(), ['check us2', 'launch cn', 'renew'].sort());
+  assert.ok(!log.includes('launch us2'), 'the us2 launch waits for the renewal');
+  release();
+  await Promise.all([renewal, launch]);
+  assert.deepEqual(log.slice(-2), ['written', 'launch us2']);
+  // a Claude AgentDeck is starting (the quota warm-up) holds a renewal, whose seat check comes after it
+  let finish; const running = new Promise((resolve) => { finish = resolve; });
+  log.length = 0;
+  const warmup = gate.launch('us2', async () => { log.push('warm-up'); await running; log.push('warm-up done'); });
+  const after = gate.renew(us2, async () => { log.push('renew'); return 'ok'; });
+  await new Promise(setImmediate);
+  assert.deepEqual(log, ['warm-up']);
+  finish();
+  await Promise.all([warmup, after]);
+  assert.deepEqual(log, ['warm-up', 'warm-up done', 'check us2', 'renew']);
+  // a failed step does not jam the seat
+  await assert.rejects(gate.launch('us2', async () => { throw new Error('boom'); }));
+  assert.equal(await gate.renew(us2, async () => 'still works'), 'still works');
+});
+
+test('an idle seat refreshes an expired access token once and rewrites only that credential file', async (t) => {
+  const home = fixture(t), seat = S.normalize().find((item) => item.id === 'us'), loc = M.credentialLocation(seat, home);
+  const other = M.credentialLocation(S.normalize()[0], home), untouched = credential('cn-stays');
+  fs.writeFileSync(loc.credentialsPath, expiredCredential());
+  fs.writeFileSync(other.credentialsPath, untouched);
+  const posts = [], now = 1_700_000_000_000;
+  const post = async (body) => { posts.push(body); return refreshResponse(); };
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, now: () => now, exclusive: free }), 'fresh-access-token');
+  assert.deepEqual(posts.map((body) => body.grant_type), ['refresh_token']);
+  assert.equal(posts[0].refresh_token, 'fake-refresh-token');
+  assert.equal(posts[0].client_id, '9d1c250a-e61b-44d9-88ed-5944d1962f5e');
+  assert.equal(posts[0].scope, 'user:inference user:profile');
+  const saved = JSON.parse(fs.readFileSync(loc.credentialsPath, 'utf8'));
+  assert.equal(saved.claudeAiOauth.accessToken, 'fresh-access-token');
+  assert.equal(saved.claudeAiOauth.refreshToken, 'rotated-refresh-token');
+  assert.equal(saved.claudeAiOauth.expiresAt, now + 28800000);
+  assert.equal(saved.claudeAiOauth.subscriptionType, 'pro');
+  assert.equal(saved.mcpOAuth.keep, 'yes');
+  // Windows has no group/other permission bits (stat reports 0o666, or 0o444 when
+  // read-only; access is by ACL inherited from the profile folder), so there the
+  // check is that the rewritten file is still a normal writable file.
+  const mode = fs.statSync(loc.credentialsPath).mode & 0o777;
+  if (process.platform === 'win32') assert.equal(mode & 0o200, 0o200);
+  else assert.equal(mode, 0o600);
+  assert.equal(fs.readFileSync(other.credentialsPath, 'utf8'), untouched);
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, now: () => now + 1000, exclusive: free }), 'fresh-access-token');
+  assert.equal(posts.length, 1);
+});
+test('a dead refresh token, a rejected refresh, or another account leaves the stored credential unchanged', async (t) => {
+  const home = fixture(t), seat = S.normalize().find((item) => item.id === 'us'), loc = M.credentialLocation(seat, home);
+  const posts = [];
+  const post = async (body) => { posts.push(body); return null; };
+  fs.writeFileSync(loc.credentialsPath, expiredCredential({ refreshTokenExpiresAt: 1 }));
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, exclusive: free }), null);
+  assert.equal(posts.length, 0);
+  const rejected = expiredCredential();
+  fs.writeFileSync(loc.credentialsPath, rejected);
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, exclusive: free }), null);
+  assert.equal(fs.readFileSync(loc.credentialsPath, 'utf8'), rejected);
+  assert.equal(posts.length, 1);
+  const mismatch = async () => refreshResponse({ account: { uuid: 'someone-else' } });
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post: mismatch, exclusive: free }), null);
+  assert.equal(fs.readFileSync(loc.credentialsPath, 'utf8'), rejected);
+  fs.writeFileSync(loc.credentialsPath, credential('still-valid'));
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post: mismatch, exclusive: free }), 'still-valid');
+});
+test('darwin keychain refresh passes the secret on stdin and keeps a rotated token in memory if the write fails', async (t) => {
+  const home = fixture(t), seat = S.normalize().find((item) => item.id === 'us'), raw = expiredCredential();
+  const keychain = (bin, args, opts, cb) => { assert.equal(bin, '/usr/bin/security'); assert.equal(args.at(-1), '-w'); cb(null, raw); };
+  const writes = [], posts = [];
+  const spawnImpl = (bin, args) => {
+    const child = new EventEmitter();
+    child.stdin = { write(chunk) { child.stdin.text = (child.stdin.text || '') + chunk; return true; }, end() {} };
+    child.kill = () => {};
+    writes.push({ bin, args, child });
+    queueMicrotask(() => child.emit('close', 1));
+    return child;
+  };
+  const token = await C.readCredentials(seat, home, 'darwin', keychain, {
+    post: async () => { posts.push('refresh'); return refreshResponse(); }, spawn: spawnImpl, exclusive: free,
+  });
+  assert.equal(token, 'fresh-access-token');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].bin, '/usr/bin/security');
+  assert.deepEqual(writes[0].args.slice(0, 2).concat(writes[0].args.slice(3)), ['add-generic-password', '-a', '-s', M.credentialLocation(seat, home).keychainService, '-U', '-w']);
+  assert.equal(writes[0].args.includes('fresh-access-token') || writes[0].args.includes('rotated-refresh-token'), false);
+  const stored = writes[0].child.stdin.text;
+  assert.equal(stored, stored.split('\n')[0] + '\n' + stored.split('\n')[0] + '\n');
+  assert.equal(JSON.parse(stored.split('\n')[0]).claudeAiOauth.refreshToken, 'rotated-refresh-token');
+  assert.equal(JSON.parse(stored.split('\n')[0]).mcpOAuth.keep, 'yes');
+  assert.equal(fs.existsSync(M.credentialLocation(seat, home).credentialsPath), false);
+  assert.equal(await C.readCredentials(seat, home, 'darwin', keychain, {
+    post: async () => { posts.push('refresh'); return refreshResponse(); }, spawn: spawnImpl, exclusive: free,
+  }), 'fresh-access-token');
+  assert.deepEqual(posts, ['refresh']);
+  assert.equal(writes.length, 2);
+});
+test('token refresh posts only to the pinned Claude Code token URL and drops auth and rate-limit bodies', async () => {
+  const calls = [];
+  const transport = (status, body) => (url, options, callback) => {
+    const req = new EventEmitter();
+    req.destroy = () => { req.destroyed = true; };
+    req.end = (payload) => {
+      calls.push({ url, options, payload });
+      queueMicrotask(() => {
+        const res = new EventEmitter();
+        res.statusCode = status; res.setEncoding = () => {}; res.destroy = () => { res.destroyed = true; };
+        callback(res);
+        if ([200, 400].includes(status) && !res.destroyed) { res.emit('data', body); res.emit('end'); }
+      });
+    };
+    return req;
+  };
+  const ok = await C.postRefresh({ grant_type: 'refresh_token', refresh_token: 'fake-refresh-token' }, transport(200, JSON.stringify({ access_token: 'fresh-access-token', expires_in: 10 })));
+  assert.equal(ok.access_token, 'fresh-access-token');
+  assert.equal(calls[0].url, 'https://platform.claude.com/v1/oauth/token');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.agent, false);
+  assert.equal(JSON.parse(calls[0].payload).refresh_token, 'fake-refresh-token');
+  assert.deepEqual(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(401, '{"error":"invalid_grant","refresh_token":"fake-never-return"}')), { authStatus: 'logged-out' });
+  assert.deepEqual(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(400, '{"error":"invalid_grant","refresh_token":"fake-never-return"}')), { authStatus: 'logged-out' });
+  assert.equal(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(400, '{"error":"invalid_request"}')), null);
+  assert.equal(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(429, '{"error":"rate_limited"}')), null);
+  assert.equal(calls.length, 5);
+  assert.ok(!JSON.stringify(ok).includes('fake-refresh-token'));
+});
+

@@ -1342,6 +1342,27 @@
   // Captain briefing passes a larger opts.inlineLimit.
   // A pasted image path is read by the agent before it accepts Enter; a big image takes a few seconds.
   const PASTE_READ_MAX = 30_000;
+  // An Enter can be lost while the TUI is busy (a resumed long conversation still drawing): the
+  // instruction then sits in the input box and the task reads as finished without a receipt.
+  // Look again once the screen is quiet. AgentDeck's own text still in the box gets one more
+  // Enter, noted in the diagnostic log without the text. Never a second retry, never into a
+  // menu, never while the user is typing.
+  const SUBMIT_LOOK = 2500, SUBMIT_QUIET = 1500, SUBMIT_GIVE_UP = 15_000;
+  function watchSubmission(col, entry, text) {
+    const enterAt = Date.now();
+    const look = () => {
+      if (host.terms.get(col.id) !== entry || !entry.alive || entry.state === 'input' || entry.sendingPrompt) return;
+      if (!C.promptLeftInBox(host.dumpScreen(entry.term, 80), text)) return;
+      if (Date.now() - (entry.lastOutputAt || 0) < SUBMIT_QUIET) {
+        if (Date.now() - enterAt < SUBMIT_GIVE_UP) setTimeout(look, 500);
+        return;
+      }
+      if (host.userComposing(col.id)) return;
+      window.deck.ptyInput(col.id, '\r');
+      window.deck.stateDebug({ id: col.id, prev: 'sent', st: 'enter-again', hasWorked: true, skip: 'instruction still in the input box', title: '' });
+    };
+    setTimeout(look, SUBMIT_LOOK);
+  }
   async function sendPrompt(col, prompt, atts, opts) {
     const o = opts || {};
     if (o.cancelled && o.cancelled()) return false;
@@ -1390,6 +1411,7 @@
         || (Date.now() - pastedAt < PASTE_READ_MAX && C.pasteBusy(host.dumpScreen(entry.term, 6)))));
       if (!o.silent && window.MainSession) window.MainSession.onContextCommandSent(col, text);
       window.deck.ptyInput(col.id, '\r');
+      watchSubmission(col, entry, text);
       host.manualPromptSent(col.id, turn, o.userInitiated === true);
       entry.state = 'working';
       entry.backgroundOnly = false;   // the turn just sent is real work, until the next status tick says otherwise

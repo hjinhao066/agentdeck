@@ -875,6 +875,29 @@
     }
     return source === 'quota' ? 'quota' : '';
   }
+  // AgentDeck's one 「接着做」 after a login blip (SleepResume.LOGIN_MARK, same text). Once it is on
+  // screen, the error rows above it were answered: only what the session printed after it counts.
+  const LOGIN_NUDGE_MARK = '接着做（登录已恢复）';
+  function loginNudgeAt(lines) {
+    const flat = (text) => String(text || '').replace(/\s+/g, '');
+    for (let i = lines.length - 1; i >= 0; i--) if (flat(lines[i] + (lines[i + 1] || '')).includes(LOGIN_NUDGE_MARK)) return i;
+    return -1;
+  }
+  function loginNudgeShown(screen) { return loginNudgeAt(String(screen || '').split('\n')) >= 0; }
+  // A CLI's own error row, as it reads on one line. A narrow column wraps it
+  // ("⎿  Not logged in · Please run" over "/login"), so a row naming a resource is
+  // also read with up to two plain rows under it. Returns { text, rows } or null.
+  const RESOURCE_WORD = /logged|signed|log ?in|limit|quota|usage|credit|exhaust|auth|api key|oauth|rate|429|401|登录|额度|限流/i;
+  function resourceRow(lines, i) {
+    let text = lines[i];
+    for (let rows = 1; ; rows++) {
+      if (resourceFailure(text, 'automatic')) return { text, rows };
+      if (rows > 2 || !RESOURCE_WORD.test(lines[i])) return null;
+      const more = String(lines[i + rows] ?? '').trim();
+      if (!more || /^[│┃⏺⎿✻✽✳✶✢✺●•◦◆▪⬢✦■✗✘✖✕×▲⚠ℹ❯›>─━═]/.test(more)) return null;
+      text = text.trimEnd() + ' ' + more;
+    }
+  }
   // Codex leaves prior output on screen. Its completed-turn divider makes
   // indicators above it historical, even while the ready prompt stays visible.
   function codexStatusScreen(screen, cmd) {
@@ -1011,8 +1034,9 @@
     screen = codexStatusScreen(screen, cmd);
     const lines = String(screen || '').split('\n').slice(-20);
     let quota = -1, resumed = -1, working = -1, queued = false;
+    const answered = loginNudgeAt(lines);
     lines.forEach((line, i) => {
-      if (resourceFailure(line, 'automatic')) quota = i;
+      if (i > answered && resourceRow(lines, i)) quota = i;
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
       if (/^\s*[│┃]?\s*→[^\n]*\bctrl\+c to stop\s*[│┃]?\s*$/i.test(line)) working = i;
@@ -1034,9 +1058,19 @@
   function resourceReceipt(screen, cmd) {
     screen = codexStatusScreen(screen, cmd);
     if (terminalActivity(screen) !== 'quota') return null;
-    const reason = String(screen || '').split('\n').filter((line) => terminalActivity(line) === 'quota').join('\n').trim();
+    const lines = String(screen || '').split('\n'), found = [];
+    for (let i = loginNudgeAt(lines) + 1; i < lines.length; i++) {
+      const row = resourceRow(lines, i);
+      if (row) { found.push(row.text); i += row.rows - 1; }
+    }
+    const reason = found.join('\n').trim();
     const label = { auth: '未登录', rate_limit: '请求被限流' }[resourceFailure(reason, 'quota')] || '额度用尽';
     return { failed: label + (reason ? '：' + reason : '，agent 无法继续当前任务'), source: 'quota' };
+  }
+  // Which resource error holds the screen ('auth' | 'rate_limit' | 'quota'), or ''.
+  function resourceKind(screen, cmd) {
+    const receipt = resourceReceipt(screen, cmd);
+    return receipt ? resourceFailure(receipt.failed, 'quota') : '';
   }
 
   // Conservative silence windows: status spinners may stay busy during deep thinking.
@@ -1154,7 +1188,7 @@
 
   return {
     RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, CORE_LIMIT, BRIEFING_TOPICS, PROVIDERS, ROUTING, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, briefingMark, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, claudeStatusRowsBlanked, backgroundCommandStatus, resourceReceipt,
-    receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, statusLabel, ledgerText, subCaptainBrief, readText, resetNote, relayNote, restartNote, restartNotice, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
+    receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, resourceKind, loginNudgeShown, LOGIN_NUDGE_MARK, statusLabel, ledgerText, subCaptainBrief, readText, resetNote, relayNote, restartNote, restartNotice, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };
 });

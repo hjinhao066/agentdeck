@@ -41,7 +41,7 @@ const Worktree = require('./worktree-core');
 const { prepareWorkspaceTrust } = require('./workspace-trust-main');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
-const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
+const { createRefresh: createClaudeQuotaRefresh, createSeatGate, readSeat: readClaudeSeat, readCredentials: readClaudeCredentials } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
 const { createPtyWork } = require('./pty-work');
@@ -57,6 +57,8 @@ let notifications = null;
 let notifyUser = null;
 let sidePane = null;
 let claudeQuotaRefresh = null, claudeQuotaTimer = null;
+// Renewing a seat's token and AgentDeck starting Claude on that seat never overlap (quota-claude.js).
+let seatGate = null;
 let quotaWarmup = null, quotaWarmupRunner = null, quotaWarmupTimer = null;
 let seatAuth = null;
 const seatAuthChecks = new Map();
@@ -394,6 +396,8 @@ handleMain('pty:prepare-launch', async (_event, { id, command }) => {
   const cwd = ptyLaunchDirs.get(id);
   const column = readLocalConfig().columns?.find((c) => c.id === id);
   const trustHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+  // A token renewal in progress on this column's seat is written before its Claude starts.
+  if (seatGate && column?.claudeSeatId) await seatGate.launch(column.claudeSeatId, () => {});
   const prepared = prepareWorkspaceTrust(command, column, cwd, trustHome);
   if (prepared.warning) send('toast', { text: prepared.warning });
   return codexLauncher.prepare(prepared.command, cwd);
@@ -1050,6 +1054,10 @@ app.whenReady().then(async () => {
     }
     return seatView.cfg;
   };
+  // Renew only a seat no Claude runs on: the warm-up's process inventory, failing closed, and with no
+  // exemption for an idle 队长 (it still holds the token a renewal would replace).
+  seatGate = createSeatGate({ occupied: async (seat) => (await occupiedClaudeSeats({ seats: ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
+    columns: seatConfig().columns || [], ptys, home: seatHome })).has(seat.id) });
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, env: ENV, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
@@ -1410,7 +1418,7 @@ app.whenReady().then(async () => {
       // harness; no test profile is allowed to call a real account.
       app.testWarmupRuns.push({ seatId: seat.id, configDir: seat.configDir });
       return app.testWarmupResults.shift() || { ok: false, status: 'test-disabled' };
-    } : (seat, options) => quotaWarmupRunner.run(seat, options),
+    } : (seat, options) => seatGate.launch(seat.id, () => quotaWarmupRunner.run(seat, options)),
   });
   handleMain('seats:warmup-status', () => quotaWarmup.snapshot());
   handleMain('seats:warmup-idle', (_e, { colId, idle }) => {
@@ -1888,7 +1896,9 @@ app.whenReady().then(async () => {
     } } : {}) });
   if (!tudArg) {
     claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatViewConfig().claudeSeats,
-      intervalMs: () => Battery.pollMs('claudeQuotaSample', power.active()), onSample: observeAuth });
+      intervalMs: () => Battery.pollMs('claudeQuotaSample', power.active()), onSample: observeAuth,
+      read: (seat, home) => readClaudeSeat(seat, home, (s, h, platform, exec, deps) =>
+        readClaudeCredentials(s, h, platform, exec, { ...deps, exclusive: (fn) => seatGate.renew(s, fn) })) });
     const refresh = async () => {
       await Promise.all([claudeQuotaRefresh.tick(), sampleCodex()]);
       send('quota:updated', [...claudeQuotaRefresh.samples(), ...authSamples()]);

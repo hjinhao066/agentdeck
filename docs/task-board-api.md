@@ -343,6 +343,9 @@ PTY，显示「额度用尽，稍后自动开」。
 终端状态与侧栏额度采样共用原生错误识别，只接受完整额度提示、原生重置/重试后缀、
 登录指引或明确的 API 错误码/错误类型；Rate limit、Unauthorized、Limit reached 等
 普通回复的主题前缀不再触发额度失败回执或额度缓存。
+「Not logged in / Not signed in」必须带着 CLI 自己的登录指引（`· Please run /login`、`. Run codex login`）
+才算未登录；只有这几个字的一行（回复、工具标题或折行里引用的）不算。窄栏把真实报错折成
+「⎿  Not logged in · Please run」「/login」两三行时，含资源字样的一行连同下面一两行没有符号开头的续行一起读。
 日志通过已有主进程诊断日志（系统临时目录 `agentdeck-notify.log`）记录
 `task-board start claimed`、卡片 ID、项目和认领键，
 不记录卡片正文或能力 token；无变化不调用模型、不产生日志。
