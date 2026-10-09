@@ -53,6 +53,34 @@
     const title = [email || label, plan && '套餐 ' + plan, '席位 ' + code, seat?.configDir].filter(Boolean).join(' · ');
     return { label, email, plan, mark: /^Max\b/.test(plan) ? 'Max' : '', code, title };
   }
+  // Every seat directory and the account behind it right now, for an error that must not guess.
+  function seatMapText(seats, infos) {
+    return normalize(seats).map((seat) => {
+      const info = (Array.isArray(infos) ? infos : []).find((i) => i && i.id === seat.id), shown = seatDisplay(seat, info || { loggedIn: false });
+      return `${seat.id} → ${shown.label}${shown.email && info?.loggedIn !== true ? '（未登录）' : ''}`;
+    }).join('；');
+  }
+  // `--seat` takes a seat code (cn / us / us2) or the account signed in there: the part of
+  // its address before the @, or the whole address. An account is looked up in what the
+  // seat directories hold at this moment, so it follows the account when a directory is
+  // signed in to another one. Nothing found, or the same account behind two directories,
+  // is an error that lists every directory and its account. Never a guess.
+  function resolveSeat(value, seats, infos) {
+    const wanted = typeof value === 'string' ? value.trim() : '', list = normalize(seats), lower = wanted.toLowerCase();
+    const now = `当前各目录登录的账号：${seatMapText(seats, infos)}。`;
+    if (!wanted) return { error: `--seat 需要账号名或目录代号。${now}` };
+    const coded = list.find((seat) => seat.id === wanted) || (list.filter((seat) => seat.id.toLowerCase() === lower).length === 1 ? list.find((seat) => seat.id.toLowerCase() === lower) : null);
+    if (coded) return { seat: coded };
+    const whole = lower.includes('@');
+    const held = list.map((seat) => {
+      const info = (Array.isArray(infos) ? infos : []).find((i) => i && i.id === seat.id);
+      return { seat, email: (cleanEmail(info?.loginEmail) || cleanEmail(info?.accountEmail)).toLowerCase() };
+    }).filter((entry) => entry.email && (whole ? entry.email === lower : accountName(entry.email) === lower));
+    if (held.length === 1) return { seat: held[0].seat };
+    if (!held.length) return { error: `--seat ${wanted}：没有哪个目录登着这个账号，没有派。${now}` };
+    const same = new Set(held.map((entry) => entry.email)).size === 1;
+    return { error: `--seat ${wanted}：${same ? `${held.map((entry) => entry.seat.id).join('、')} 这 ${held.length} 个目录登的是同一个账号` : `有 ${held.length} 个不同的账号都叫这个名字（${held.map((entry) => `${entry.seat.id} 是 ${entry.email}`).join('，')}）`}，没有派。请改写${same ? '目录代号' : '完整邮箱或目录代号'}。${now}` };
+  }
   function codexCommand(effort = 'high') {
     return `codex --model gpt-6.1-sol --no-daemon -c model_reasoning_effort=${effort === 'xhigh' ? 'xhigh' : 'high'} --dangerously-bypass-approvals-and-sandbox`;
   }
@@ -137,6 +165,6 @@
     }
     return windows.length ? { at: now, source: 'Claude 会话状态行', windows } : null;
   }
-  return { normalize, cleanEmail, accountCheck, accountName, planName, seatDisplay, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
+  return { normalize, cleanEmail, accountCheck, accountName, planName, seatDisplay, seatMapText, resolveSeat, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
 
 });

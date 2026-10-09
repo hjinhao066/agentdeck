@@ -421,6 +421,9 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
   }
   await board(['quota'], '未登录（席位 us2）');
   await board(['new', '--title', 'US2 not logged', '--task', 'finish', '--seat', 'us2', '--command', FAKE], 'US2 未登录');
+  // An account no directory holds: refused, with every directory and its account, nothing opened.
+  await board(['new', '--title', 'Nobody there', '--task', 'finish', '--seat', 'nobody.here', '--command', FAKE], '没有哪个目录登着这个账号，没有派。当前各目录登录的账号：cn → cn；us → us；us2 → 未登录。');
+  expect(await page.evaluate(() => columns.some((c) => c.displayTitle === 'Nobody there'))).toBe(false);
   expect(await page.evaluate(() => columns.some((c) => c.displayTitle === 'US2 not logged'))).toBe(false);
   const dir = path.join(home, '.claude-us2');
   fs.mkdirSync(dir, { recursive: true });
@@ -467,7 +470,7 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find((r) => r.colId === worker)).toMatchObject({ configDir: dir, authOverridePresent: false });
   await page.evaluate(() => { config.crewOpen = true; Sidebar.render(); });
   await expect(page.locator('.nav-crew .crew-model-flag[aria-label^="当前账号：paid.account2@example.test · 套餐 Max 20x · 席位 us2"]')).toHaveText('paid.account2');
-  await board(['ledger'], '账号:paid.account2');
+  await board(['ledger'], '账号:paid.account2（us2）');
   await idle(cn);
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us2'))).toBe(true);
   await expect(page.locator('.captain-item .agent-seat-label')).toHaveText('paid.account2');
@@ -489,4 +492,9 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
     expect(geometry.scroll <= geometry.width && geometry.values >= geometry.name, JSON.stringify({ width, geometry })).toBe(true);
   }
   await screenshot('us2-seat-quota-and-sidebar');
+  // 队长 can name the account instead of the directory: the session lands in the directory that holds it now.
+  await idle(id);
+  await page.evaluate(([c, command]) => window.deck.ptyInput(c, 'BOARD ' + JSON.stringify(command) + '\r'), [id, ['new', '--title', 'By account name', '--task', 'go', '--seat', 'paid.account2', '--command', FAKE]]);
+  await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === 'By account name')?.claudeSeatId), { timeout: 20000 }).toBe('us2');
+  expect(await page.evaluate(() => columns.find((c) => c.displayTitle === 'By account name').claudeConfigDir)).toBe('~/.claude-us2');
 });

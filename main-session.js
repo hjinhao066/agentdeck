@@ -2400,7 +2400,8 @@
       // Which account a Claude session runs on (the seat's signed-in account, not the seat's name).
       const seat = window.AgentInfo?.resolveAgentInfo?.(c, entry)?.seat;
       return {
-        ...(seat && window.ClaudeSeats?.seatName ? { account: window.ClaudeSeats.seatName(seat.id) } : {}),
+        // Account name and seat code together: 队长 dispatches by either.
+        ...(seat && window.ClaudeSeats?.display ? { account: `${window.ClaudeSeats.display(seat.id)?.label || '未识别'}（${seat.id}）` } : {}),
         id: c.id, title: host.columnLabel(c), state: c.executor === 'chatgpt-web' ? webTaskState(task) : cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [], important: sessionHigh(c),
@@ -2797,12 +2798,15 @@
         if (checked.error) throw new Error(checked.error);
         const cmd = checked.cmd;
         if (message.seatId !== undefined) {
-          const seat = window.ClaudeSeatsCore.normalize(host.config.claudeSeats).find((s) => s.id === message.seatId);
-          if (!seat) throw new Error('找不到 --seat 席位，请先查看席位设置。');
+          // An account name (or a seat code) is resolved against what each directory holds right now.
+          const infos = await window.deck.claudeSeats();
+          const found = window.ClaudeSeatsCore.resolveSeat(message.seatId, host.config.claudeSeats, infos);
+          if (found.error) throw new Error(found.error);
+          const seat = found.seat;
           const provider = window.AgentInfo.inferProvider(cmd);
           if (provider && provider !== 'Claude') throw new Error('--seat 仅用于 Claude 会话。');
-          const info = (await window.deck.claudeSeats()).find((s) => s.id === seat.id);
-          if (!info?.loggedIn) throw new Error(`${seat.name} 未登录，请先在此席位配置目录下登录。`);
+          const info = infos.find((s) => s.id === seat.id);
+          if (!info?.loggedIn) throw new Error(`${seat.name} 未登录，请先在此席位配置目录下登录。当前各目录登录的账号：${window.ClaudeSeatsCore.seatMapText(host.config.claudeSeats, infos)}。`);
           metadata.claudeSeatId = seat.id;
           metadata.claudeConfigDir = seat.configDir;
         }

@@ -251,7 +251,7 @@ function usage() {
     '                                           --mode off = 不限制 for good, auto = 没插电时按 --cap 限制同时干活的会话数\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
-    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat account|cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
     '  worktree clean [--apply --path copy]      list copies a person may remove; deletion needs --apply and each --path\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
@@ -516,7 +516,8 @@ async function main() {
     }
     for (const key of ['project', 'task-id']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key].trim())) fail(`new --${key} requires a value.`);
     if (args.reviews !== undefined && (typeof args.reviews !== 'string' || !args.reviews.split(',').every((id) => /^[A-Za-z0-9_-]{1,160}$/.test(id.trim())))) fail('new --reviews requires session ids separated by commas.');
-    if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(args.seat))) fail('new --seat requires a seat id.');
+    // A seat code, or the account signed in there (the part before the @, or the whole address).
+    if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9._%+@-]{1,254}$/.test(args.seat) || /\.\./.test(args.seat))) fail('new --seat requires an account name or a seat id.');
     if (args['web-mode'] !== undefined && (!['chat', 'deep-research'].includes(args['web-mode']) || args.agent !== 'chatgpt-web')) fail('new --web-mode requires --agent chatgpt-web and chat or deep-research.');
     if (args.priority !== undefined && !['high', 'normal'].includes(args.priority)) fail('new --priority is high or normal.');
     const worktree = args.worktree !== undefined;

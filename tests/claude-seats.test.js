@@ -592,3 +592,46 @@ test('the account recorded in a seat directory is read without credentials, for 
   assert.equal(M.recordedAccount(us, home), '');
   assert.equal(M.recordedAccount({ id: 'x', configDir: 'relative/dir' }, home), '');   // an invalid seat never throws
 });
+
+// ---- 队长 dispatches by account: `--seat` takes an account name, resolved against the directories as they are now ----
+test('--seat resolves an account name to the directory that holds it now; a miss or a duplicate is an error that lists every directory', () => {
+  const seats = S.normalize();
+  const signedIn = (id, email, extra = {}) => ({ id, loggedIn: true, loginEmail: email, accountEmail: email, ...extra });
+  let infos = [signedIn('cn', 'taylor0421@example.com'), signedIn('us', 'taylor.h.sub@example.com'), signedIn('us2', 'taylor0421us@example.com')];
+  const id = (value, list = infos) => S.resolveSeat(value, seats, list).seat?.id;
+  // The directory codes work as before, whatever is signed in there.
+  assert.deepEqual(['cn', 'us', 'us2', 'US2'].map((v) => id(v)), ['cn', 'us', 'us2', 'us2']);
+  // An account: the part before the @, or the whole address, any letter case.
+  assert.equal(id('taylor0421us'), 'us2'); assert.equal(id('taylor0421'), 'cn'); assert.equal(id('taylor.h.sub'), 'us');
+  assert.equal(id('Taylor0421us@Example.com'), 'us2'); assert.equal(id(' taylor0421us '), 'us2');
+  // The accounts move between directories (as on the other computer): the same name now lands elsewhere.
+  infos = [signedIn('cn', 'taylor0421us@example.com'), signedIn('us', 'taylor0421@example.com'), signedIn('us2', 'taylor.h.sub@example.com')];
+  assert.equal(id('taylor0421us'), 'cn'); assert.equal(id('taylor0421'), 'us'); assert.equal(id('taylor.h.sub'), 'us2');
+  assert.equal(id('us2'), 'us2');   // a code still names the directory
+  // Nobody holds that account: an error with every directory and its account, and no seat.
+  const missing = S.resolveSeat('someone.else', seats, infos);
+  assert.equal(missing.seat, undefined);
+  assert.equal(missing.error, '--seat someone.else：没有哪个目录登着这个账号，没有派。当前各目录登录的账号：cn → taylor0421us；us → taylor0421；us2 → taylor.h.sub。');
+  // The same account behind two directories: never a guess.
+  infos = [signedIn('cn', 'taylor0421us@example.com'), signedIn('us', 'taylor0421@example.com'), signedIn('us2', 'taylor0421us@example.com')];
+  const twice = S.resolveSeat('taylor0421us', seats, infos);
+  assert.equal(twice.seat, undefined);
+  assert.equal(twice.error, '--seat taylor0421us：cn、us2 这 2 个目录登的是同一个账号，没有派。请改写目录代号。当前各目录登录的账号：cn → taylor0421us；us → taylor0421；us2 → taylor0421us。');
+  assert.equal(S.resolveSeat('taylor0421us@example.com', seats, infos).seat, undefined);
+  assert.equal(id('cn'), 'cn'); assert.equal(id('taylor0421'), 'us');   // the code and the other account are still fine
+  // Two different accounts with the same name before the @: the whole address tells them apart.
+  infos = [signedIn('cn', 'taylor0421@example.com'), signedIn('us', 'taylor0421@example.org'), { id: 'us2', loggedIn: false, loginEmail: '', accountEmail: '' }];
+  assert.match(S.resolveSeat('taylor0421', seats, infos).error, /^--seat taylor0421：有 2 个不同的账号都叫这个名字（cn 是 taylor0421@example\.com，us 是 taylor0421@example\.org），没有派。请改写完整邮箱或目录代号。/);
+  assert.equal(id('taylor0421@example.org'), 'us');
+  assert.match(S.resolveSeat('taylor0421', seats, infos).error, /us2 → 未登录。$/);
+  // Login lost but the directory still records the account: it resolves (the dispatch then says 未登录), and the list marks it.
+  infos = [signedIn('cn', 'taylor0421@example.com'), { id: 'us', loggedIn: false, loginEmail: '', accountEmail: 'taylor.h.sub@example.com' }];
+  assert.equal(id('taylor.h.sub'), 'us');
+  assert.equal(S.seatMapText(seats, infos), 'cn → taylor0421；us → taylor.h.sub（未登录）；us2 → 未登录');
+  // A directory code wins over an account that happens to be called the same.
+  assert.equal(id('us', [signedIn('cn', 'us@example.com'), signedIn('us', 'other@example.com')]), 'us');
+  // Nothing to look up, or no answer from the directories yet.
+  assert.match(S.resolveSeat('', seats, infos).error, /需要账号名或目录代号/);
+  assert.match(S.resolveSeat('taylor0421', seats, []).error, /没有哪个目录登着这个账号.*cn → 未登录；us → 未登录；us2 → 未登录。$/);
+  assert.equal(id('cn', []), 'cn');
+});
