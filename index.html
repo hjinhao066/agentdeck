@@ -70,6 +70,15 @@
     <h3>重启后续上</h3>
     <label class="sd-check"><input id="resumeOnRestart" type="checkbox" />重启后自动续上在跑的队员</label>
     <p class="hint">退出前记下在干活的队员，并在时限内退出。能续上原对话的用各家自己的 resume；续不上的新开会话，并重发卡片任务和最后回执。</p>
+    <h3>快捷键</h3>
+    <div class="notify-setting shortcut-setting">
+      <span id="todoShortcutLabel">速记待办</span>
+      <span class="shortcut-ctl">
+        <button type="button" class="rail-btn" id="todoShortcutReset" hidden></button>
+        <button type="button" class="shortcut-field" id="todoShortcutBtn" aria-pressed="false" aria-labelledby="todoShortcutLabel todoShortcutBtn" aria-describedby="todoShortcutNote">⌘⇧N</button>
+      </span>
+    </div>
+    <p id="todoShortcutNote" class="hint" role="status"></p>
     <h3>手机网页端</h3>
     <label class="notify-setting"><span>本地网页服务</span><input type="checkbox" role="switch" id="mobileWebEnabled" aria-label="本地网页服务" /></label>
     <p class="hint">服务只监听本机。远程访问需已配置的私人 HTTPS 隧道；开启后登录 Mac 会自动启动 AgentDeck。首次登录使用 token，随后记住设备。</p>
@@ -150,6 +159,7 @@
           <button type="button" data-view="crew" title="终端架构图：现在正在跑的会话">架构图</button>
           <button type="button" data-view="canvas" title="旧版自由画布：手动拖拽、连线">自由画布</button>
           <button type="button" data-view="tasks" class="active" aria-pressed="true" title="任务看板：全部任务">任务看板</button>
+          <button type="button" data-view="tokens" aria-pressed="false" title="Token 用量：每天各模型用了多少">Token 用量</button>
         </div>
         <button type="button" class="tbv-icon tbv-close" title="关闭任务看板 (Esc)" aria-label="关闭任务看板 (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
       </div>
@@ -193,6 +203,7 @@
       </div>
       <aside class="tbv-detail" hidden aria-label="卡片详情"></aside>
     </div>
+    <div class="tu-view" hidden></div>
     <div class="tbv-live" role="status" aria-live="polite"></div>
   </section>
   <section id="boardView" hidden aria-label="Conductor Board">
@@ -206,6 +217,7 @@
           <button type="button" data-mode="crew" title="队长和它派出的会话、审查关系，实时">架构图</button>
           <button type="button" data-mode="canvas" title="旧版自由画布：手动拖拽、连线">自由画布</button>
           <button type="button" id="boardTasksTab" data-view="tasks" title="任务看板：全部任务">任务看板</button>
+          <button type="button" id="boardTokensTab" data-view="tokens" title="Token 用量：每天各模型用了多少">Token 用量</button>
         </div>
         <span class="board-gesture-hint">Drag cards to place · drag a blue port to link</span>
         <button class="btn" id="boardAutoArrange" title="Arrange the task DAG into clean lanes">Auto arrange</button>
@@ -493,7 +505,7 @@
       <span>输入框</span><span>粘贴截图、拖文件、点 + 选文件都会变成附件，发送时把路径一起发给 agent；鼠标移上去点 ✕ 删除</span>
       <span>输入框下方</span><span>agent 自己的状态行（Context、Session、Model、Reset、权限模式…），直接从终端读出来</span>
       <span><kbd>⌘ K</kbd></span><span>搜索全部对话（含已归档），只搜你的提示词和 agent 的最终回复</span>
-      <span><kbd>⌘ T</kbd></span><span>速记一条待办（Windows 是 Ctrl+Shift+T）：在 AgentDeck 里任何地方都能按，打一句话回车就存</span>
+      <span><kbd id="helpTodoKey">⌘⇧N</kbd></span><span>速记一条待办：在 AgentDeck 里任何地方都能按（终端里也行），打一句话回车就存；在设置里可以换键</span>
       <span>队长</span><span>左栏「队长」：常驻的总负责人。你说要做什么，它把活派给各个对话，回执以卡片出现，点卡片标题跳到那一列。只有队长能控制别的对话</span>
       <span>清空上下文</span><span>只在队长的列头：只清队长的模型上下文，它重新启动并重读默认说明。别的对话不重启，已派出的活、没处理的回执和提问都转给新的队长；之前的对话存在本机，队长按需读取</span>
     </div>
@@ -572,6 +584,7 @@
   <script src="bark-policy.js"></script>
   <script src="chatgpt-web-core.js"></script>
   <script src="chat-core.js"></script>
+  <script src="deliverables-core.js"></script>
   <!-- the phone hub's pure rules: the chat view takes terminal residue out of a reply with the same cleanReply -->
   <script src="mobile-web/hub/core.js"></script>
   <script src="mobile-web/hub/releases.js"></script>
@@ -583,11 +596,13 @@
   <script src="schedule-feed-core.js"></script>
   <script src="side-pane.js"></script>
   <script src="chat-ui.js"></script>
+  <script src="chat-deliverables.js"></script>
   <script src="sidebar.js"></script>
   <script src="skills-ui.js"></script>
   <script src="attention-core.js"></script>
   <script src="attention-ui.js"></script>
   <script src="pages.js"></script>
+  <script src="todo-shortcut-core.js"></script>
   <script src="todo-ui.js"></script>
   <script src="battery-core.js"></script>
   <script src="main-core.js"></script>
@@ -603,6 +618,8 @@
   <script src="crew-map.js"></script>
   <script src="fleet-ui.js"></script>
   <script src="task-board-ui-core.js"></script>
+  <script src="token-usage-core.js"></script>
+  <script src="token-usage-ui.js"></script>
   <script src="task-board-ui.js"></script>
   <script src="release-notes-ui.js"></script>
   <script src="version-progress-core.js"></script>

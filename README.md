@@ -77,8 +77,9 @@ The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
 - **待办** (sidebar, under 搜索): your own one-line to-dos, kept apart from the
-  agents' task cards. Type and press Enter; ⌘T (Ctrl+Shift+T on Windows) records one
-  from anywhere in the window. The phone hub has the same list. See [docs/todo.md](docs/todo.md).
+  agents' task cards. Type and press Enter; ⌘⇧N (Ctrl+Shift+N on Windows, changeable
+  in 设置 · 快捷键) opens a quick-capture box with the list from anywhere in the window.
+  The phone hub has the same list. A literal `@ai` mention (Chinese/end/space/punctuation boundary, excluding email/handles) opts a Todo into a local task for the Captain; unread notices survive Captain recreation. Status/artifact write-back uses `board-cli todo`; the state shows under the item (desktop and phone) and the answer is filed on 待我处理 (waiting for you or failed → 要你处理, done with files → 做完了你还没看); only failures send coalesced ordinary expedited phone alerts, deferred during local 23:00–10:00 quiet hours. See [docs/todo.md](docs/todo.md).
 - **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 任务看板, 搜索, 待办, Schedule, Artifacts, Skills,
   then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
@@ -89,7 +90,7 @@ the middle:
   tick it into the folded 已完成 section. Two columns: 要你处理 (the sidebar number;
   only a reply or 已处理 ticks it) and 做完了你还没看 (a blue dot): a Captain report is
   read once its Captain reply, or the report itself, was on screen for 1.5 s on the
-  desktop or the phone hub. Board cards that stop for the user go to
+  desktop or the phone hub, with the window focused (leaving it restarts the count). Board cards that stop for the user go to
   the Captain first, never straight onto this page. The phone hub shows both computers' items. See [待我处理](docs/attention.md).
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
@@ -98,8 +99,12 @@ the middle:
   deck columns until you open one.
   The 队长 row is pinned: clicking it selects the Captain and shows its saved
   conversation; it cannot be dragged, put in a folder, archived or deleted from the list.
-  Sessions the 队长 opens with `new` run in the background: the arrow at the far
-  left of its row unfolds the indented list without selecting the Captain.
+  Sessions the 队长 opens with `new` run in the background: the indented list
+  under its row (each model group included) is open by default, so every member
+  and its task show at once. The arrow at the far left of its row, and the arrow
+  on each model header, fold it without selecting the Captain; a fold you make
+  holds for that run and that day, and the list opens fully again at the next
+  launch and the first time the window is used on a new day.
   Clicking the Captain row still opens its conversation. Muted counts below it
   stay visible even when folded (干活中 / 停在确认 / 完成 / 失败 / 排队).
   The list shows
@@ -150,9 +155,12 @@ the middle:
   separate terminal status if that agent is still running or waiting. Cursor's
   session status stays working while its terminal is busy, retaining the receipt.
 - **Subscription quota**: a compact 额度 block at the bottom of the sidebar has
-  one row per provider: a brand-coloured icon plus name (Claude seats show only
-  the flag, with a crown on the Captain's seat), then a 5h and a 7d cell, with
-  "5h / 7d" named once in the header. Each cell is remaining % + reset time over
+  one row per provider: a brand-coloured icon plus name (a Claude seat shows the
+  account signed in behind its directory, the part before the @; a Max plan is
+  a small gem on the corner of the row's lead icon, so the name keeps its whole
+  column; the row the Captain is on leads with a crown instead of the provider
+  icon), then a 5h and a 7d cell, with "5h 剩余 / 7d 剩余" named once in the
+  header: every number is what is left, never what is used. Each cell is remaining % + reset time over
   a thin bar; used up is ⊘ + reset time in red with the row tinted red, a window
   with no number is — over an empty bar. If the whole row has no numeric windows
   or recovery time, the 5h cell shows 正常 / 已用尽 / 未知 / 过期 instead. With the
@@ -291,9 +299,13 @@ skipped.
 已用尽的任务排队到额度恢复，显示「额度用尽，稍后自动开」。
 会话恢复干活时，自动生成的「已结束，未提交回执」提示会从回执栏及任务卡清除；真实命令回执保留。
 Codex 的状态行写着「Waiting for background terminal」（队员在 `sleep 300` 里等长任务）、「Waiting for agents」或「Compacting context」，或底栏有「N background terminal running」时，同样算还在干活：不发「已结束，未提交回执」，也不把会话标成已完成。队员真的干完、闲着超过三分钟没交回执，仍照常提醒。
-Claude 队员回合结束后还有后台 shell / Monitor 在跑时，输入框上方的状态行会写「✻ Baked for 1m · done 8:27 AM · 1 shell, 1 monitor still running」（窄列会折成两行，中间可夹「Update available!」），输入框下方的自定义状态栏不带数字；这一行紧贴输入框时同样算还在干活（底栏的「N shell … still running」照旧认），不发「已结束，未提交回执」、不计自动归档。任务结束、状态行不再带数字后重新计三分钟，仍不交回执照常提醒。
+Claude 队员回合结束后还有后台 shell / Monitor 在跑时，输入框上方的状态行会写「✻ Baked for 1m · done 8:27 AM · 1 shell, 1 monitor still running」（窄列会折成两到五行，例如「✻ Churned for 3m 55s · done」「9:16 PM · 1 shell still」「running」，中间可夹「Update available!」），后台子 agent 在跑时这一行写「✻ Waiting for 1 background agent to finish」，输入框下方的自定义状态栏不带数字；这一行紧贴输入框时同样算还在干活（底栏的「· 1 shell ·」「N shell … still running」照旧认，窄列把底栏截成「· 1 she」这种半个词也认，至少要两个字母），不发「已结束，未提交回执」、不计自动归档。状态行折出来单独一行的「running」不是转圈，不会让会话一直显示在干活。任务结束、状态行不再带数字后重新计三分钟，仍不交回执照常提醒。
 这种「回合已结束、只剩后台 shell / Monitor」的队员，圆点照旧黄色、回执计时照旧等，但输入框是空闲的：队长的 `tell` 立即送达，不再排「待补充」干等（真正在干活、停在确认提示、额度等待时仍然等）。Claude Code 输入框里灰色的「下一步建议」是 dim 文字，不算草稿；用户自己手打的字（默认颜色）仍算草稿，`tell` 不会盖上去。队长开的 Claude 会话启动时带 `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0`（Claude Code 自带开关，对应设置项 `promptSuggestionEnabled`），不再显示这行建议；用户手开的终端和自己的 Claude 设置不动。
 睡眠或断网打断：会话停在提示符、屏幕写着「Your computer went to sleep mid-response」「Connection lost mid-response」「Can't reach the API server」（Claude），或「There was a network issue connecting to the server」「write: broken pipe」（agy）时，不算「已结束，未提交回执」，也不算已完成。程序等电脑醒来（系统睡眠/唤醒事件，或页面长时间没有轮询）并且网络在线后，再静置 15 秒，给它发一句简短的「接着做」（要求任务其实已做完就 complete）；之后每次间隔 30 秒、1 分钟、2 分钟、4 分钟，最多 4 次，睡眠期间和断网时一次都不发。会话重新干活并持续 1 分钟后这一轮清零，下一次睡眠重新计；每个任务累计最多 20 次。连续 4 次仍没恢复，向队长交一条「被睡眠或断网打断」异常回执（来源 sleep，不算验收不通过）。只有睡眠事件、屏幕上没有这些字样时（任务干到一半睡眠，醒来 10 分钟内回合结束且没回执），只发 1 次，仍无效就回到原来的三分钟规则。队长 stop、你自己按 Esc 中断、已经交过回执或已关闭的任务不会被续接；屏幕上引号、代码、diff 里引用这些英文不算。规则在 `sleep-resume-core.js`，会话侧在 `main-session.js` 的 `sleepResumeStep`。
+
+登录抖动：干活中的 Claude 会话屏幕上出现 Claude Code 自己的「Not logged in · Please run /login」时，先现查一次（不用缓存）这列绑定的席位是否登录。确定没登录（或查不出）照旧马上给队长一条「未登录」回执；核实是登录的，就按短暂故障处理：不发回执，约一分钟后用同一套续接规则发一次「接着做（登录已恢复）……」（不打在草稿上，睡眠、断网时不发），只发这一次。之后在这句下面又出现同样的报错，就交「未登录」失败回执并写明已自动续接过一次。这句一出现在屏幕上，它上面的旧报错就只算历史：状态灯、「已结束，未提交回执」、文字提问、静默看门狗都只看这句之后的新输出（这句还没画出来时旧报错不算第二次）。会话重新干活满 1 分钟后这一轮清零。会话侧在 `main-session.js` 的 `loginBlipStep`。
+
+指令没提交：程序打进会话的指令按下回车后，约 2.5 秒、屏幕静下来时再看一眼输入框。自己的文字（或折叠成「[Pasted text #1 …]」的粘贴）还停在框里，就再按一次回车，并在诊断日志（系统临时目录 `agentdeck-notify.log`）记一行 `sent->enter-again`，不记指令内容。只补一次；框里是菜单、用户正在打字或看不到这段文字时都不按。
 Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；运行中的回合需静默至少 10 秒才判空闲。
 提交完成回执后，任务仍为完成，但 Cursor 会话只要还在运行就继续显示「干活中」。
 看板页面从侧边栏「任务看板」或终端架构图右上角的「任务看板」切换打开：每个项目是一个
@@ -318,6 +330,17 @@ Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；�
 闪一下新状态的颜色。动效只用位移和透明度、不用背景模糊；系统开了「减少动态效果」时全部静止。
 筛选行右侧（刷新左边）的星光图标按钮是动效开关：点一下看板和终端架构图一起静止（连线、描边、颜色都留着，只是不动），
 再点恢复；这个选择会记住。系统开着「减少动态效果」时按钮只提示这一点，动效保持关闭。架构图工具栏里是同一个开关。
+**Token 用量**是看板页的第四个标签（架构图工具栏里也有）：本机每天各模型用了多少 token。顶部是近 7 天 / 近 30 天
+的合计和 Anthropic / OpenAI / Google / 其他四家的占比；下面每天一根堆叠柱，当天用得最多的模型在最底下、越往上越少，
+柱顶是当天合计（数字一律横排，挤不下就错位抬高，再窄就让图自己横向滚动、打开时停在今天）；悬停看当天每个模型的
+数量和占比，点一根柱或在图上按 ←/→ 看那天的明细表（输入、输出、缓存读、缓存写）。用量最多的 6 个模型各有自己的颜色
+（色弱也能分，深浅两套），其余合成灰色「其他模型」。数字来自本机日志，只读出数量、模型名和时间：Claude Code
+（各席位目录，同一目录的两个名字只算一次，同一条消息重复写或在恢复的会话里重放只算一次）、claude-ds（DeepSeek）、
+Codex、Antigravity，以及放进「下载」文件夹的 Cursor 官方用量表；Gemini CLI 和网页版 ChatGPT 不留用量数字，标「无数据」。
+扫描在独立的后台进程里做，只读新增的日志行（首次约 10 秒，之后不到 1 秒），结果缓存在 `token-usage-cache.json`；
+日志被删后已读到的数字仍保留。Codex 比 ccusage 多出 0.4–1.4%：上下文压缩也是一次模型调用，Codex 只给它写了
+token_usage_record、没写 token_count，ccusage 只读后者所以漏掉了它们；这里照算。Antigravity 每一步的用量在 metadata 字段 9，重试的请求在字段 28（可能只有它、也可能和 9 重复），按请求编号各算一次；重试请求不带模型号时归到同一对话前一次调用的模型（就是该次生成实际用的模型），逐日合计与 ccusage 一致。代码在 `token-usage-core.js`
+（解析和计算）、`token-usage-scan.js`（扫描）、`token-usage-main.js`（`token-usage:get`）、`token-usage-ui.js`（界面）。
 终端架构图（v3「静夜调度台」，日夜两套）：深色是和 App 同一族的石墨灰，浅色是瓷白；画布上铺一层细点阵，跟着平移和缩放走
 （任务看板仍是星空背景）。颜色只用在有含义的地方：每个项目一条自己颜色的线，需要你处理的卡（待补充、失败）整张带颜色。
 队长在顶部居中，下面是项目框。
@@ -354,7 +377,8 @@ Retina 这类 2 倍屏上就是 80%，Windows 100% 缩放这类 1 倍屏上是 1
 没有会话在干活/待补充/排队的项目默认收进底部「非活跃项目」托盘（真实数量，点 chip 展开到画布，失败项目标红）；
 项目里再有会话开工会自动重新显示，不动你的视角。
 卡片三层：第一行是状态（图标、颜色和文字，永远完整）和模型 / 账号（模型图标统一成灰色；账号是模型后面的一个小文字标签，
-显示席位背后登录的账号短名，即邮箱 @ 前那段，还没识别出账号时显示席位代号 CN / US / US2；旗帜只在侧栏显示）。这一行放不下时
+显示席位目录里实际登录的账号名，即邮箱 @ 前那段，和侧栏同一个取法、跟着账号走；还没读到时显示「识别中」，没人登录时显示「未登录」；
+席位代号只在悬停提示里，型号胶囊的悬停提示也写着账号）。这一行放不下时
 账号先让位，最少留几个字母、从左边省略（保留能区分 hjinhao066 和 hjinhao066us 的结尾），然后才轮到模型名，状态从不截断；
 悬停账号标签看完整账号。然后是标题（最多两行），最后一行是一句最新进展和时间；进展换了新内容时这一行轻轻浮现一下。
 干活中的卡显示终端里最新的一行（没有就显示会话自己用 progress 报的进展），提问、失败、交回的结果照常显示；
@@ -363,6 +387,7 @@ CLI 自己的升级提示（Update available、brew upgrade 等）、AgentDeck �
 打开详情浮层（完整回执、会话报的进展、实时活动、文件、打开终端；Esc 关闭）。
 架构图只留当前的活：做完的队长会话没有新指令 10 分钟后自动归档（AgentDeck 重启后也照此处理，重启时已超时的在终端安静约 1 分钟后归档）；
 失败或停下的会话要等它的看板卡片已完成、或同一张卡已由另一个会话接手才自动归档，没人接手的失败留在图上等队长处理。
+自动归档前最后再查一次这个终端的进程树（`pty-work.js`，Mac 用 `ps`，Windows 用 `Get-CimInstance Win32_Process`，一次列表所有终端共用 5 秒）：Claude 的工具起的命令（前台或后台）和它们下面的进程还在跑，就不归档。认法：Bash 工具（Mac 的 zsh、Windows 的 Git Bash）的命令都带 Claude 的 shell-snapshots；Windows 的 PowerShell 工具经 Claude 的启动器跑，形如 `cmd /d /s /c "chcp 65001 & pwsh … -Command …CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT…"`，启动器关掉时是 `pwsh -NonInteractive … -EncodedCommand …`。MCP 服务（Windows 上是 `cmd /c npx …`）、状态栏命令、caffeinate 不算。还没拿到答案时这次先不归档，列不出进程时照屏幕判断；答「忙」的结果留 1 分钟再重查（Windows 每查一次要起 PowerShell，约 1.2–1.7 秒），所以后台命令结束后最多晚 1 分钟归档。
 项目框标题的数字只统计图上还在的会话（不含已归档历史），和队长框一致。
 项目名不分大小写（AgentDeck 和 agentdeck 是同一个项目框，显示最早那个会话写的写法，已存数据不改）；
 项目里没有任何干活、待补充、排队、失败、停下、空闲的会话（全部已完成或已归档）时，项目框从图上消失，有新会话再出现；「显示已归档」时仍列出全部项目。
@@ -397,8 +422,9 @@ CLI 自己的升级提示（Update available、brew upgrade 等）、AgentDeck �
 队长行的 Relay 图标可选 CN 🇨🇳、US 🇺🇸、US2 🇺🇸（美国二号）三个独立 Claude 席位，
 或 ChatGPT（Codex GPT-6.1 Sol）：
 先存进度看板，再重开队长读看板继续，运行中的队员保持原席位。
-侧边栏底部齿轮统一配置席位名称、目录和 Relay 名称。旧 CN/US 配置自动补 US2，额度区同时显示旗帜与名称以区分 US/US2；未登录 US2 不影响现有席位。
-用户登录步骤见 [Claude 席位](CLAUDE_SEATS.md)；队长 `new --agent claude --seat us2` 可指定席位，`quota` 显示三席独立额度。默认开启「永动机」：
+侧边栏底部齿轮统一配置席位名称、目录和 Relay 名称。旧 CN/US 配置自动补 US2；未登录 US2 不影响现有席位。
+侧边栏里出现席位的地方（额度行、队长行和会话上的席位标签、队员分组、Relay 面板、席位设置、轮换和额度用尽提示）都显示这个目录里实际登录的账号名（邮箱 @ 前那段），不显示固定的 CN / US / US2；席位代号只在悬停提示和 `--seat us2` 里出现。账号名放不下时从左边省略、保住结尾，悬停看完整邮箱、套餐、席位代号和目录。目录里没人登录、也没有账号记录时显示「未登录」。Max 套餐的账号在额度行行首图标的角上带一个小宝石（悬停详情里写套餐），跟账号走，不跟目录走，不占账号名的宽度；皇冠只表示队长正在用这一行。额度列头写「5h 剩余 / 7d 剩余」，队长的 `quota` 输出写「5h 剩 98%」：所有百分比都是剩余，不是已用。手机网页端同样按账号名列席位，但只下发邮箱 @ 前那段，完整邮箱不下发。
+用户登录步骤见 [Claude 席位](CLAUDE_SEATS.md)；队长 `new --agent claude --seat <账号名>` 可指定用哪个账号（也接受 `cn` / `us` / `us2` 目录代号；按当时各目录实际登录的账号解析），`quota` 显示三席独立额度。默认开启「永动机」：
 当前 Claude 的可信 5 小时剩余 ≤3% 或真实限流时，在队长空闲后自动接力
 下一个可用 Claude 席位（US2 → US → CN → US2，未登录或用尽跳过）；没有已确认可用的 Claude 席位时交给 Codex GPT-6.1 Sol，恢复后优先回 Claude。
 额度区的手动轮换按钮只在 Claude 席位之间切换；所有 Claude 席位用尽后的 Codex 接力由永动机执行，或从 Relay 菜单明确选择。
@@ -449,6 +475,13 @@ again with the current provider, model and effort instructions.
   control capability token those commands need. Every column has a separate
   submission-only token, so a worker can report its own task without controlling
   any session.
+- Every board-cli command takes only the flags it lists (`board-cli.js help`).
+  A flag it does not know (for example `new --model … --effort … --verify`) is
+  refused with a non-zero exit, a list of the supported flags and, for `new`, the
+  reminder that model and effort go inside `--command` and review is `task add
+  --verify` then `new --task-id`. Nothing is sent to the app. `new --agent claude`
+  without `--command` prints a one-line warning that the machine's default model
+  will be used.
 - Use `new --project "项目名"` to group sessions on the terminal architecture
   map and `--reviews id1,id2` to declare exactly which sessions a reviewer checks.
   One Captain directly assigns work, workers sit above reviewers, and completed
@@ -475,8 +508,9 @@ again with the current provider, model and effort instructions.
   refused with a message telling the 队长 what to use instead. Haiku 5.5 is allowed
   (Claude Code `--model claude-haiku-5-5 --effort medium|high`, measured on claude
   2.1.294; Cursor's `claude-haiku-5-5-<tier>` and `claude-haiku-5-5-thinking-<tier>`
-  pass the check too) and is the 队长's first choice for simple, lightweight work;
-  Codex GPT-6 Luna is the fallback when Claude quota runs short.
+  pass the check too) and is the 队长's first choice for simple, lightweight work,
+  bulk code, tests and CI/CD fixes; the 队长 does not hand execution work to Codex
+  (Sol/Luna) for now, so ChatGPT quota is left alone unless the user names it.
   On macOS/Linux, app launches invoke the Codex binary directly so a shell
   function that adds `--yolo` cannot duplicate the explicit bypass flag.
   The 队长 can read observed subscription quotas with `quota` and switches
@@ -613,7 +647,12 @@ again with the current provider, model and effort instructions.
   Claude workers whose live footer still reports background shells/monitors/tasks
   running remain busy even after the model's reply. They produce no missing-command
   receipt and cannot auto-archive; the three-minute grace starts after their
-  background work ends. Old quoted counters and zero/completed counts are ignored.
+  background work ends. Before an automatic archive the terminal's process tree is
+  checked too: a command Claude's Bash tool (it sources Claude's shell snapshot) or
+  Windows PowerShell tool (Claude's CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT launcher, or
+  pwsh -NonInteractive -EncodedCommand) started that is still running keeps the
+  session; MCP servers and the status line do not. A busy answer is reused for a
+  minute. Old quoted counters and zero/completed counts are ignored.
   The Captain's own permanent receipt listener does not keep its foreground busy.
   Screen 【回执】/【提问】 blocks, examples, contract echoes and Doing… never count
   as submissions. A late command replaces the fallback notice. Prompt submission
@@ -631,6 +670,16 @@ again with the current provider, model and effort instructions.
   Unlike `read`, it does not read saved chat replies.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
+
+### 小队长 (sub-captain)
+
+一个项目要长期多线并行时，队长用 `new --sub-captain --project "项目" --title … --task …` 开一个小队长。
+小队长用 `create-child` 开自己的子会话；子会话的回执、提问和确认提示只进小队长的 `receipts --wait`，
+队长只收小队长自己的阶段汇报（`complete` 可多次，不动看板卡片；绑卡的最终交付用 `complete --final`）和它上报的问题。
+小队长的回执监听不在、子会话回执等了 3 分钟时，程序提醒小队长重挂；10 分钟没人取就告诉队长。队长的 `ledger` 把子会话缩进在小队长下面，
+仍可直接 `peek` / `tell` 它们；侧栏里子会话嵌在小队长行下，用行左的箭头图标折叠。小队长被归档或关掉时子会话不停，
+交回队长并附一条提示。小队长的终端有一枚受限令牌，只认 create-child、receipts、ledger、tell、peek、read、answer、
+stop、archive，且只对自己的子会话。命令、字段名和秋招试点的迁法见 [docs/sub-captain.md](docs/sub-captain.md)。
 
 ### 自动回执入口 (scheduled scripts)
 
@@ -758,9 +807,9 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
   paragraph tells the Captain to run `handoff` first and follow its takeover
   steps: report ready when nothing is open, carry on unprompted when authorised
   work is out, and leave paused or cancelled work alone. That paragraph is
-  not appended again: the briefing has to stay inside its own 10,000-character
-  inline limit (`MainCore.BRIEFING_LIMIT`), past which it is replaced by a
-  file pointer that hides the closing. The delivery waits for an idle
+  not appended again. What is sent is the core prompt only (at most 2,500
+  characters, `MainCore.CORE_LIMIT`); the rule files are read on demand, see
+  below. The delivery waits for an idle
   agent, three seconds of quiet output, and empty composer/terminal input,
   including attachments, and rechecks these guards when sending.
 - Raw terminal history recall, Tab completion and cursor edits make the tracked
@@ -769,11 +818,49 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
   and no measurable footer decrease (for example an already empty Codex context),
   automatic rebriefing cannot confirm the reset. Use `briefing` as the fallback.
 
-`node "$AGENTDECK_BOARD_CLI" briefing` prints the complete current Captain
-instructions, with original newlines. It is read-only: it does not send input,
+`node "$AGENTDECK_BOARD_CLI" briefing` prints the current Captain core prompt,
+with original newlines. It is read-only: it does not send input,
 consume receipts or save the response to config. Only the Captain capability can
 use it. When the user says `你是队长`, first run `ledger` to verify that this
 terminal is the Captain, then read `briefing` and `handoff`.
+
+**Core prompt and rule files.** The Captain's standing prompt is a short core
+(`MainCore.instructions`, at most 2,500 characters, tested): who it is, the red
+lines it keeps every turn (never does the work itself, asks the user about
+anything irreversible, exactly one background `receipts --wait` listener, tells
+the user right after dispatching, cards go out with `--task-id`/`--project`, a
+`--verify` card is not done before its review is, large files stay out of its
+context, Claude's 5h/7d quota percentages are what is left), one
+line per command, and a list of "before doing X, read Y". Everything else is in
+nine rule files, `docs/captain/<topic>.md`: `models` (model list, routing, effort
+tiers, DeepSeek fallback, quota rotation), `dispatch`, `review`, `inbox`,
+`sessions`, `capacity`, `release`, `handoff`, `commands`. The Captain reads one
+with `node "$AGENTDECK_BOARD_CLI" briefing --topic <name>` (`all` prints every
+file, `list` the names and when to read each). The files ship in the package and
+are copied at start to `board-control/tools/captain/` under userData, beside the
+board CLI, so the command needs neither the running app nor a token and is the
+same on macOS and Windows. A user's own additions go in
+`~/.agents/captain/<topic>.md` (`C:\Users\<name>\.agents\captain\` on Windows):
+they are printed after the built-in text under a heading that says they win where
+the two disagree; a built-in file is never replaced. Rules the program already
+enforces (a banned model is refused by `new`, `--effort` is stripped from an `agy`
+command) are not in the core; `models.md` keeps one sentence. To add a rule, put
+it in a rule file and, when it needs one, add its trigger to
+`MainCore.BRIEFING_TOPICS`; `tests/captain-rules.test.js` fails when a file and
+the trigger list disagree or the core outgrows its limit.
+
+**Who is given the prompt.** A Captain with a new model context gets the core
+prompt: a newly created Captain, a cleared context (the 清空上下文 button, a
+submitted `/clear`, the token saver) and a seat Relay. When AgentDeck itself
+restarts and the Captain's own conversation comes back with it (its terminal
+survived, or the CLI was relaunched with `--resume` into the same session) the
+prompt is not pasted again: the Captain gets one short notice
+(`MainCore.restartNotice`: run `handoff`, check the receipt listener, `briefing`
+to reread the rules; with the legacy receipt injection on it says not to start a
+listener, as that mode's core prompt does). `config.mainSession.briefed` records which column was given
+which wording of the prompt; a restart that finds a new conversation, another
+column or a changed prompt (a new version, a new concurrency limit) sends the core
+prompt again.
 
 `node "$AGENTDECK_BOARD_CLI" handoff` prints a one-page overview of the Captain
 handoff (hard limit 6000 characters, `config.captainHandoffOverview`) and rewrites
@@ -833,7 +920,8 @@ text; terminal mouse reports are excluded. Each prompt and final reply has a
 visible copy button that copies its plain text. Older chats containing repeated
 mouse-report fragments are cleaned when loaded, preserving adjacent text.
 
-The chat reads in a centred column, each reply under the name of who is speaking
+The chat reads in a column left of centre (the air on its left is 0.618 of an
+even split, your bubbles keep its right edge), each reply under the name of who is speaking
 (队长 with its crest). An agent's reply shows its words only: the echo of a
 prompt, a file-diff tail, tool summaries and the TUI's own hints are taken out
 when it is shown, by the same rules as the phone page, and its titles, nested
@@ -841,6 +929,29 @@ lists and tables are set as such; copy and share give the same clean text. The
 saved reply is unchanged, and a plain shell's output is shown as it is. The
 cards 队长 leaves between two messages (work handed out, receipts back) sit
 folded behind one line with their count and state; click it to open them.
+
+**交付文件** (队长's column only, `chat-deliverables.js`, rules in
+`deliverables-core.js`): a panel on the right lists the result files that came
+up in 队长's conversation, newest first by day: paths in 队长's replies and the
+files in the crew's receipts (the same receipts Artifacts › 回执交付 reads),
+including the conversations from before a context clear. A path 队长 only
+mentions counts when it is a result type (documents, PDFs, Office files, HTML
+reports, pictures, video, audio); a file a receipt hands in counts whatever its
+type (a final .csv or .txt too). Neither counts when it is a process type
+(code, .json, logs, databases, shell scripts…) or sits under node_modules, .git,
+tmp, scratchpad or the system temp folders. The three lists are editable from
+the panel's gear (saved as `deliverableRules` only when changed). Each row shows the file name, its
+project (a receipt's own, or the project a folder on its path is named after),
+where it came from (队长回复 / the session that delivered it / 清空前的队长对话)
+and the time; a click previews it in the side pane, a file no longer on disk is
+greyed out. Hover or focus shows icon buttons to copy the path, show it in
+Finder/Explorer and jump to the reply or session. What was found is kept as an
+index in `config.chatDeliverables` (one row per path, the latest mention wins,
+nothing dropped for room; the panel shows 200 rows and 显示更早的 adds 200 at a
+time): each old conversation is read once, and its files stay listed even if the
+conversation is later trimmed. A column at least 1100px wide docks
+the panel (folding it with the head's icon is remembered); a narrower one slides
+it over the chat on request, and Esc closes it. The phone hub does not have it.
 
 - A new blank session (no launch command, nothing said yet) offers Claude,
   Antigravity, Grok, Cursor CLI and Codex (ChatGPT) buttons. A click types that agent's launch
@@ -865,9 +976,10 @@ folded behind one line with their count and state; click it to open them.
   as attachments; they are sent as paths ahead of the text.
 - Prompts have no length limit. One longer than 8000 characters is saved as a
   private `.txt` in userData/`long-prompts` (pruned after 60 days) and the agent
-  gets its opening plus "read this file first"; the bubble shows the file. The
-  Captain's own briefing is the one exception: it is pasted whole up to 10,000
-  characters, so its rules and closing paragraph are never behind a pointer.
+  gets its opening plus "read this file first"; the bubble shows the file. A
+  Captain briefing send is the one exception: it is pasted whole up to 10,000
+  characters, so it is never behind a pointer (the core prompt itself is at most
+  2,500).
 - Automatic sends (Schedule, 队长) never type into a bare shell, which would run
   each line as a command: on macOS/Linux they wait until something other than the
   shell is in the column's foreground; on Windows until the agent's screen shows.
@@ -1057,6 +1169,7 @@ older downloader does not pull in the vulnerable HTTP cache dependency chain.
 ```sh
 npm test
 npm run test:smoke
+npm run e2e -- tests/e2e/<spec>   # E2E always goes through the machine-wide queue
 npm run test:e2e
 npm audit
 npm start
@@ -1072,9 +1185,57 @@ npm run dist:mac
 - **发版**（小版本打包前）：跑 `npm test` 和 `npm run test:smoke`。冒烟复用现有用例，用 Playwright 标签 `@smoke` 标出，不另抄一份测试。命令是 `playwright test --grep @smoke --workers=1`，单 worker，目标 5 分钟内。覆盖：应用能启动并显示主界面；队长用 board-cli `new` / `tell` 派活且队员收到；队员回执回到队长；会话归档后能恢复；终端能显示输出；额度区能显示；任务看板能打开。
 - **全量**：`npm run test:e2e` 夜里跑，或换一台机器跑。冒烟通过不能代替全量。
 
+**Mac 压力下的 E2E 分流：** 跑 E2E 时用 `node scripts/e2e-auto.js tests/e2e/a.spec.js [b.spec.js] [-- playwright 参数]`：带 Windows 平台跳过标记（`test.skip(process.platform === 'win32', …)`）的 spec 走本机排队锁；其余 spec 在 Windows 在线时合成一组、经 ssh 在后台（非桌面会话，不弹窗）派到 Windows 跑，ssh 或远端准备失败时自动改走本机排队锁。Windows 测的是当前工作区（没提交的改动也会带过去）；测试在 Windows 上真失败就是失败，不会悄悄换 Mac 重跑，只在 Windows 才不通过的 spec 要加上面的跳过标记。看本机队列：`node scripts/e2e-auto.js --status`。
+
+**Windows 后台执行：** Windows 上每个任务有自己的检出目录（`agentdeck-e2e-win\checkouts\<运行号>`），依赖按 lockfile 分目录（`deps\<哈希>`，哈希不含根 `version`；同一 lockfile 只装一次，其他任务等它装完复用，等锁有日志、25 分钟超时后退出码 15 并自动改走 Mac；每次任务结束后只留最近用过的 2 份、正在被用的不删，新装前可用空间不足 2 GB 退出码 16 并改走 Mac），所以 `AGENTDECK_E2E_SLOTS` 大于 1 时几组可以同时跑，互不覆盖。进程优先级没有调低。验证没有窗口跑到桌面的办法：`scripts/verify-windows-background.ps1`（ssh 登录在会话 0，看不到桌面会话的窗口，所以证据是「所有测试进程都在会话 0、桌面会话里没有新的测试进程」）。
+
+**性能基准：** `node scripts/perf-e2e-benchmark.js --mode win --groups N --sha <提交> --out <目录> <spec…>` 与 `--mode mac …` 对同一提交实测，只输出实测值。实测结果见 `docs/e2e-windows-background.md`（Windows 单组比 Mac 慢；并行吞吐倍数因 Windows 一直有别的会话的任务而没能测到干净数据，所以没给倍数）。
+
 冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 
 **发版必须先写「版本更新」**：在仓库根目录的 `release-notes.json` 里，把这一版加到 `released` 最前面（版本号如 `2.0`、日期 `YYYY-MM-DD`、一句标题、3–6 条写给用户看的大白话，每条不超过 60 字），并把它从 `upcoming` 里拿掉；顺手更新 `upcoming`（接下来做什么，用户还没拍板的写 `"state": "pending"`，界面上显示「待你定」）和 `updated`。只改这一个文件，桌面端（侧栏底部点版本号）和手机总台（总览最下面、平板侧栏底部的版本号）都读它（每日进展另读本机统计文件，不在这个文件里）。漏改有两道提醒：`npm test` 里的 `tests/release-notes.test.js` 要求最新一条等于 package.json 的版本；`scripts/release.js` 合完分支、升完版本号后先查这一条，不对就停下，不进测试和打包。规则写在 `mobile-web/hub/core.js` 的 `releaseProblems`。
+
+### E2E 排队与 Windows 远程跑
+
+Mac 上同时开着二十多个会话时，几个会话各自跑 Electron E2E 会把负载顶到几百，所有命令慢十倍。所以**跑 E2E 一律用统一入口，不要直接敲 `npx playwright test`**：
+
+```sh
+npm run e2e -- tests/e2e/foo.spec.js [tests/e2e/bar.spec.js] [--grep 名字]   # 指定 spec，推荐
+npm run test:smoke                                                        # 冒烟，同样自动排队
+npm run test:e2e                                                          # 全量，同样自动排队
+node scripts/e2e-queue.js --queue-status                                  # 看谁在跑、谁在等
+```
+
+- 入口是 `scripts/e2e-queue.js`（逻辑在 `scripts/e2e-queue-core.js`）。全机（所有会话、所有 `~/agentdeck-worktrees/*` 副本）同一时间只放 **1 组**（一次 `npm run e2e` 调用算一组），其余打印 `排队中，前面还有 X 组（正在跑 R 组，排在前面 Q 组，并发上限 N）` 并按先来后到等。轮到时打印 `轮到了（等了 N 秒）`。
+- 锁目录在 `/tmp/agentdeck-e2e-queue/`（Windows 是系统临时目录下同名目录）：`slots/<n>/owner.json` 是正在跑的组，`queue/` 是排队票。**不需要手动清理**：持锁进程（包括它启动的 Electron）都不在了，下一个排队者会自动回收并打印 `回收失效的锁`；进程号被别的程序复用也认得出（对比进程启动时间）。
+- 超时：排队最多等 120 分钟（退出码 75），单组最多跑 45 分钟（超时先发终止信号，宽限 10 秒后强杀，包括不听 SIGTERM 的后代和已脱离进程组的后代；**整棵进程树都退出后才释放锁**，退出码 124）。正常跑完时也会清掉遗留的辅助进程再放行下一组：运行期间每秒记录一次进程树，并给每次运行的所有子孙进程打上环境变量标记 `AGENTDECK_E2E_RUN_TAG`，所以连「已脱离进程组、父进程又立刻退出」的常驻辅助进程也能按标记找到并结束（Mac/Linux；Windows 靠 `taskkill /T`，不做这一步）。主动清掉环境变量并脱离进程组的进程无法识别。可调：`--queue-wait-timeout 分钟`、`--queue-run-timeout 分钟`、`--queue-slots N`（并发上限，默认 1），或环境变量 `AGENTDECK_E2E_WAIT_MINUTES`、`AGENTDECK_E2E_RUN_MINUTES`、`AGENTDECK_E2E_SLOTS`。机器空闲时可以 `AGENTDECK_E2E_SLOTS=2` 放宽；`--queue-` 开头的参数由入口吃掉，其余原样交给 Playwright。
+- 也可以包一条任意命令：`node scripts/e2e-queue.js -- <命令 参数…>`。已经在排队入口里面的命令（如 `release.js` 跑冒烟）不会再等自己。
+- `release.js` 的冒烟走 `npm run test:smoke`，所以自动排队；`/tmp/agentdeck-test.lock` 仍只管单测和发版。
+
+**把测试派到 Windows**（Mac 忙时，或要看 Windows 上的表现）：
+
+```sh
+node scripts/e2e-remote-win.js <分支或提交> tests/e2e/foo.spec.js [tests/e2e/bar.spec.js] [-- 额外 Playwright 参数]
+# 可选：--host winpc  --out 目录  --queue-wait-timeout 分钟  --queue-run-timeout 分钟  --no-install
+```
+
+- 只测**已提交**的代码：脚本把这个提交打成 git bundle 传过去（不需要先 push，也不需要 Windows 登录 GitHub），所以先 `git commit`。工作区里没提交的改动不会被带过去，脚本会提醒。
+- Windows 上一切都在自己的目录 `C:\Users\hjinh\agentdeck-e2e-win\`：`hub\` 存传过去的提交，`checkouts\<运行号>\` 是每次运行自己的检出（跑完删），`deps\<依赖键>\` 按 lockfile 各装一份依赖（只在依赖变了才新装，首次要下载 Electron，约几分钟；自动只留最近 2 份；新装前空间不足 2GB 先清旧的，仍不够就退出码 16，`e2e-auto` 改在 Mac 跑，见 `docs/e2e-windows-background.md`），`inbox\<运行号>\`（含本次上传的排队脚本）和 `runs\<运行号>\` 是每次运行的临时目录，跑完自动只删本次的。**不碰** Windows 上已安装的 AgentDeck、别的会话目录和用户目录里别的东西。
+- Windows 上同样走 `e2e-queue`，同一时间只跑 1 组，后来的排队。
+- 结果拉回 Mac：`~/reports/agentdeck-e2e-remote/<运行号>/`，内含 `console.log`（完整输出）、`results.json`（Playwright JSON 报告）、`summary.json`（提交、spec、退出码、耗时）、`test-results/`（失败时的 trace 等）。脚本退出码等于 Windows 上的结果（0 通过，75 排队超时，124 跑太久，其余为失败）。
+
+**什么测试适合派到 Windows，什么必须留在 Mac**
+
+CI 已经在 `windows-2022` 和 `macos-14` 上各跑一遍全量 E2E，所以绝大多数 spec 本来就是跨平台的；差别在「Windows 上跑得过」和「Windows 上测到了要测的东西」。
+
+- **适合派到 Windows**：界面和版面（layout、topbar-layout、sidebar-*、settings-sticky、chat*、task-board*、todo、crew-map*、version-label、release-notes）；用替身 agent 或 `board-cli` 的队长/派活/回执逻辑（captain、queue-dispatch、command-receipts、pending-tell、background-receipts、concurrency-cap）；手机总台和手机网页（mobile-hub*、mobile-web、mobile-composer、fleet-sync）；额度、日程、讨论、技能等用夹具数据的功能；电池模式（用 `AGENTDECK_TEST_POWER` 模拟，不读真实电源）。这些只依赖 Electron、Node 和夹具，换系统结论不变。想多一份跨平台覆盖的改动，也该派一组到 Windows。
+- **必须留在 Mac**：
+  - 已安装/打包的 **macOS 应用**本身：`.app`、DMG、签名、公证、`AGENTDECK_TEST_EXECUTABLE` 指向 Mac 包、`restart-agentdeck.sh` 一类安装重启流程。
+  - **POSIX 专属断言**：文件权限 0600、终端设备路径 `/dev/ttys*`、信号与进程重新认父、zsh（`ZDOTDIR`）、符号链接/bash/tar 夹具。这些 spec 在 Windows 上会跳过那几条断言（或整条 skip，例如 `mobile-release`、`auto-worktree` 的信任文件夹），派过去「通过」不代表测到了。
+  - **macOS 专有行为**：通知中心点击回到列、Dock、系统全局热键占用（见记忆「Mac 系统级热键占用」，E2E 本来也测不出）、钥匙串里的 Claude 席位凭据、睡眠唤醒的真实表现。
+  - **要用本机登录或额度的真实 CLI**：`real-cli-briefing`、`native-receipts` 之类需要明确授权的真机冒烟，只在装了并登录的那台机器上跑。
+  - **发版门禁**：发版用的 `npm test` + `npm run test:smoke` 在出包的那台 Mac 上跑，不拿 Windows 的结果代替。
+- 拿不准时：先在 Windows 上跑，失败了再在 Mac 上复现，不要因为 Windows 挂了就直接改 spec 的平台判断。
 
 本机 Mac 可用一条命令准备发版（先收齐已验收的分支，避免边合边反复测试、打包）：
 
@@ -1098,9 +1259,9 @@ node scripts/release.js 1.2.4 --prepared --package-only --output /Users/jinhao/r
 
 该选项保留完整单测、单 worker 冒烟、audit、正式 `dist:mac -- --publish never`、SHA256、DMG 挂载校验、签名和包内运行文件逐字节校验，沿用输入一致时的测试/构建缓存；不生成安装脚本，也不构建、上传或核对手机总台。计划固定记录 `packageOnly: true`，同一输出目录不能切换模式；JSON/Markdown 成功状态为 `package-ready`，手机状态为 `deferred`，不能据此称手机部署或线上验收通过。`--dry-run` 明列跳过和延期事项；不带此选项的默认流程保持以下手机部署门禁。
 
-流程：同步 package.json 与 lockfile 版本 → 核对 `release-notes.json` 最新一条就是这一版 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁依次跑单测和单 worker 冒烟，audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本 → **自动构建/上传手机总台，保留精确回滚点，从公网核对版本、提交、构建时间和资源字节** → JSON/Markdown 逐步耗时报告。手机步骤最多尝试 3 次，失败恢复部署前链接并停止，退出非零；未部署、缺回执、线上版本不符均在发版报告标 🔴。桌面构建命中缓存也不能跳过手机部署。`--dry-run` 不部署。详情见 [手机部署与核对](docs/mobile-release.md)。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
+流程：同步 package.json 与 lockfile 版本 → 核对 `release-notes.json` 最新一条就是这一版 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁跑单测、单 worker 冒烟（冒烟自己在 E2E 排队里等），audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本 → **自动构建/上传手机总台，保留精确回滚点，从公网核对版本、提交、构建时间和资源字节** → JSON/Markdown 逐步耗时报告。手机步骤最多尝试 3 次，失败恢复部署前链接并停止，退出非零；未部署、缺回执、线上版本不符均在发版报告标 🔴。桌面构建命中缓存也不能跳过手机部署。`--dry-run` 不部署。详情见 [手机部署与核对](docs/mobile-release.md)。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
 
-`release.js` 自己持锁，直接运行它即可，不要在外层再拿同一把锁。单独运行 `npm test` 或 E2E 命令时，用 shell 加外层锁，结束时删除自己的 owner 文件并释放目录。
+`release.js` 自己持锁，直接运行它即可，不要在外层再拿同一把锁。单独运行 `npm test` 时，用 shell 加外层锁，结束时删除自己的 owner 文件并释放目录。**E2E 不用这把锁**，一律走下面的 E2E 排队入口。
 
 子进程清除现役 `AGENTDECK_*` 凭据；调用者环境保留，仍能提交自己的回执。同一 worktree 的依赖安装可复用；成功测试和构建只有在完整 Git tree、依赖文件/权限、Node/平台/系统/签名与测试环境都相同时复用，DMG 还须通过哈希校验。首次依赖指纹计算与门禁重叠执行，异步遍历并分块读取依赖，哈希期间持续读取测试和 audit 的输出；audit 每次运行，缓存包每次重新核对。
 
@@ -1156,7 +1317,9 @@ The first automatic prompt in a Windows terminal waits for 500 ms of quiet TUI
 output, avoiding startup input loss. Later prompts keep the existing delivery checks.
 `captain-briefing-paste.spec.js` sends the Captain briefing, and one grown to
 exactly 10,000 characters, through a real PTY to stand-in agents and compares
-what reached their stdin with what was sent. `real-cli-briefing.spec.js` is
+what reached their stdin with what was sent. `captain-restart-notice.spec.js`
+restarts the app three times around a stand-in `claude` and checks that a resumed
+conversation gets only the short notice and a new one the core prompt. `real-cli-briefing.spec.js` is
 skipped unless `AGENTDECK_REAL_CLI` names installed CLIs. With `claude,codex` it
 runs that real CLI as the Captain with an empty config directory and a local
 stand-in for its model API (no login, no quota), and compares the CLI's own model
@@ -1209,7 +1372,23 @@ from a phone. Cards and sessions carry `deviceId` for those later steps.
 
 Offline edits persist in `fleet-state.json`. A request retains its operation ID
 and original payload until acknowledged, even across a process restart; later
-edits wait separately and are rebased on the accepted card. Snapshot downloads
+edits wait separately and are rebased on the accepted card.
+Sync starts 15 seconds after launch (`AGENTDECK_FLEET_START_DELAY_MS` overrides
+it) so the window always comes up first. The state file is written once per
+batch of 50 uploads (to mark them attempted before they go out) and once at
+the end of a round that changed something; an idle round writes nothing. A
+queued card whose content has not changed keeps its operation ID. Unsent edits
+are rebuilt from the board files at launch, and captain transcripts are not
+kept in the state file: they are noted again from `userData/chats` at launch.
+Transcripts an older build left in the state file first move to one file each
+in `fleet-state-history-outbox/` (written and synced before the state file
+drops them; any that cannot be written stay in the state file) and are deleted
+once the hub has them. If one board write of a batch fails, the batch is
+retried card by card so only the refused card waits for the next round.
+Stopping sync saves the latest sync time, which idle rounds do not write.
+Downloaded transcripts are written only when they changed. (2.0.1 rewrote the
+whole state file per card per upload and held the main process long enough to
+leave a black window on the first launch with sync configured.) Snapshot downloads
 preserve pending edits, including changes made by other local board writers.
 Older revisioned task snapshots restored by Git keep their older revision when
 submitted, so they cannot silently replace newer server edits.
@@ -1228,7 +1407,8 @@ uploads and snapshot downloads continue. Store ID indexes have no prototype,
 including after loading JSON, so prototype-shaped IDs are ordinary keys.
 
 Serialize local verification with the whole-machine `/tmp/agentdeck-test.lock`
-before running unit tests, E2E, or the transport smoke. Record the owning PID,
+before running unit tests or the transport smoke. Run E2E through `npm run e2e`
+(machine-wide queue, see 「E2E 排队与 Windows 远程跑」), not with that lock. Record the owning PID,
 branch and start time in `owner`, and remove that file and directory on exit.
 
 Run `node scripts/fleet-two-machine-smoke.js --ssh winpc --report /absolute/report.md`
@@ -1256,7 +1436,7 @@ Both paths use the same code on macOS and Windows (agy's Windows config is `%USE
 
 A prompt that carries an image path (for example a screenshot) is turned into an attachment by Claude Code, which says "Pasting…" in its footer while it reads the file and drops an Enter pressed meanwhile. AgentDeck therefore waits (at most 30 s) until that footer is gone before it presses Enter, so the task is submitted instead of sitting in the input box.
 
-The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. When every Claude seat, Codex, Cursor and Gemini is exhausted or below the threshold and work must not stop, the briefing lets the Captain open a pay-as-you-go DeepSeek-backed Claude Code (`claude-ds` by absolute path, Mac only) for simple to medium work; it is outside every measured quota pool, so it opens while the subscriptions wait. Notification and token-saver controls share the Settings dialog.
+The Captain briefing is static across turns and context resets; it is a short core, and the rules below live in the rule files it names (`briefing --topic <name>`). Claude workers must use an explicit `--model claude-opus-5-5`, `--model claude-sonnet-5-5` or `--model claude-haiku-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. When every Claude seat, Codex, Cursor and Gemini is exhausted or below the threshold and work must not stop, the briefing lets the Captain open a pay-as-you-go DeepSeek-backed Claude Code (`claude-ds` by absolute path, Mac only) for simple to medium work; it is outside every measured quota pool, so it opens while the subscriptions wait. Notification and token-saver controls share the Settings dialog.
 
 Claude's macOS quota reader and seat-isolated Relay are described in
 [Claude usage API](docs/claude-usage-api.md). Claude percentages in quota UI and

@@ -229,6 +229,9 @@ test('peek sends the id and default or requested row count and prints only live 
 test('Captain stop/archive and tell flags use the authenticated request channel', async () => {
   for (const [args, expected] of [
     [['new', '--title', 'US2 task', '--task', 'Inspect', '--seat', 'us2'], { action: 'main-new', seatId: 'us2' }],
+    // --seat also takes the account signed in there: the part before the @, or the whole address.
+    [['new', '--title', 'By account', '--task', 'Inspect', '--seat', 'taylor.h+work_1'], { action: 'main-new', seatId: 'taylor.h+work_1' }],
+    [['new', '--title', 'By address', '--task', 'Inspect', '--seat', 'Taylor0421us@example.com'], { action: 'main-new', seatId: 'Taylor0421us@example.com' }],
     [['new', '--title', 'Review', '--task', 'Inspect', '--project', '登录项目', '--reviews', 'worker-a, worker-b,worker-a'], { action: 'main-new', title: 'Review', task: 'Inspect', project: '登录项目', reviews: ['worker-a', 'worker-b'] }],
     [['stop', '--id', 'worker'], { action: 'main-stop', to: 'worker' }],
     [['archive', '--id', 'worker'], { action: 'main-archive', to: 'worker' }],
@@ -258,7 +261,7 @@ test('Captain stop/archive and tell flags use the authenticated request channel'
 });
 
 test('new rejects empty project names and malformed review declarations before requesting', async () => {
-  for (const options of [['--project'], ['--project='], ['--reviews'], ['--reviews='], ['--reviews', 'a,'], ['--reviews', '../a'], ['--seat'], ['--seat', '../bad']]) {
+  for (const options of [['--project'], ['--project='], ['--reviews'], ['--reviews='], ['--reviews', 'a,'], ['--reviews', '../a'], ['--seat'], ['--seat', '../bad'], ['--seat', 'a b'], ['--seat', 'a/b'], ['--seat', 'a;b'], ['--seat', 'x'.repeat(255)]]) {
     const result = await runCli(['new', '--title', 'Review', '--task', 'Inspect', ...options], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
     assert.equal(result.code, 1);
     assert.match(result.stderr, /new --(project|reviews|seat) requires/);
@@ -359,7 +362,8 @@ test('queue list/cancel send Captain requests, validate ids and document replace
     const help = (await runCli(['help'], {})).stdout;
     assert.match(help, /queue cancel --task-id/); assert.match(help, /replaces a changed command\/model/);
     const prompt = require('../main-core').instructions('darwin');
-    assert.match(prompt, /queue list；queue cancel --task-id/);
+    assert.match(prompt, /queue list｜queue cancel --task-id/);
+    assert.match(require('./fixtures/captain-rulebook').topic('commands'), /queue list；queue cancel --task-id 卡片或排队id；同卡 new 换命令\/模型会替换，移到 done\/todo 撤队/);
     assert.equal(prompt, require('../main-core').instructions('darwin', 'dynamic note must stay out'));
   } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -602,5 +606,71 @@ test('inbox help and the Captain briefing say a report is read once the user saw
   assert.equal(help.code, 0);
   assert.match(help.stdout, /汇报自动挂到你这一轮回复：用户在对话里看过这轮回复就算已读，不进「做完了你还没看」/);
   const M = require('../main-core');
-  for (const platform of ['darwin', 'win32']) assert.match(M.instructions(platform, '', false, 30), /report（挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说）/);
+  for (const platform of ['darwin', 'win32']) assert.match(M.instructions(platform, '', false, 30), /inbox：找用户、要用户介入、向用户汇报结论/);
+  assert.match(require('./fixtures/captain-rulebook').topic('inbox'), /report（挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说）/);
+});
+
+test('todo list/status reuse authenticated Captain requests and preserve artifact paths', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-todo-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  const requests = [];
+  const server = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file)); requests.push(request);
+      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: '{"ok":true}' }));
+    }
+  }, 20);
+  const env = { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token' };
+  try {
+    assert.equal((await runCli(['todo', 'list'], env)).code, 0);
+    assert.equal((await runCli(['todo', 'status', '--id', 'td-test-cli-01', '--task-id', 'todo-test', '--status', 'done', '--files', '/tmp/a b.pdf,/tmp/book.epub'], env)).code, 0);
+    assert.equal(requests[0].action, 'main-todo'); assert.equal(requests[0].op, 'list');
+    assert.deepEqual(requests[1].input, { id: 'td-test-cli-01', taskId: 'todo-test', status: 'done', message: '', files: ['/tmp/a b.pdf', '/tmp/book.epub'] });
+    assert.equal(requests[1].token, 'test-token');
+    const bad = await runCli(['todo', 'status', '--id', 'td-test-cli-01', '--status', 'guessed'], env);
+    assert.notEqual(bad.code, 0); assert.match(bad.stderr, /requires/);
+    const denied = await runCli(['todo', 'list'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.notEqual(denied.code, 0); assert.match(denied.stderr, /Only conductor-managed terminals/);
+  } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- 小队长 ----
+test('new --sub-captain needs a project and reaches the app as subCaptain; create-child leaves the model to the app', async () => {
+  const dir = controlDir('agentdeck-sub-captain-cli-');
+  const server = serve(dir, (request) => ({ done: true, result: request.action === 'create-child' ? '已开子会话 c-board-kid「子会话」' : '已开新会话 c-board-sub「小队长」' }));
+  const env = { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' };
+  try {
+    for (const args of [['--sub-captain'], ['--sub-captain', '--project', ''], ['--sub-captain=yes', '--project', '秋招']]) {
+      const refused = await runCli(['new', '--title', '小队长', '--task', '统筹', ...args], env);
+      assert.equal(refused.code, 1, args.join(' '));
+      assert.match(refused.stderr, /--sub-captain|--project requires a value/);
+    }
+    assert.equal(server.requests.length, 0);
+    const made = await runCli(['new', '--title', '小队长', '--task', '统筹', '--sub-captain', '--project', '秋招'], env);
+    assert.equal(made.code, 0);
+    assert.equal(server.requests[0].action, 'main-new');
+    assert.equal(server.requests[0].subCaptain, true);
+    assert.equal(server.requests[0].project, '秋招');
+    // An ordinary new carries no subCaptain field at all.
+    await runCli(['new', '--title', '散活', '--task', 'x'], env);
+    assert.equal('subCaptain' in server.requests[1], false);
+    // A 小队长's create-child returns at once; with no --agent the app picks its model.
+    const child = await runCli(['create-child', '--title', '子会话', '--task', '做一件事'], env);
+    assert.equal(child.code, 0);
+    assert.match(child.stdout, /已开子会话 c-board-kid/);
+    assert.equal(server.requests[2].action, 'create-child');
+    assert.equal(server.requests[2].agent, '');
+    await runCli(['create-child', '--title', '子会话', '--task', '做一件事', '--agent', 'codex'], env);
+    assert.equal(server.requests[3].agent, 'codex');
+    assert.match((await runCli(['help'], {})).stdout, /--sub-captain \(needs --project\)/);
+    // A 小队长's final delivery is marked; any other complete carries no such field.
+    await runCli(['complete', '--result', '阶段一'], env);
+    assert.equal('final' in server.requests[4], false);
+    await runCli(['complete', '--result', '最终交付', '--final'], env);
+    assert.equal(server.requests[5].final, true);
+    const odd = await runCli(['complete', '--result', 'x', '--final=yes'], env);
+    assert.equal(odd.code, 1);
+    assert.match(odd.stderr, /--final takes no value/);
+  } finally { server.stop(); }
 });

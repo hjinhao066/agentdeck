@@ -11,6 +11,20 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
    platforms share this repository; do not create divergent Windows/Mac copies.
 3. Implement the complete change and add regression tests for meaningful bugs.
    Feature branches run `npm test` plus the E2E specs that cover the change.
+   **Run E2E only through `npm run e2e -- <spec>` (or `npm run test:smoke` /
+   `test:e2e`), never bare `playwright test`**: one machine-wide queue lets a single
+   group run at a time so 20 sessions do not stall the Mac; wait for your turn, do
+   not remove its lock. To use the Windows PC instead, `node scripts/e2e-remote-win.js
+   <branch> <spec>` (README 「E2E 排队与 Windows 远程跑」).
+   To spare a loaded Mac, run `node scripts/e2e-auto.js tests/e2e/a.spec.js [b.spec.js] [-- playwright args]`:
+   specs carrying a Windows platform skip (`test.skip(process.platform === 'win32', ...)`) go through
+   the local queue; the others go to the Windows PC as one group, in the background over ssh (a
+   non-desktop session, so no window appears), and fall back to the local queue when ssh or the
+   remote setup fails. Windows tests the working tree as it is now, a dirty tree included. A test
+   failing on Windows stays a failure (it is not re-run on the Mac); a spec that only works on
+   macOS/POSIX needs the platform skip above. Measured numbers and the recommended
+   `AGENTDECK_E2E_SLOTS`: `docs/e2e-windows-background.md`; re-measure with
+   `scripts/perf-e2e-benchmark.js`.
    A patch release runs `npm test` and `npm run test:smoke` (see README 发版流程).
    Full `npm run test:e2e` runs overnight or on another machine. Run `npm audit`
    before packaging. Run the packaged E2E suite when runtime, preload, native
@@ -52,7 +66,8 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   session output, screenshots containing user data, keys, or installed bundles.
 - Managed terminal tokens provide app-level routing, not an OS sandbox against
   programs running as the same user. Never inherit control tokens into manual columns
-  (the one exception is the 队长 column, which the user creates explicitly).
+  (the exceptions are the 队长 column, which the user creates explicitly, and a 小队长
+  the 队长 opens with `new --sub-captain`, whose token is limited to its own children).
 - Chat view: the xterm of a chat-mode column stays mounted (hidden, never
   `display:none`) so PTY size, status dots and notifications keep working. Bubbles
   hold only the user prompt and the agent's final reply. Left/right swipe between
@@ -115,9 +130,13 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   a protected row pinned above the folders (selecting it shows its conversation);
   that row is never dragged, filed into a folder, archived or deleted like an
   ordinary session, and the top 队长 entry stays for creating/jumping. Its terminal is
-  the only manual column spawned with a control token; `main-*` board actions are
-  accepted only from that column. Columns it drives never get a control token;
-  every column has a separate capability restricted to submitting its own
+  the only manual column spawned with a full control token; `main-*` board actions are
+  accepted only from that column. Columns it drives never get a control token, except a
+  小队长 it opens with `new --sub-captain` (`docs/sub-captain.md`): that token reaches only
+  `MainSession`'s SUB_ACTIONS, and only on sessions whose `subCaptainId` is that 小队长.
+  Its children's receipts wait in `mainSession.subReceipts[id]`, never in the 队长's pending;
+  archiving or closing it never ends a child, it hands them back (`releaseSubCrew`).
+  Every column has a separate capability restricted to submitting its own
   complete/ask/progress commands. Nothing new
   is exposed to the page: the existing board request channel carries it.
 - 自动回执入口 (`automation-core.js`, `docs/automation-receipt.md`): the only door for scheduled
@@ -128,6 +147,15 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   fields, rate limited, stoppable and resettable in Settings. A caller-supplied `automation` marker is
   dropped; the page honors it only from the gate's own stamp (empty `callerId`). Never let a script
   borrow the phone page, a terminal token or the user's identity.
+- Captain prompt (`MainCore.instructions`, `captain-rules.js`, `docs/captain/*.md`): the pasted
+  prompt is only the core (identity, red lines, one line per command, the "before X read Y"
+  list), at most `MainCore.CORE_LIMIT` characters. Every other rule is in a rule file read with
+  `briefing --topic <name>`; `MainCore.BRIEFING_TOPICS` and the files must match. Never drop a
+  rule to make room: move it to a rule file and add its trigger. A rule the program enforces
+  stays out of the core. A user's `~/.agents/captain/<topic>.md` is appended, never a
+  replacement. A new model context (new Captain, clear, Relay) gets the core; an app restart
+  that brings the same conversation back (`mainSession.briefed` matches) gets only
+  `MainCore.restartNotice`, never the prompt again.
 - Task boards (`task-board.js`, `task-heartbeat.js`): shared UTF-8 JSON in
   `~/.agents/boards/tasks`, fresh reads and atomic writes; invalid synced JSON
   is never overwritten. UI uses the fixed `TaskBoard` bridge documented in
@@ -164,6 +192,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   while asleep or offline. Tests drive the clock and the events, never a real sleep. After a wake
   `receipts --wait` must stay waiting: the registry's `wake()` restarts every listener's timer, and
   every other exit prints its reason (only app restart / ended Captain terminal / `--timeout` stay silent).
+  A Claude "Not logged in" on a seat that a fresh check finds signed in is a blip, not a logout: the same
+  rules carry it (evidence `login`: about a minute, one nudge); only the same error below that nudge is a
+  failure receipt. A seat found signed out still gets the ordinary 未登录 receipt at once.
 - Relay handoff (`relay-handoff-core.js`, `docs/relay-handoff.md`): the app rewrites
   `agentdeck-captain-handoff.md` whole from one snapshot (board cards, dispatch records,
   live sessions, unread receipts); the Captain's `agentdeck-captain-decisions.md` is only

@@ -29,6 +29,29 @@
     const id = window.MainSession.mainCol()?.claudeSeatId || S.active(host.config).id;
     return host.config.claudeSeats.find((s) => s.id === id) || S.active(host.config);
   }
+  // What every seat list shows for a seat: the account signed in behind its directory
+  // (ClaudeSeatsCore.seatDisplay). Until the main process has answered once, the account
+  // remembered in the quota store stands in.
+  function display(seatId) {
+    const seat = host.config.claudeSeats.find((s) => s.id === seatId);
+    if (!seat) return null;
+    const stored = host.config.quotas?.[window.QuotaCore.seatKey(seatId)];
+    return S.seatDisplay(seat, seats.find((s) => s.id === seatId) || { accountEmail: stored?.account, plan: stored?.plan });
+  }
+  // The configured seats plus who is signed in behind each, for QuotaCore's rows and text.
+  function described(list) {
+    return (Array.isArray(list) ? list : []).map((s) => {
+      const stored = host?.config.quotas?.[window.QuotaCore.seatKey(s.id)];
+      return { ...s, info: seats.find((i) => i.id === s.id) || { accountEmail: stored?.account, plan: stored?.plan } };
+    });
+  }
+  // In a sentence: the account name; a seat without a recognised account also says which seat it is.
+  function seatName(id) {
+    if (id === 'chatgpt') return host.config.captainRelayCodex.name;
+    const shown = display(id);
+    return !shown ? id : shown.email ? shown.label : `${shown.label}（${shown.code}）`;
+  }
+  const currentTitle = () => { const seat = current(); return seat.id === 'chatgpt' ? seat.name : display(seat.id)?.title || seat.name; };
   function isClaude(col) {
     if (!col) return false;
     if (col.isMain && window.MainSession.state()?.relayTargetId === 'chatgpt') return false;
@@ -43,29 +66,28 @@
     b.classList.add('claude-seat-rotate');
     b.disabled = switching;
     b.setAttribute('aria-haspopup', 'dialog');
-    const seat = current(), info = seats.find((s) => s.id === seat.id);
-    b.title = `${label()} · 当前 ${seat.name}${info?.maskedEmail ? ' · ' + info.maskedEmail : ''}`;
+    b.title = `${label()} · 当前 ${currentTitle()}`;
     return b;
   }
   // fresh: ask each seat's CLI again now instead of using the ten-minute answer.
   async function refresh(fresh = false) {
     host.flushConfig();
-    const before = JSON.stringify(seats.map((s) => [s.id, accountCheck(s.id)]));
+    const accounts = () => JSON.stringify(host.config.claudeSeats.map((s) => [s.id, accountCheck(s.id), display(s.id)]));
+    const before = seats.length ? accounts() : '';
     seats = await window.deck.claudeSeats(fresh);
-    if (JSON.stringify(seats.map((s) => [s.id, accountCheck(s.id)])) !== before) window.dispatchEvent(new CustomEvent('claude-seat-accounts'));
+    if (accounts() !== before) window.dispatchEvent(new CustomEvent('claude-seat-accounts'));
     warmups = await window.deck.claudeWarmupStatus();
     await Promise.all(seats.map(async (info) => {
       const configured = host.config.claudeSeats.find((s) => s.id === info.id);
       if (!configured) return;
       window.QuotaCore.observe(host.config.quotas, { provider: 'Claude', scope: 'claude', seatId: info.id,
-        at: Date.now(), identityOnly: true, configDir: configured.configDir, accountKey: info.accountKey, account: info.maskedEmail,
+        at: Date.now(), identityOnly: true, configDir: configured.configDir, accountKey: info.accountKey, account: info.accountEmail, plan: info.plan,
         credentialKey: info.credentialKey });
       const usage = await window.deck.claudeSeatUsage(info.id);
       if (usage) acceptUsage(info.id, usage);
     }));
     document.querySelectorAll('.claude-seat-rotate').forEach((b) => {
-      const seat = current(), info = seats.find((s) => s.id === seat.id);
-      b.title = `${label()} · 当前 ${seat.name}${info?.maskedEmail ? ' · ' + info.maskedEmail : ''}`;
+      b.title = `${label()} · 当前 ${currentTitle()}`;
       b.setAttribute('aria-label', label());
       b.disabled = switching;
     });
@@ -84,7 +106,7 @@
       catch (_) { host.showToast('登录命令复制失败，请重试'); return; }
       b.innerHTML = host.ICONS.check; clearTimeout(b.copiedTimer);
       b.copiedTimer = setTimeout(() => { b.innerHTML = host.ICONS.copy; }, 1400);
-      host.showToast(`已复制 ${info.name} 的登录命令，在普通终端运行。${email() ? `授权页右上角的账号要是 ${email()}，不是就先在网页里切换账号再授权。` : ''}`);
+      host.showToast(`已复制 ${seatName(info.id)} 的登录命令，在普通终端运行。${email() ? `授权页右上角的账号要是 ${email()}，不是就先在网页里切换账号再授权。` : ''}`);
     });
     const label = () => { b.title = `复制登录命令${email() ? `（应登录 ${email()}）` : ''}`; b.setAttribute('aria-label', b.title); };
     b.classList.add('seat-login-copy'); label();
@@ -107,22 +129,26 @@
     if (switching) return;
     try { await refresh(); } catch (_) { host.showToast('席位配置读取失败，请检查设置'); return; }
     const d = dialog('claudeSeatMenu', label());
-    d.append(node('p', 'seat-current', `当前：${current().name}`));
+    d.append(node('p', 'seat-current', `当前：${seatName(current().id)}`));
     const choices = [...seats, { id: 'chatgpt', name: host.config.captainRelayCodex.name, icon: '', loggedIn: true }];
     for (const seat of choices) {
       const selected = seat.id === current().id;
       const b = node('button', 'seat-choice');
-      const icon = node('span', 'seat-account-icon', seat.icon);
-      if (seat.id === 'chatgpt') icon.innerHTML = window.AgentInfo.PROVIDER_ICONS.Codex;
+      const icon = node('span', 'seat-account-icon');
+      // Every row leads with its provider's mark: a seat is told apart by its account, not by a fixed flag.
+      icon.innerHTML = window.AgentInfo.PROVIDER_ICONS[seat.id === 'chatgpt' ? 'Codex' : 'Claude'];
       const check = seat.id === 'chatgpt' ? null : accountCheck(seat.id);
-      const text = node('span', 'seat-choice-text');
-      text.append(node('span', '', `${seat.name}${selected ? ' · 当前' : seat.loggedIn ? '' : seat.loginReason ? ' · 需登录' : ' · 待核实'}`));
-      if (check && check.state !== 'login') text.append(node('span', `seat-account ${check.state}`, check.text));
+      const text = node('span', 'seat-choice-text'), shown = seat.id === 'chatgpt' ? null : display(seat.id);
+      // A dialog has room for the whole address; the narrow sidebar shows the part before the @.
+      const state = selected ? ' · 当前' : seat.loggedIn ? '' : !seat.loginReason ? ' · 待核实' : shown.email ? ' · 需登录' : '';   // 未登录 already says it
+      text.append(node('span', 'seat-who', `${shown ? shown.email || shown.label : seat.name}${state}`));
+      // Second line: the wrong-account warning, the plan, and the seat code `--seat` takes.
+      if (check) text.append(node('span', `seat-account ${check.state}`, [check.state === 'mismatch' ? check.text : '', shown.plan, '席位 ' + shown.code].filter(Boolean).join(' · ')));
       b.append(icon, text);
       b.type = 'button'; b.dataset.seatId = seat.id;
       if (check) b.dataset.account = check.state;
       b.setAttribute('aria-pressed', String(selected));
-      b.title = seat.id === 'chatgpt' ? `${seat.name} · Codex GPT-6.1 Sol` : `${seat.name} · ${seat.loginReason || seat.authReason || check.text}`;
+      b.title = seat.id === 'chatgpt' ? `${seat.name} · Codex GPT-6.1 Sol` : [shown.title, seat.loginReason || seat.authReason || (check.state === 'mismatch' ? check.text : '')].filter(Boolean).join(' · ');
       b.disabled = !seat.loggedIn || selected;
       b.addEventListener('click', async () => { d.close(); await switchSeat(seat.id); });
       d.append(b);
@@ -175,7 +201,9 @@
       const check = accountCheck(s.id) || { state: 'login', text: '需登录' };
       row.dataset.account = check.state;
       const head = node('div', 'seat-setting-head');
-      head.append(node('strong', '', s.name), node('span', `seat-account ${check.state}`, check.text));
+      const shown = display(s.id), who = node('strong', '', shown.email || shown.label);
+      who.title = shown.title;
+      head.append(who, node('span', `seat-account ${check.state}`, [check.state === 'mismatch' || (check.state === 'login' && shown.email) ? check.text : '', shown.plan, '席位 ' + shown.code].filter(Boolean).join(' · ')));
       const seatName = field('席位名称', s.name), icon = field('席位图标', s.icon), dir = field('配置目录', s.configDir);
       const email = field('应登录邮箱', s.email || '');
       email.input.type = 'email'; email.input.dataset.seatEmail = s.id; email.input.placeholder = 'name@example.com';
@@ -217,7 +245,7 @@
     try {
       await refresh();
       const target = id === 'chatgpt' ? { id, loggedIn: true } : seats.find((s) => s.id === id);
-      if (!target?.loggedIn) { options.reason = '这个账号还没登录，要回电脑上登录'; host.showToast(`${target?.name || id}：${target?.loginReason || target?.authReason || '席位不存在'}${target?.loginReason ? '，请在此席位配置目录下登录' : ''}`); return false; }
+      if (!target?.loggedIn) { options.reason = '这个账号还没登录，要回电脑上登录'; host.showToast(`${seatName(id)}：${target?.loginReason || target?.authReason || '席位不存在'}${target?.loginReason ? '，请在此席位配置目录下登录' : ''}`); return false; }
       if (window.MainSession.mainCol() !== col || hasDraft(col)) { options.reason = '切换前队长或它的输入框变了，没有切换'; return false; }
       let decision = options.decision;
       if (options.automatic || options.validateRotation) {
@@ -227,7 +255,7 @@
         if (decision?.targetId !== id || (options.validateRotation && decision.targetId === P.CODEX_ID)) return false;
       }
       const from = current(), at = Date.now();
-      const message = rotationMessage(from.name, id === 'chatgpt' ? host.config.captainRelayCodex.name : target.name, decision, at, options.automatic);
+      const message = rotationMessage(seatName(from.id), seatName(id), decision, at, options.automatic);
       const snapshot = { colId: col.id, chat: window.ChatUI.snapshotForHandoff(col.id), tasks: window.MainSession.state().tasks, relayMessage: message };
       const board = window.MainSession.checkpointForSeatSwitch
         ? await window.MainSession.checkpointForSeatSwitch(snapshot, { local: options.automatic })
@@ -333,13 +361,13 @@
     const message = banner.querySelector('.quota-message'), actionButton = banner.querySelector('.quota-seat-action');
     const selected = action.targetId && host.config.claudeSeats.find((seat) => seat.id === action.targetId);
     if (selected) {
-      message.textContent = `${current().name}额度用尽，下一可用席位 ${selected.name}`;
+      message.textContent = `${seatName(current().id)}额度用尽，下一可用席位 ${seatName(selected.id)}`;
       actionButton.disabled = false;
-      actionButton.title = `${label()}到${selected.name}`;
+      actionButton.title = `${label()}到${seatName(selected.id)}`;
       actionButton.setAttribute('aria-label', actionButton.title);
     } else {
       const recovery = action.recoveryAt ? `；最早恢复 ${recoveryLabel(action.recoveryAt)}` : '；最早恢复时间未知';
-      message.textContent = `${current().name}额度用尽，没有可用席位${recovery}`;
+      message.textContent = `${seatName(current().id)}额度用尽，没有可用席位${recovery}`;
       actionButton.disabled = true;
       actionButton.title = message.textContent;
       actionButton.setAttribute('aria-label', '没有可用席位');
@@ -495,7 +523,7 @@
     const reset = entry?.newResetAt > Date.now() ? new Date(entry.newResetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '未知';
     if (!detail && entry?.warmAt) detail = `\n已预热 · 下次重置 ${reset}`;
     const now = Date.now();
-    const candidates = seats.map((info) => ({ ...info, ...P.seatQuota(host.config.quotas?.[window.QuotaCore.seatKey(info.id)],
+    const candidates = seats.map((info) => ({ ...info, name: seatName(info.id), ...P.seatQuota(host.config.quotas?.[window.QuotaCore.seatKey(info.id)],
       { ...info, configuredDir: host.config.claudeSeats.find((s) => s.id === info.id)?.configDir }, now) }));
     return detail + '\n' + P.strategyText({ settings: host.config.perpetualCaptain, state: host.config.perpetualCaptainState, currentId: current().id, seats: candidates, warmups, now });
   }
@@ -515,7 +543,8 @@
       seats: choices.map((choice) => {
         const codex = choice.id === P.CODEX_ID, seat = codex ? null : host.config.claudeSeats.find((s) => s.id === choice.id);
         const row = rows.find((r) => codex ? r.provider === 'Codex' : r.key === window.QuotaCore.seatKey(choice.id));
-        return { ...choice, provider: codex ? 'Codex' : 'Claude', name: codex ? codexName() : seat?.name || choice.id,
+        // The phone lists seats by account name (the part before the @); the address itself stays masked.
+        return { ...choice, provider: codex ? 'Codex' : 'Claude', name: codex ? codexName() : seat ? seatName(choice.id) : choice.id,
           account: codex ? row?.account || '' : seats.find((s) => s.id === choice.id)?.maskedEmail || '', cells: row?.cells || [] };
       }) };
   }
@@ -529,7 +558,7 @@
     if (!choice) throw new Error('这台电脑上没有这个账号');
     if (!choice.selectable) throw new Error({ current: '队长已经在这个账号上了', login: '这个账号还没登录，要回电脑上登录',
       onboarding: '这个账号还停在首次启动的引导，要回电脑上处理', exhausted: '这个账号的额度已经用完', low: '这个账号的额度快用完了' }[choice.reason] || '这个账号现在不能用');
-    const name = (id) => id === P.CODEX_ID ? codexName() : host.config.claudeSeats.find((s) => s.id === id)?.name || id;
+    const name = (id) => id === P.CODEX_ID ? codexName() : seatName(id);
     const job = mobileJob = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 10), status: 'switching', fromId: from.id, fromName: name(from.id),
       targetId: choice.id, targetName: name(choice.id), startedAt: Date.now(), finishedAt: null, error: '' };
     const options = {};
@@ -539,5 +568,5 @@
     });
     return { started: true, id: job.id };
   }
-  window.ClaudeSeats = { init, mobileState, mobileSwitch, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail, automaticTick, accountCheck };
+  window.ClaudeSeats = { init, mobileState, mobileSwitch, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail, automaticTick, accountCheck, display, described, seatName };
 })();

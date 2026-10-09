@@ -7,6 +7,7 @@ const path = require('path');
 const vm = require('vm');
 const { TaskStore } = require('../task-board');
 const M = require('../main-core');
+const { rulebook } = require('./fixtures/captain-rulebook');
 const B = require('../board-core');
 const Battery = require('../battery-core');
 
@@ -441,11 +442,13 @@ test('without BatteryCore (an old page) there is no battery setting to read or c
 
 test('the Captain briefing lists settings battery once, the board CLI help documents it, and the page serves the phone ops', () => {
   for (const platform of ['darwin', 'win32']) {
-    const brief = M.instructions(platform);
-    assert.equal(brief.split('settings battery').length - 1, 1, platform);
+    // one line in the core's command list; the flags are in the commands rule file
+    const core = M.instructions(platform), brief = rulebook(platform);
+    assert.equal(core.split('settings battery').length - 1, 1, platform);
+    assert.match(core, /capacity：[^\n]*电池模式（用户说「强度拉满」）/);
     assert.match(brief, /settings battery \[--boost on\|off \[--for 2h\|--until 23:59\]\] \[--mode off\|auto\] \[--cap 1-10\]/);
     assert.match(brief, /用户说「强度拉满」就 --boost on/);
-    assert.ok((brief + M.SAVER_RESUME).length <= M.BRIEFING_LIMIT, platform);
+    assert.ok((core + M.SAVER_RESUME).length <= M.CORE_LIMIT, platform);
   }
   const cli = fs.readFileSync(path.join(__dirname, '..', 'board-cli.js'), 'utf8');
   assert.match(cli, /settings battery \[--boost on\|off \[--for 90m\|2h \| --until 23:59\]\] \[--mode off\|auto\] \[--cap 1-10\]/);

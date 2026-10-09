@@ -121,15 +121,15 @@ for (const theme of ['dark', 'light']) {
     await mobile.locator('#drawer-close').click();
     await mobile.locator('#tabbar').getByRole('button', { name: '更多' }).click();
     await expect(mobile.locator('#switch-entry')).toContainText('切换队长');
-    await expect(mobile.locator('#switch-entry-text')).toHaveText('Claude CN');
+    await expect(mobile.locator('#switch-entry-text')).toHaveText('Claude cn');
     await screenshot(`single-switch-${theme}-1-before`);
     await mobile.locator('#switch-entry').click();
 
     await expect(sheet()).toBeVisible();
     expect(await sheet().evaluate((el) => el.matches(':modal'))).toBe(true);
     await expect(sheet().getByRole('heading')).toHaveText('切换队长');
-    await expect(sheet()).toContainText('队长现在用的是 Claude CN，要换到哪个账号？');
-    await expect(sheet().locator('.seat-name')).toHaveText(['Claude CN', 'Claude US', 'Claude US2', 'ChatGPT']);
+    await expect(sheet()).toContainText('队长现在用的是 Claude cn，要换到哪个账号？');
+    await expect(sheet().locator('.seat-name')).toHaveText(['Claude cn', 'Claude us', 'Claude 未登录（us2）', 'ChatGPT']);
     await expect(option('cn')).toContainText('队长在用');
     await expect(option('cn')).toHaveAttribute('aria-disabled', 'true');
     await expect(option('us')).toContainText('u***@example.test');
@@ -145,7 +145,7 @@ for (const theme of ['dark', 'light']) {
 
     await option('us').click();
     await expect(sheet().getByRole('heading')).toHaveText('确认切换队长？');
-    await expect(sheet().locator('.sheet-route')).toHaveAttribute('aria-label', '从 Claude CN 换到 Claude US');
+    await expect(sheet().locator('.sheet-route')).toHaveAttribute('aria-label', '从 Claude cn 换到 Claude us');
     await expect(sheet()).toContainText('它没存下来的内容会丢');
     await auditSheet();
     await screenshot(`single-switch-${theme}-3-confirm`);
@@ -154,9 +154,9 @@ for (const theme of ['dark', 'light']) {
     expect((await relayState()).job).toBe(null);
     await sheet().getByRole('button', { name: '确认切换', exact: true }).click();
 
-    await expect(sheet().getByRole('heading')).toHaveText(/^(正在切换队长|已换到 Claude US)$/);
+    await expect(sheet().getByRole('heading')).toHaveText(/^(正在切换队长|已换到 Claude us)$/);
     if (await sheet().locator('#switch-elapsed').count()) await screenshot(`single-switch-${theme}-4-switching`);
-    await expect(sheet().getByRole('heading')).toHaveText('已换到 Claude US', { timeout: 90000 });
+    await expect(sheet().getByRole('heading')).toHaveText('已换到 Claude us', { timeout: 90000 });
     await auditSheet();
     await screenshot(`single-switch-${theme}-5-done`);
 
@@ -179,7 +179,7 @@ for (const theme of ['dark', 'light']) {
     await expect.poll(async () => (await (await mobile.request.get(url + '/api/captain')).json()).id, { timeout: 15000 }).toBe(captainId);
     await expect(mobile.locator('#captain-turns')).not.toContainText('原队长测试回复', { timeout: 15000 });
     await mobile.locator('#tabbar').getByRole('button', { name: '更多' }).click();
-    await expect(mobile.locator('#switch-entry-text')).toHaveText('Claude US', { timeout: 15000 });
+    await expect(mobile.locator('#switch-entry-text')).toHaveText('Claude us', { timeout: 15000 });
     // A message from the phone reaches the new Captain.
     await mobile.locator('#tabbar').getByRole('button', { name: '对话' }).click();
     await idle();
@@ -202,7 +202,7 @@ test('a switch the desktop cannot do fails in plain words and the original Capta
   await sheet().getByRole('button', { name: '确认切换', exact: true }).click();
   await expect(sheet().getByRole('heading')).toHaveText('队长没有换成', { timeout: 30000 });
   await expect(sheet().getByRole('alert')).toHaveText('电脑上队长的输入框里还有没发出去的内容，要先在电脑上发出或清空');
-  await expect(sheet()).toContainText('队长现在用的还是 Claude CN，没有变化。');
+  await expect(sheet()).toContainText('队长现在用的还是 Claude cn，没有变化。');
   await auditSheet();
   await screenshot('single-switch-dark-7-failed');
   const state = await relayState();
@@ -236,6 +236,6 @@ test('a switch the desktop cannot do fails in plain words and the original Capta
   const again = await post('/api/relay', { seatId: 'us2' });
   expect(again.status()).toBe(409);
   expect((await again.json()).error).toMatch(/^(电脑正在切换队长，等它结束再试|这个账号还没登录，要回电脑上登录)$/);
-  await expect(sheet().getByRole('heading')).toHaveText('已换到 Claude US', { timeout: 90000 });
+  await expect(sheet().getByRole('heading')).toHaveText('已换到 Claude us', { timeout: 90000 });
   expect((await relayState()).currentId).toBe('us');
 });

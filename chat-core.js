@@ -37,7 +37,8 @@
     for (const ch of String(s)) w += isWide(ch) ? 2 : 1;
     return w;
   }
-  const rtrim = (s) => s.replace(/\s+$/, '');
+  // trimEnd strips exactly what /\s+$/ does, without its quadratic backtracking on a long blank run.
+  const rtrim = (s) => s.trimEnd();
   // Old prompt recordings could treat xterm SGR mouse reports as typed text
   // after dropping ESC[. Only scrub runs of reports, so a quoted single
   // sequence in an actual prompt remains intact.
@@ -69,7 +70,13 @@
     return false;
   }
 
-  function promptGlyphs(s) { return s.replace(/^[\s│┃|>❯›$%#]+/, '').replace(/[\s│┃|]+$/, ''); }
+  // The tail is cut by a loop: /[\s│┃|]+$/ backtracks quadratically on a long blank run.
+  function promptGlyphs(s) {
+    const head = s.replace(/^[\s│┃|>❯›$%#]+/, '');
+    let end = head.length;
+    while (end > 0 && /[\s│┃|]/.test(head[end - 1])) end--;
+    return head.slice(0, end);
+  }
 
   // Index of the last row of the echoed prompt, or -1 if it can't be found.
   function findPromptEcho(lines, userText) {
@@ -213,7 +220,8 @@
     let lines = turnLines(screenLines, userText);
     // a bare shell prompt left on the last row is not output
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    if (lines.length && /(?:@\S+.*|\S+)\s[%$#>]$/.test(lines[lines.length - 1].trim()) && lines[lines.length - 1].trim().length < 80) lines.pop();
+    // Length first: on one long joined line the prompt pattern backtracks quadratically.
+    if (lines.length && lines[lines.length - 1].trim().length < 80 && /(?:@\S+.*|\S+)\s[%$#>]$/.test(lines[lines.length - 1].trim())) lines.pop();
     const hasBullets = lines.some((l) => BULLET.test(l));
     let kept;
     if (hasBullets) {
@@ -318,6 +326,27 @@
   function pasteBusy(screen) {
     const rows = String(screen || '').split('\n').map((row) => row.trim()).filter(Boolean);
     return /^Pasting(?:…|\.{3})$/.test(rows.at(-1) || '');
+  }
+  // Is an instruction just typed still in the agent's input box, its Enter lost while the TUI was
+  // busy? Only a positive sighting counts: the rows above the last rule on screen, back to the rule
+  // before it (or the top of the screen when the box is taller than that), end with the end of the
+  // text we typed. A menu, an empty box or anyone else's text is no.
+  const BOX_RULE = /^[\s╭╰]*[─━═]{8,}[\s╮╯]*$/;
+  function promptLeftInBox(screen, sent) {
+    const rows = String(screen || '').split('\n');
+    const bottom = rows.findLastIndex((row) => BOX_RULE.test(row));
+    if (bottom < 1) return false;
+    let top = bottom - 1;
+    while (top >= 0 && !BOX_RULE.test(rows[top])) top--;
+    const box = rows.slice(top + 1, bottom);
+    if (top >= 0 && !/^[\s│┃]*[>❯›]\s/.test(box[0] || '')) return false;
+    if (box.some((row) => /^[\s│┃]*[>❯›][\t \u00a0]*\d+\./.test(row))) return false;
+    const flat = (text) => String(text || '').replace(/[\s│┃]+/g, '');
+    const inBox = flat(box.join('\n').replace(/^[\s│┃]*[>❯›]/, ''));
+    // A long paste is shown collapsed: "[Pasted text #1 +32 lines]".
+    if (/^(?:\[Pastedtext#\d+(?:\+\d+lines?)?\])+$/i.test(inBox)) return /\n/.test(sent) || String(sent).length > 800;
+    const tail = flat(sent).slice(-40);
+    return tail.length >= 8 && inBox.endsWith(tail);
   }
 
   // A terminal that has not asked for bracketed paste reads typed text a line at a time, and the
@@ -578,7 +607,7 @@
   }
 
   return {
-    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, promptLeftInBox, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
     // the reply as the chat view shows it

@@ -13,12 +13,29 @@ async function launch(barkNow) {
   page = await application.firstWindow();
   await expect(page.locator('.column')).toHaveCount(2);
   await expect.poll(() => application.evaluate(({ app }) => typeof app.testSeatAuthObserve)).toBe('function');
+  // The leftmost terminal takes the keyboard once, when it finishes mounting ("focus leftmost on
+  // boot" in renderer.js). On a slow machine that lands seconds after the window opens, and took
+  // the focus back from the copy button a test had just focused. Let it happen first.
+  await expect.poll(() => page.evaluate(() => typeof focusedId === 'string' && !!focusedId), { timeout: 20000 }).toBe(true);
 }
 async function observe(events) {
   await application.evaluate(({ app }, events) => {
     for (const [authStatus, at, provider = 'Claude'] of events) app.testSeatAuthObserve({ provider, scope: provider === 'Claude' ? 'claude' : 'codex',
       seatId: provider === 'Claude' ? 'us' : 'codex', configDir: provider === 'Claude' ? '~/.custom-us-seat' : '~/.codex', at, authStatus });
   }, events);
+}
+// Moves the pointer somewhere clear of a quota row and of its open detail. The detail's height
+// follows the platform's login command and the lines it lists (on Windows it once reached a
+// fixed "away" point), so the point is worked out from where the two really are.
+async function moveAway(row) {
+  const [x, y] = await row.evaluate((item) => {
+    const tip = item.querySelector('.quota-tooltip'), r = item.getBoundingClientRect();
+    const t = getComputedStyle(tip).display === 'none' ? r : tip.getBoundingClientRect();
+    const right = Math.max(t.right, r.right) + 60;
+    // Beside the detail when the window has room there, otherwise well above it.
+    return right < innerWidth - 10 ? [right, Math.round(innerHeight / 2)] : [Math.round((r.right + innerWidth) / 2), Math.max(10, Math.min(t.top, r.top) - 60)];
+  });
+  await page.mouse.move(x, y);
 }
 test.beforeEach(() => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-seat-auth-'));
@@ -48,7 +65,7 @@ test('confirmed logout sends one critical Bark, red 未登录 and a Captain ques
   expect(await alerts()).toHaveLength(0); await expect(row).not.toHaveAttribute('aria-label', /未登录/);
   await observe([['logged-out', base + 120000], ['logged-out', base + 130000]]);
   await expect.poll(async () => (await alerts()).length).toBe(1);
-  expect((await alerts())[0]).toMatchObject({ level: 'critical', volume: 4, body: expect.stringMatching(/US（us）席位掉登录.*任务会失败或排队/s) });
+  expect((await alerts())[0]).toMatchObject({ level: 'critical', volume: 4, body: expect.stringMatching(/Claude us（us）席位掉登录.*任务会失败或排队/s) });   // named by the account (us@example.test) that was signed in
   const command = require('../../seat-auth-alert').loginCommand('Claude', { configDir: '~/.custom-us-seat' }, os.homedir(), process.platform);
   expect((await alerts())[0].body).toContain(command);
   await expect(row).toHaveAttribute('data-state', 'danger');
@@ -235,7 +252,7 @@ test('the copy icon can be clicked by moving the mouse straight at it, and the d
     return last.className;
   })).toBe('qt-login');
   for (const start of ['[data-window="5h"] .quota-none', '.quota-name']) {
-    await page.mouse.move(600, 300); await expect(tip).toBeHidden();
+    await moveAway(row); await expect(tip).toBeHidden();
     const [x0, y0] = await centre(row.locator(start));
     await page.mouse.move(x0, y0); await expect(copy).toBeVisible();
     const [x1, y1] = await centre(copy);
@@ -252,7 +269,7 @@ test('the copy icon can be clicked by moving the mouse straight at it, and the d
     // The tick ends and the click's focus is released, so only the pointer keeps the detail open.
     await expect(copy).toHaveAttribute('aria-label', '复制登录命令');
     await expect.poll(() => page.evaluate(() => document.activeElement === document.body)).toBe(true);
-    await page.mouse.move(600, 300); await expect(tip).toBeHidden();
+    await moveAway(row); await expect(tip).toBeHidden();
   }
   // Cutting across the row above on the way does not swap in that row's detail.
   await page.evaluate(() => {
@@ -274,10 +291,10 @@ test('the copy icon can be clicked by moving the mouse straight at it, and the d
   await page.mouse.click(x1, y1);
   await expect(row.getByRole('button', { name: '已复制', exact: true })).toBeVisible();
   // A row that has no command keeps its plain hover: nothing lingers after the pointer leaves.
-  await page.mouse.move(600, 300); await expect(tip).toBeHidden();
+  await moveAway(row); await expect(tip).toBeHidden();
   const plain = page.locator('#quotaBar [data-quota-key="Codex"]');
   await plain.hover(); await expect(plain.locator('.quota-tooltip')).toBeVisible();
-  await page.mouse.move(600, 300);
+  await moveAway(plain);
   expect(await plain.locator('.quota-tooltip').isVisible()).toBe(false);
 });
 

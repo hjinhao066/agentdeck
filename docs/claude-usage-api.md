@@ -14,11 +14,18 @@ CN's default service is `Claude Code-credentials`. Other services append the fir
 No token crosses IPC or enters config/cache/logs. The reader never logs a raw
 exception or HTTP response, runs login/logout, or prints a credential. Requests
 refuse redirects and time out after 8 seconds. When the stored access token is
-expired and the refresh token is still in date, the reader posts one refresh to
-`https://platform.claude.com/v1/oauth/token` and writes the rotated credential
-back to that seat's Keychain item (macOS, secret on stdin) or credential file.
-A refresh that fails leaves the previous usage sample untouched. An idle seat
-therefore stays queryable after Claude itself has exited.
+expired and the refresh token is still in date, the reader renews it **only when no
+Claude runs on that seat**: a CLI on the seat renews its own token, and a second writer
+racing it for one Keychain item can sign that CLI out. The check is the quota warm-up's
+process inventory (AgentDeck's own Claude columns, including an idle Captain, and
+registered external sessions; anything it cannot place counts as busy). Renewal and
+AgentDeck starting a Claude on the same seat (a column's launch line, the warm-up's run)
+are serialized per seat, and the credential is read again inside that lock. The reader
+then posts one refresh to `https://platform.claude.com/v1/oauth/token` and writes the
+rotated credential back to that seat's Keychain item (macOS, secret on stdin) or
+credential file. With a Claude running on the seat the expired token is only read and
+the seat's numbers are 未知 until that session renews it. A refresh that fails leaves
+the previous usage sample untouched, so an idle seat stays queryable.
 
 Sampling happens on startup, about every five minutes, refresh-button clicks, and
 new CLI exhaustion observations for the affected seat. Concurrent requests for a
@@ -87,9 +94,9 @@ Relay keeps its existing durable checkpoint/new-column behavior. Config writes
 are flushed before the spawn IPC to avoid racing recently edited seat settings.
 
 Valid Keychain OAuth credentials work even without profile email metadata. An
-expired access token with a refresh token is still treated as logged in. The
-usage reader refreshes that token itself so an idle seat does not depend on a
-running Claude process. Missing credentials, malformed credentials, or an
+expired access token with a refresh token is still treated as logged in; the reader
+renews it when no Claude runs on the seat (above), otherwise its usage reads as 未知.
+Missing credentials, malformed credentials, or an
 expired access token without a live refresh token give a seat-specific login
 reason. A locked or unreadable Keychain gives a verification/access-permission
 reason, not a login instruction. Network, permission and ordinary usage-query

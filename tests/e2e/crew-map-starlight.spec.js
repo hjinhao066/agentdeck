@@ -360,7 +360,13 @@ test('状态标签完整显示: every card status is whole at 1920, 1440, 980 an
     expect(got.filter((g) => g.cut || g.over || g.badgeOut), `${w} ${theme}: statuses cut or run into something`).toEqual([]);
     await shot(`map-status-${w}-${theme}`);
   }
-  // A real model name with its seat fits beside the longest status, whole.
+  // A card shows the account signed in behind its seat as a small tag beside the model, named the way the sidebar
+  // names it (never a fixed seat name), in full on hover; the capsule's hover text names the account as well.
+  const seats = await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .cm-agent .agent-seat-label')].map((n) => ({ shown: getComputedStyle(n).display !== 'none', text: n.textContent.trim(), named: /^当前账号：/.test(n.title), capsule: n.closest('.cn-badge').title.includes(n.title) })));
+  expect(seats.length).toBeGreaterThan(0);
+  for (const seat of seats) expect(seat, seat.text).toEqual({ shown: true, text: expect.stringMatching(/\S/), named: true, capsule: true });
+  expect(seats.map((n) => n.text)).not.toContainEqual(expect.stringMatching(/^(CN|US|US2)$/i));
+  // A real model name with its account fits beside the longest status, whole.
   const rename = (name) => page.evaluate((n) => document.querySelectorAll('.cm-node:not(.kind-captain) .cm-agent .agent-model-label').forEach((l) => { l.textContent = n; }), name);
   await rename('Opus 5.5');
   expect((await statusLabels()).filter((g) => g.cut || g.over || g.badgeOut || g.badgeCut)).toEqual([]);

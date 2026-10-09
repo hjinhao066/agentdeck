@@ -71,6 +71,8 @@ function boot(w, persisted) {
     sendWhenReady(col, text, opts) { sent.push({ id: col.id, text: typeof text === 'function' ? text() : text }); opts?.onSent?.({ id: 'turn-' + sent.length }); },
   };
   window.MainSession.init(host);
+  // like the renderer once the Captain's terminal is back: w.resumed says its conversation came back too
+  window.MainSession.noteColdColumn(w.columns.find((c) => c.isMain), false, !!w.resumed);
   const app = {
     w, store, window, host, sent, entries, chats, api: window.MainSession, s: () => w.config.mainSession,
     captain: () => w.columns.find((c) => c.isMain),
@@ -116,8 +118,9 @@ test('after a Relay the card that is out is named with its owner, cannot be hand
   assert.match(note, /^你是刚接任的队长：上一任已经 Relay 到这个席位/);
   assert.match(note, /已有会话在做，不要重派/);
   assert.match(note, /先运行 node "\$AGENTDECK_BOARD_CLI" handoff 取交接快照/);
-  assert.match(note, /读看板继续/); assert.match(note, /上任终端的回执监听已被程序作废，现在按规则第 8 条重挂恰好一个后台回执监听/);
-  assert.ok(!/--timeout/.test(note), 'the listener command is written once, in rule 8');
+  assert.match(note, /读看板继续/); assert.match(note, /上任终端的回执监听已被程序作废，现在按红线里的「回执监听」重挂恰好一个后台回执监听/);
+  assert.match(note, /规则用 briefing 重读，细则用 briefing --topic 名/);
+  assert.ok(!/--timeout/.test(note), 'the listener command is written once, in the core');
   assert.ok(!note.includes('先确认旧监听已退出'), 'the new Captain cannot look into the old terminal');
 
   // the new Captain forgets and sends the same card out again: the board refuses, nothing opens
@@ -175,7 +178,7 @@ test('one receipt listener: a newer one in the same terminal takes over, the old
   app.receipt('for-the-new-captain');
   assert.match((await app.listen('n', 50, fresh)).result, /for-the-new-captain/, 'an old listener id from the previous Captain does not outrank it');
   // the briefing tells the Captain what the program does about duplicates
-  assert.match(M.instructions('darwin'), /重复挂的旧监听会被程序请退，不用为它重挂/);
+  assert.match(require('./fixtures/captain-rulebook').topic('sessions'), /重复挂的旧监听会被程序请退，不用为它重挂/);
 });
 
 test('listeners registered in one millisecond stay in registration order, and a later one with an earlier clock does too', async (t) => {
@@ -487,7 +490,9 @@ test('the handoff command: live state on demand, the same text as the file, Capt
   assert.ok(!next.result.includes(`【执行中】${card.id}`)); assert.match(next.result, /未读回执和提问 1 条/);
   // a restart points the Captain back at it and warns that the crew is being continued by the app
   const again = boot(w, app.persisted());
-  const note = again.sent.filter((m) => m.id === again.captain().id).at(-1).text;
+  const restarted = again.sent.filter((m) => m.id === again.captain().id).map((m) => m.text);
+  const note = restarted.at(-1);
+  assert.deepEqual(restarted, [M.instructions('darwin', '', false, 5), M.restartNote('darwin', file)], 'a new conversation: the core prompt, then the note');
   assert.equal(note, M.restartNote('darwin', file));
   assert.match(note, /在跑的队员由程序自动续接，不要重派；先运行 node "\$AGENTDECK_BOARD_CLI" handoff/); assert.match(note, /读看板继续/);
   // crew the app is continuing after a restart reads as such, not as work to hand out again
@@ -520,4 +525,49 @@ test('a manual clear sends again what the old context never dealt with, and not 
   for (const summary of ['taken-not-handled', 'typed-not-acked', 'unread']) assert.match(next.result, new RegExp(summary));
   // the note is the plain one: nobody took over a seat
   assert.match(app.sent.filter((m) => m.id === fresh.id).at(-1).text, /^用户刚清空了你的模型上下文。/);
+});
+
+test('who is given the prompt: every new context (first start, Relay, clear) gets the core; the same conversation after an app restart gets a short notice', async (t) => {
+  const w = world(t); const app = w.boot();
+  const core = M.instructions('darwin', '', false, w.config.concurrencyCap);
+  assert.ok(core.length <= M.CORE_LIMIT);
+  // the app starts with a Captain whose CLI opened a new conversation
+  assert.deepEqual(app.sent.map((m) => m.text), [core]);
+  assert.deepEqual({ ...app.s().briefed }, { colId: 'captain', mark: M.briefingMark(core) });
+
+  // Relay: another seat, a new terminal, a new context
+  const relayed = await app.relay('us', 'Relay：CN → US；手动切换');
+  let got = app.sent.filter((m) => m.id === relayed.id).map((m) => m.text);
+  assert.equal(got.length, 2); assert.equal(got[0], core);
+  assert.match(got[1], /^你是刚接任的队长：上一任已经 Relay 到这个席位，模型上下文是新的。/);
+  assert.match(got[1], /规则用 briefing 重读，细则用 briefing --topic 名/);
+  assert.equal(app.s().briefed.colId, relayed.id, 'the new column holds the prompt, the old one is forgotten');
+
+  // clearing the context: the same seat, a new context
+  const cleared = app.api.clearContext({ fromEdit: true, command: 'claude' });
+  got = app.sent.filter((m) => m.id === cleared.id).map((m) => m.text);
+  assert.equal(got.length, 2); assert.equal(got[0], core);
+  assert.match(got[1], /^用户刚清空了你的模型上下文。/);
+  assert.equal(app.s().briefed.colId, cleared.id);
+
+  // AgentDeck restarts and the CLI resumes that conversation: the prompt is not pasted again
+  w.resumed = true;
+  const again = boot(w, app.persisted());
+  got = again.sent.map((m) => m.text);
+  assert.deepEqual(got, [M.restartNotice('darwin', relayed.file)]);
+  assert.ok(got[0].length < 400 && !got[0].includes('红线，每一轮都守'));
+  assert.match(got[0], /先运行 node "\$AGENTDECK_BOARD_CLI" handoff 取当前交接快照/); assert.match(got[0], /briefing 重读，细则用 briefing --topic 名/);
+  assert.equal(again.s().briefed.colId, cleared.id);
+
+  // the same restart when the CLI could not resume: a new context, so the core again, then the note
+  w.resumed = false;
+  const cold = boot(w, again.persisted());
+  assert.deepEqual(cold.sent.map((m) => m.text), [core, M.restartNote('darwin', relayed.file)]);
+
+  // a changed setting changes the prompt: the Captain that resumed holds the old one and is given the new one
+  w.resumed = true;
+  const changed = JSON.parse(cold.persisted()); changed.concurrencyCap = 12;
+  const recapped = boot(w, JSON.stringify(changed));
+  assert.equal(recapped.sent[0].text, M.instructions('darwin', '', false, 12));
+  assert.match(recapped.sent[0].text, /同一时间最多 12 个会话在干活/);
 });

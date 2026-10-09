@@ -128,6 +128,9 @@ fs.appendFileSync(${JSON.stringify(launches)}, JSON.stringify({ id: process.env.
 fs.appendFileSync(${JSON.stringify(cwdFile)}, JSON.stringify({ id: process.env.AGENTDECK_COL_ID, cwd: process.cwd() }) + '\\n');
 require(${JSON.stringify(FAKE)});`);
   fs.mkdirSync(path.join(home, 'bin'));
+  // A Claude session starts only on a signed-in seat: a stand-in login for the default seat.
+  fs.mkdirSync(path.join(profile, 'seats-home', '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude', '.credentials.json'), '{}');
   fs.writeFileSync(path.join(home, 'bin', 'claude'), `#!/bin/sh\nexec "${process.execPath}" "${shim}" --screen-only\n`, { mode: 0o755 });
   // an absolute path to a program named claude is a Claude session to the app, but never the real CLI
   const worker = await startWorker('Claude copy task', ['--worktree', repo, '--branch', 'feat/trusted'], `${path.join(home, 'bin', 'claude')} --model claude-opus-5-5`);

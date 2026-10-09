@@ -99,7 +99,7 @@
     todoCount = el('span', 'nav-row-count');
     todo.appendChild(todoCount);
     setTodoCount(todoOpen);
-    todo.title = `待办：你自己要做的事，打一句话回车就存（在 AgentDeck 里按 ${window.TodoUI ? window.TodoUI.shortcutLabel() : '⌘T'} 速记）`;
+    todo.title = todoTitle();
     topEl.append(
       navRow('new', 'newChat', '新对话', '⌘N', () => host.addAndFocusColumn()),
       captain,
@@ -112,6 +112,7 @@
       navRow('skills', 'skills', 'Skills', '', () => host.togglePage('skills')),
     );
   }
+  function todoTitle() { return `待办：你自己要做的事，打一句话回车就存（在 AgentDeck 里按 ${window.TodoUI.shortcutLabel()} 速记）`; }
   function setTodoCount(n) {
     todoOpen = n || 0;
     if (!todoCount) return;
@@ -245,7 +246,7 @@
     host.navItems.set(col.id, { el: item, dot, label, sub, meta, badge });
     if (window.AgentInfo) {
       const entry = host.terms && host.terms.get(col.id);
-      window.AgentInfo.renderBadge(badge, window.AgentInfo.resolveAgentInfo(col, entry), 'sidebar', host.config.claudeSeats);
+      window.AgentInfo.renderBadge(badge, window.AgentInfo.resolveAgentInfo(col, entry), 'sidebar', seatList());
     }
     captainMirror.observe(dot, { attributes: true, attributeFilter: ['class'] });
     captainHead = { col, item, counts, sub };
@@ -262,23 +263,84 @@
     box.id = 'captainCrewList';
     box.hidden = !open;
     const waiting = waitlist();
-    const groups = open ? crewGroups(crew) : [];
+    const { top, kids } = subCrew(crew);
+    const groups = open ? crewGroups(top) : [];
     if (open) {
       const byId = new Map(crew.map((c) => [c.id, c]));
       const collapsed = collapsedModels();
-      groups.forEach((g) => box.appendChild(modelGroup(g, byId, collapsed.has(g.key))));
+      groups.forEach((g) => box.appendChild(modelGroup(g, byId, collapsed.has(g.key), kids)));
       if (waiting.length) box.appendChild(waitGroup(waiting));
     } else {
       crew.forEach((col) => host.navItems.set(col.id, { el: null, dot: null, label: null, sub: null, meta: null }));
     }
-    crewHead = { counts, ids: crew.map((c) => c.id), open, shown: crewShownKey(groups, waiting) };
+    crewHead = { counts, ids: crew.map((c) => c.id), open, shown: crewShownKey(groups, waiting, kids) };
     refreshCrew();
     return box;
   }
   const waitlist = () => window.MainSession.state()?.waitlist || [];
+  // 小队长 (column.subCaptain): the sessions it opened (column.subCaptainId) are listed under
+  // its own row, folded by the arrow on that row, instead of in the model groups.
+  function subCrew(crew) {
+    const subs = new Set(crew.filter((c) => c.subCaptain === true).map((c) => c.id));
+    const top = [], kids = new Map();
+    crew.forEach((c) => {
+      if (c.subCaptainId && subs.has(c.subCaptainId)) {
+        if (!kids.has(c.subCaptainId)) kids.set(c.subCaptainId, []);
+        kids.get(c.subCaptainId).push(c);
+      } else top.push(c);
+    });
+    return { top, kids };
+  }
+  function crewRow(col, byId, kids) {
+    const row = sessionRow(col, { crew: true });
+    const children = kids.get(col.id) || [];
+    if (col.subCaptain !== true) return row;
+    row.classList.add('sub-captain-item');
+    const name = host.columnLabel(col);
+    const nav = host.navItems.get(col.id);
+    if (nav && nav.syncTip) {
+      const tip = nav.syncTip;
+      nav.syncTip = (line) => { tip(line); row.title = '小队长 · ' + children.length + ' 个子会话\n' + row.title; };
+      nav.syncTip('');
+    }
+    if (!children.length) return row;
+    const collapsed = col.subCrewCollapsed === true;
+    const listId = 'subCrew-' + cssId(col.id);
+    const verb = collapsed ? '展开' : '收起';
+    const fold = iconButton(collapsed ? 'chevRight' : 'chevDown', `${verb}「${name}」的 ${children.length} 个子会话`, () => toggleSubCrew(col), 'sub-fold');
+    fold.dataset.sub = col.id;
+    fold.setAttribute('aria-expanded', String(!collapsed));
+    fold.setAttribute('aria-controls', listId);
+    row.insertBefore(fold, row.firstChild);
+    const count = el('span', 'crew-model-count sub-count', String(children.length));
+    count.title = children.length + ' 个子会话';
+    count.setAttribute('aria-label', '小队长「' + name + '」：' + count.title);
+    row.insertBefore(count, row.querySelector('.cn-meta'));
+    const wrap = el('div', 'sub-captain-block');
+    const list = el('div', 'sub-crew');
+    list.id = listId;
+    list.setAttribute('role', 'group');
+    list.setAttribute('aria-label', '「' + name + '」的子会话');
+    list.hidden = collapsed;
+    if (!collapsed) children.forEach((c) => list.appendChild(sessionRow(c, { crew: true })));
+    else children.forEach((c) => host.navItems.set(c.id, { el: null, dot: null, label: null, sub: null, meta: null }));
+    wrap.append(row, list);
+    return wrap;
+  }
+  function toggleSubCrew(col) {
+    col.subCrewCollapsed = col.subCrewCollapsed !== true;
+    if (!col.subCrewCollapsed) delete col.subCrewCollapsed;
+    host.saveConfig();
+    render();
+    // the list was rebuilt: keep the keyboard on the same arrow
+    const again = [...listEl.querySelectorAll('button.sub-fold')].find((b) => b.dataset.sub === col.id);
+    if (again) again.focus();
+  }
+  // The configured seats with who is signed in behind each: seats are shown by account name.
+  const seatList = () => window.ClaudeSeats?.described ? window.ClaudeSeats.described(host.config.claudeSeats) : host.config.claudeSeats;
   // One place builds the crew groups: the list and the status-tick check must read the
   // same seat config, or a renamed seat never matches its own key and re-renders every tick.
-  const crewGroups = (cols) => SC.crewModelGroups(cols.map(memberIdentity), host.config.claudeSeats);
+  const crewGroups = (cols) => SC.crewModelGroups(cols.map(memberIdentity), seatList());
   function memberIdentity(col) {
     const entry = host.terms && host.terms.get ? host.terms.get(col.id) : null;
     const info = window.AgentInfo && window.AgentInfo.resolveAgentInfo(col, entry, entry && entry.lastScreen);
@@ -307,14 +369,15 @@
     host.saveConfig();
     render();
   }
-  function crewShownKey(groups, waiting) {
+  function crewShownKey(groups, waiting, kids) {
     const held = window.MainSession.memoryHeld() ? ':mem' : '';
-    return groups.map((g) => g.key + ':' + g.seatName + ':' + g.flag + ':' + g.working + ':' + g.urgent + ':' + g.ids.join(',')).join('|') + '|q:' + waiting.map((w) => (window.MainSession.isHigh(w) ? '!' : '') + (w.title || '')).join(',') + held;
+    const subs = [...(kids || new Map())].map(([id, list]) => id + '>' + list.map((c) => c.id).join(',')).join(';');
+    return groups.map((g) => g.key + ':' + g.account + ':' + g.accountTitle + ':' + g.working + ':' + g.urgent + ':' + g.ids.join(',')).join('|') + '|q:' + waiting.map((w) => (window.MainSession.isHigh(w) ? '!' : '') + (w.title || '')).join(',') + held + '|s:' + subs;
   }
   function cssId(key) {
     return String(key).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 80);
   }
-  function modelGroup(g, byId, collapsed) {
+  function modelGroup(g, byId, collapsed, kids) {
     const wrap = el('div', 'crew-model-block');
     const head = el('div', 'crew-model');
     head.dataset.modelKey = g.key;
@@ -330,7 +393,7 @@
       icon.innerHTML = window.AgentInfo.PROVIDER_ICONS[g.iconProvider] || '';
     }
     const name = el('span', 'crew-model-name agent-model-label', g.label);
-    name.title = g.flag ? g.label + ' ' + g.flag : g.label;
+    name.title = g.seat ? g.label + ' · ' + g.account : g.label;
     const stat = el('span', 'crew-model-stat');
     const dotMark = el('span', 'crew-model-dot', '·');
     dotMark.setAttribute('aria-hidden', 'true');
@@ -340,10 +403,11 @@
     count.setAttribute('aria-label', g.label + '：' + countText);
     stat.append(dotMark, count);
     head.append(fold, icon, name);
-    if (g.flag) {
-      const flag = el('span', 'agent-seat-label crew-model-flag', g.flag + ' ' + g.seatName);
-      const seatName = g.seatName;
-      flag.title = '当前账号：' + seatName;
+    if (g.seat) {
+      // The account behind the seat; cut for width it keeps its end (.seat-acct).
+      const flag = el('span', 'seat-acct agent-seat-label crew-model-flag');
+      flag.appendChild(el('bdi', '', g.account));
+      flag.title = '当前账号：' + g.accountTitle;
       flag.setAttribute('aria-label', flag.title);
       flag.setAttribute('role', 'img');
       head.appendChild(flag);
@@ -353,8 +417,9 @@
     const items = el('div', 'crew-model-items');
     items.id = itemsId;
     items.hidden = collapsed;
-    if (!collapsed) g.ids.forEach((id) => items.appendChild(sessionRow(byId.get(id), { crew: true })));
-    else g.ids.forEach((id) => host.navItems.set(id, { el: null, dot: null, label: null, sub: null, meta: null }));
+    if (!collapsed) g.ids.forEach((id) => items.appendChild(crewRow(byId.get(id), byId, kids)));
+    else g.ids.forEach((id) => { host.navItems.set(id, { el: null, dot: null, label: null, sub: null, meta: null });
+      (kids.get(id) || []).forEach((c) => host.navItems.set(c.id, { el: null, dot: null, label: null, sub: null, meta: null })); });
     wrap.append(head, items);
     return wrap;
   }
@@ -411,7 +476,8 @@
     if (crewHead.open && !document.body.classList.contains('reordering') && !listEl.querySelector('[contenteditable="true"]')) {
       const cols = crewHead.ids.map((id) => host.columns().find((c) => c.id === id)).filter(Boolean);
       const waiting = waitlist();
-      if (crewShownKey(crewGroups(cols), waiting) !== crewHead.shown) { render(); return; }
+      const { top, kids } = subCrew(cols);
+      if (crewShownKey(crewGroups(top), waiting, kids) !== crewHead.shown) { render(); return; }
     }
     const text = [n.working && `${n.working} 干活中`, n.quota && `${n.quota} 额度用尽/等待`, n.input && `${n.input} 停在确认`, n.done && `${n.done} 完成`, n.failed && `${n.failed} 失败`, supplement && `${supplement} 待补充`, waiting && `${waiting} 排队`]
       .filter(Boolean).join(' · ') || `${crewHead.ids.length} 个`;
@@ -507,7 +573,7 @@
     if (!crew && window.AgentInfo) {
       const entry = host.terms && host.terms.get ? host.terms.get(col.id) : null;
       const info = window.AgentInfo.resolveAgentInfo(col, entry, entry?.lastScreen);
-      window.AgentInfo.renderBadge(badge, info, 'sidebar', host.config.claudeSeats);
+      window.AgentInfo.renderBadge(badge, info, 'sidebar', seatList());
     }
     return item;
   }
@@ -772,5 +838,5 @@
     listEl.addEventListener('scroll', closeMenu, { passive: true });
   }
 
-  window.Sidebar = { init, render, markPage, setTodoCount, refreshTimes, touchTime, createFolder, closeMenu, openMenu, ago, refreshCrew };
+  window.Sidebar = { init, render, markPage, setTodoCount, todoTitle, refreshTimes, touchTime, createFolder, closeMenu, openMenu, ago, refreshCrew };
 })();

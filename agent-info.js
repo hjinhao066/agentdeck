@@ -149,16 +149,16 @@
     str = str.replace(/[-_]thinking$/i, '');
 
     // Claude / Opus / Sonnet / Haiku
-    let m = str.match(/opus[- ]?(\d+)[-.](\d+)/i);
-    if (m) return `Opus ${m[1]}.${m[2]}`;
-    m = str.match(/sonnet[- ]?(\d+)[-.](\d+)/i);
-    if (m) return `Sonnet ${m[1]}.${m[2]}`;
+    let m = str.match(/opus[- ]?(\d{1,2})(?:[-.](\d{1,2}))?(?!\d)/i);
+    if (m) return `Opus ${m[1]}${m[2] ? '.' + m[2] : ''}`;
+    m = str.match(/sonnet[- ]?(\d{1,2})(?:[-.](\d{1,2}))?(?!\d)/i);
+    if (m) return `Sonnet ${m[1]}${m[2] ? '.' + m[2] : ''}`;
     m = str.match(/(?:claude[- ])?(\d+)[-.](\d+)[- ]?sonnet/i);
     if (m) return `Sonnet ${m[1]}.${m[2]}`;
     m = str.match(/(?:claude[- ])?(\d+)[-.](\d+)[- ]?opus/i);
     if (m) return `Opus ${m[1]}.${m[2]}`;
-    m = str.match(/haiku[- ]?(\d+)[-.](\d+)/i);
-    if (m) return `Haiku ${m[1]}.${m[2]}`;
+    m = str.match(/haiku[- ]?(\d{1,2})(?:[-.](\d{1,2}))?(?!\d)/i);
+    if (m) return `Haiku ${m[1]}${m[2] ? '.' + m[2] : ''}`;
     m = str.match(/(?:claude[- ])?(\d+)[-.](\d+)[- ]?haiku/i);
     if (m) return `Haiku ${m[1]}.${m[2]}`;
 
@@ -175,8 +175,8 @@
     if (m) return `Gemini ${m[1]}.${m[2]}`;
 
     // Grok
-    m = str.match(/grok[- ]?(\d+)[-.](\d+)/i);
-    if (m) return `Grok ${m[1]}.${m[2]}`;
+    m = str.match(/grok[- ]?(\d{1,2})(?:[-.](\d{1,2}))?(?!\d)/i);
+    if (m) return `Grok ${m[1]}${m[2] ? '.' + m[2] : ''}`;
     if (/^grok/i.test(str)) return 'Grok';
 
     // OpenAI / Codex / o1 / o3
@@ -310,6 +310,19 @@
     return provider || '';
   }
 
+  // An account name in a narrow row. Cut for width, it keeps its end (the part that tells
+  // taylor0421 from taylor0421us apart): the ellipsis goes on the left (.seat-acct).
+  function accountLabel(text, title) {
+    const label = document.createElement('span'), inner = document.createElement('bdi');
+    label.className = 'seat-acct';
+    inner.textContent = text;
+    label.appendChild(inner);
+    if (title) label.title = title;
+    return label;
+  }
+
+  // seats: the configured seats, each with `info` about the account signed in behind it
+  // (ClaudeSeats.described). The sidebar names a session's seat by that account.
   function renderBadge(badgeEl, info, context, seats) {
     if (!badgeEl) return;
     if (!info || !info.provider || info.isShell) {
@@ -321,8 +334,10 @@
       return;
     }
 
-    const seat = context === 'sidebar' && info.seat ? S.normalize(seats).find((s) => s.id === info.seat.id) : null;
-    const key = `${info.key}:${seat?.name || ''}:${seat?.icon || ''}`;
+    const seat = context === 'sidebar' && info.seat ? (Array.isArray(seats) ? seats : []).find((s) => s && s.id === info.seat.id) : null;
+    // The session keeps the directory it started in, even after the seat's setting changed.
+    const shown = seat ? S.seatDisplay({ ...seat, configDir: info.seat.configDir }, seat.info) : null;
+    const key = `${info.key}:${shown?.label || ''}:${shown?.title || ''}`;
     if (!badgeEl.hidden && badgeEl.dataset.infoKey === key && badgeEl.title === (info.tooltip || '')) return;
     const providerClass = 'provider-' + info.provider.toLowerCase();
     const baseClass = context === 'sidebar' ? 'cn-badge' : 'col-badge';
@@ -344,18 +359,13 @@
       label.textContent = labelText;
       badgeEl.appendChild(label);
     }
-    if (context === 'sidebar' && info.seat) {
-      const flag = seat?.icon;
-      if (flag) {
-        const label = document.createElement('span');
-        label.className = 'agent-seat-label';
-        label.textContent = `${flag} ${seat.name}`;
-        label.title = `当前账号：${seat.name} · ${info.seat.configDir}`;
-        label.setAttribute('aria-label', label.title);
-        label.setAttribute('role', 'img');
-        label.tabIndex = 0;
-        badgeEl.appendChild(label);
-      }
+    if (shown) {
+      const label = accountLabel(shown.label, `当前账号：${shown.title}`);
+      label.classList.add('agent-seat-label');
+      label.setAttribute('aria-label', label.title);
+      label.setAttribute('role', 'img');
+      label.tabIndex = 0;
+      badgeEl.appendChild(label);
     }
   }
 
@@ -409,6 +419,7 @@
     formatTooltip,
     resolveAgentInfo,
     renderBadge,
+    accountLabel,
     prepareAgentCommand,
     planAgentLaunch,
   };

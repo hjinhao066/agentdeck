@@ -24,7 +24,8 @@ const { createCodexLauncher } = require('./codex-launch');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
 const PerpetualCaptainCore = require('./perpetual-captain-core');
-const { seatEnvironment, credentialLocation, initializeOnboarding, trustWorktree: trustClaudeWorktree, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
+const { seatEnvironment, credentialLocation, initializeOnboarding, trustWorktree: trustClaudeWorktree, registerSeatsIpc, seatInfo, recordedAccount, readUsage } = require('./claude-seats-main');
+const { registerTokenUsageIpc } = require('./token-usage-main');
 const { createWarmupService } = require('./quota-warmup-service');
 const { createQuotaWarmupRunner } = require('./quota-warmup-main');
 const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
@@ -33,13 +34,18 @@ const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore, localSessions } = require('./task-board');
 const { TodoStore } = require('./todo-store');
+const { TodoAI } = require('./todo-ai');
+const { TodoBackendErrors } = require('./todo-backend-errors');
+const { TodoFailureNotifications, nextAllowedTime } = require('./todo-failure-notifications');
 const Worktree = require('./worktree-core');
 const { prepareWorkspaceTrust } = require('./workspace-trust-main');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
-const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
+const { createRefresh: createClaudeQuotaRefresh, createSeatGate, readSeat: readClaudeSeat, readCredentials: readClaudeCredentials } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
+const { createPtyWork } = require('./pty-work');
+const { createJsonFileCache } = require('./config-cache');
 const Battery = require('./battery-core');
 const RestartResume = require('./restart-resume');
 const AgentSessions = require('./agent-sessions');
@@ -52,6 +58,8 @@ let notifications = null;
 let notifyUser = null;
 let sidePane = null;
 let claudeQuotaRefresh = null, claudeQuotaTimer = null;
+// Renewing a seat's token and AgentDeck starting Claude on that seat never overlap (quota-claude.js).
+let seatGate = null;
 let quotaWarmup = null, quotaWarmupRunner = null, quotaWarmupTimer = null;
 let seatAuth = null;
 const seatAuthChecks = new Map();
@@ -84,21 +92,46 @@ const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tas
 // 随手记待办: ~/.agents/boards/todos (each computer writes only its own file);
 // a test profile keeps its own copy inside the profile.
 const todoStore = new TodoStore(tudArg ? path.join(app.getPath('userData'), 'todos') : undefined);
-let todoWatch = null, todoWatchTimer = null;
-function todosChanged() { send('todos:changed', {}); }
+let todoWatch = null, todoWatchTimer = null, todoAiTimer = null, todoAi = null, todoErrors = null, todoFailures = null;
+let todoNotificationNow = Date.now;
+function scanTodoAi() {
+  todoErrors?.run('scan', () => todoAi?.scan());
+  todoErrors?.flush();
+}
+function todosChanged() { scanTodoAi(); send('todos:changed', {}); }
+function deliverTodo({ item, card }) {
+  if (!boardRendererReady) return;
+  const cfg = readLocalConfig(), captain = cfg.columns?.find((c) => c.isMain && c.id === cfg.mainSession?.colId);
+  if (!captain) return; // The pending item stays on disk until a Captain exists.
+  const id = 'todo-delivery-' + item.ai.revision;
+  queueTodoReceipt({
+    id, action: 'main-todo-delivery', callerId: captain.id, nativeWeb: true,
+    todoId: item.id, taskId: card.id, result: card.detail,
+  });
+}
+function queueTodoReceipt(command) {
+  if (!boardRendererReady) return;
+  const cfg = readLocalConfig(), captain = cfg.columns?.find((c) => c.isMain && c.id === cfg.mainSession?.colId);
+  if (!captain) return;
+  const pending = pendingBoardCommands.get(command.id);
+  if (!pending) pendingBoardCommands.set(command.id, { command: { ...command, callerId: captain.id }, delivered: false });
+  else if (pending.command.callerId !== captain.id) { pending.command.callerId = captain.id; pending.delivered = false; }
+  dispatchPendingBoardCommands();
+}
 // The other computer's file arrives through git; tell the page so an open list refreshes.
 function watchTodos() {
   if (todoWatch) return;
   try {
     fs.mkdirSync(todoStore.dir, { recursive: true });
     todoWatch = fs.watch(todoStore.dir, () => { clearTimeout(todoWatchTimer); todoWatchTimer = setTimeout(todosChanged, 300); });
-    todoWatch.on('error', () => { try { todoWatch.close(); } catch (_) {} todoWatch = null; });
-  } catch (_) { todoWatch = null; }
+    todoWatch.on('error', (error) => { try { todoWatch.close(); } catch (_) {} todoWatch = null; todoErrors?.report('watch', error); });
+  } catch (error) { todoWatch = null; todoErrors?.report('watch', error); }
 }
 handleMain('todos:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'update', 'remove'].includes(payload.op)) throw new Error('Invalid to-do operation.');
   const input = payload.input && typeof payload.input === 'object' ? payload.input : {};
-  if (payload.op === 'list') return { items: todoStore.list() };
+  // `device` tells 待我处理 which @ai items this computer handed to 队长.
+  if (payload.op === 'list') return { items: todoStore.list(), device: todoStore.deviceId };
   // The desktop page never writes on the phone's behalf, and never touches the AI flag.
   const item = payload.op === 'add' ? todoStore.add({ text: input.text })
     : payload.op === 'remove' ? todoStore.remove({ id: input.id })
@@ -167,6 +200,13 @@ function handleMain(channel, handler) {
 }
 const memoryPressure = createMemoryPressure({ platform: process.platform, execFile });
 handleMain('memory-pressure', () => memoryPressure.read());
+// Shell commands Claude started that still run under a terminal: the automatic
+// archive's last check (pty-work.js; one cached process listing for all terminals).
+const ptyWork = createPtyWork({ platform: process.platform, execFile });
+handleMain('pty:background-work', (_e, { id }) => {
+  const p = validId(id) && ptys.get(id);
+  return p && p.pid ? ptyWork.busy(p.pid) : false;
+});
 
 // Battery mode: the page decides what to limit; main only needs the power source and the
 // setting to pace its own timers (`power.every`) and to tell the page when the source changes.
@@ -192,6 +232,16 @@ function initPower() {
   powerMonitor.on('resume', () => { receiptListeners?.wake(); send('power:sleep', { asleep: false, at: Date.now() }); });
 }
 onMain('power-state', (e) => { e.returnValue = { onBattery: power.snapshot().onBattery }; });
+
+// Whether the user has the window in front (focused; blurred, minimized or hidden is not).
+// 待我处理 counts an item as seen only meanwhile (docs/attention.md).
+let windowInFront = false;
+function setWindowInFront(on) {
+  if (windowInFront === on) return;
+  windowInFront = on;
+  send('window:front', { on });
+}
+onMain('window-front', (e) => { e.returnValue = windowInFront; });
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app
@@ -347,6 +397,8 @@ handleMain('pty:prepare-launch', async (_event, { id, command }) => {
   const cwd = ptyLaunchDirs.get(id);
   const column = readLocalConfig().columns?.find((c) => c.id === id);
   const trustHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+  // A token renewal in progress on this column's seat is written before its Claude starts.
+  if (seatGate && column?.claudeSeatId) await seatGate.launch(column.claudeSeatId, () => {});
   const prepared = prepareWorkspaceTrust(command, column, cwd, trustHome);
   if (prepared.warning) send('toast', { text: prepared.warning });
   return codexLauncher.prepare(prepared.command, cwd);
@@ -516,6 +568,14 @@ function writeBoardResponse(requestId, payload) {
 let processingBoardRequests = false;
 function dispatchPendingBoardCommands() {
   for (const [id, pending] of pendingBoardCommands) {
+    if (pending.command.action === 'main-todo-delivery' && !todoStore.list().some((t) => !t.done && t.ai?.taskId === pending.command.taskId)) {
+      pendingBoardCommands.delete(id); continue;
+    }
+    if (pending.command.nativeWeb && ['main-todo-delivery', 'main-todo-error', 'main-notify-user'].includes(pending.command.action)) {
+      const cfg = readLocalConfig(), captain = cfg.columns?.find((c) => c.isMain && c.id === cfg.mainSession?.colId);
+      if (!captain) continue;
+      if (pending.command.callerId !== captain.id) { pending.command.callerId = captain.id; pending.delivered = false; }
+    }
     if (pending.listenerLease && !receiptListeners?.isCurrent(pending.command.callerId, pending.listenerLease)) {
       pendingBoardCommands.delete(id);
       writeBoardResponse(id, { done: true, result: '', listenerStopped: true });
@@ -579,6 +639,23 @@ function processBoardRequests() {
       catch (error) { writeBoardResponse(request.id, { done: true, error: error.message }); continue; }
       if (submitOnly && !dispatchCard && !['complete', 'ask', 'progress', 'session-exit'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: 'Receipt capability allows only complete, ask and progress; it cannot control other sessions.' });
+        continue;
+      }
+      if (action === 'main-todo') {
+        try {
+          if (request.op === 'status' && (!Number.isFinite(request.deadline) || Date.now() > request.deadline)) throw new Error('这条命令已超时，没有执行，请重新读取 todo list 后再回填。');
+          const cfg = readLocalConfig();
+          if (caller[0] !== cfg.mainSession?.colId || !cfg.columns?.some((c) => c.id === caller[0] && c.isMain)) throw new Error('只有队长可以用这个命令。');
+          let result;
+          if (request.op === 'list') result = Promise.resolve({ items: todoStore.list() });
+          else if (request.op === 'status') result = todoAi.status(request.input || {});
+          else throw new Error('Invalid Todo operation.');
+          result.then((value) => writeBoardResponse(request.id, { done: true, result: JSON.stringify(value) }),
+            (error) => {
+              if (error.code || error.file) todoErrors?.report('status', error);
+              writeBoardResponse(request.id, { done: true, error: error.message });
+            });
+        } catch (error) { writeBoardResponse(request.id, { done: true, error: error.message }); }
         continue;
       }
       if (action === 'session-exit' && Number.isInteger(request.code)) receiptListeners?.remove(caller[0], managedSessions.get(caller[0]));
@@ -651,11 +728,14 @@ function setupBoardControl() {
     for (const file of ['board-credentials.js', 'automation-core.js', 'security.js', 'chatgpt-web-core.js', 'chatgpt-web-executor.js', 'receipt-listener-core.js', 'worktree-core.js',
       'discussion-command.js', 'discussion-runner.js', 'discussion-core.js', 'discussion-store.js', 'discussion-privacy.js', 'discussion-participants.js',
       'claude-seats-core.js', 'claude-seats-main.js', 'quota-claude.js', 'quota-core.js', 'quota-codex.js', 'relay-handoff-core.js',
-      'side-main.js', 'chat-core.js', 'main-core.js', 'auto-verify-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
+      'side-main.js', 'chat-core.js', 'main-core.js', 'auto-verify-core.js', 'captain-rules.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
     // chat-core.js reads its Markdown and file-kind rules from the phone hub's rule file, at this relative path.
     fs.mkdirSync(path.join(toolsDir, 'mobile-web', 'hub'), { recursive: true });
     fs.copyFileSync(path.join(__dirname, 'mobile-web', 'hub', 'core.js'), path.join(toolsDir, 'mobile-web', 'hub', 'core.js'));
     fs.copyFileSync(path.join(__dirname, 'docs', 'discuss.md'), path.join(toolsDir, 'discuss.md'));
+    // The Captain's rule files, read with `briefing --topic <name>` (captain-rules.js).
+    fs.mkdirSync(path.join(toolsDir, 'captain'), { recursive: true });
+    for (const [name] of require('./main-core').BRIEFING_TOPICS) fs.copyFileSync(path.join(__dirname, 'docs', 'captain', name + '.md'), path.join(toolsDir, 'captain', name + '.md'));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
     fs.copyFileSync(path.join(__dirname, 'codex-captain-driver.js'), path.join(toolsDir, 'codex-captain-driver.js'));
@@ -869,6 +949,12 @@ function createWindow() {
   // keeps rendering but is transparent and click-through, so a test run never
   // covers the user's apps or catches their clicks.
   if (tudArg) win.once('ready-to-show', () => { hideTestWindow(win); win.showInactive(); });
+  // A test window never takes the focus (focusable: false): it counts as in front, and
+  // blur()/focus() stand for the user leaving and coming back without touching the screen.
+  windowInFront = !!tudArg;
+  win.on('focus', () => setWindowInFront(true));
+  for (const away of ['blur', 'minimize', 'hide']) win.on(away, () => setWindowInFront(false));
+  if (tudArg) { win.blur = () => win.emit('blur'); win.focus = () => win.emit('focus'); }
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());
@@ -954,7 +1040,26 @@ app.whenReady().then(async () => {
   const feedHome = tudArg ? path.join(app.getPath('userData'), 'schedule-home') : HOME;
   registerScheduleFeedIpc({ handleMain, dir: path.join(feedHome, '.agents', 'schedules'), home: feedHome, userData: app.getPath('userData'), env: ENV });
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
-  const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
+  // Parsed config.json is several MB; re-read only when the file changed (config-cache.js).
+  const seatConfig = createJsonFileCache(configPath);
+  // What the periodic seat checks read from config.json (the 队长's idle report every
+  // status tick, the quota warm-up and seat-login checks every 30 s): parsed again only
+  // when the file changed, and only these fields are kept, not the archived sessions
+  // and task bodies around them. Readers only read it.
+  let seatView = { key: '', cfg: {} };
+  const seatViewConfig = () => {
+    let key = '';
+    try { const stat = fs.statSync(configPath); key = `${stat.ino}:${stat.size}:${stat.mtimeMs}`; } catch (_) {}
+    if (!key || key !== seatView.key) {
+      const { mainSession, activeClaudeSeatId, columns, claudeSeats, quotas, quotaWarmup: warmup, perpetualCaptain } = seatConfig();
+      seatView = { key, cfg: { mainSession: mainSession && { colId: mainSession.colId }, activeClaudeSeatId, columns, claudeSeats, quotas, quotaWarmup: warmup, perpetualCaptain } };
+    }
+    return seatView.cfg;
+  };
+  // Renew only a seat no Claude runs on: the warm-up's process inventory, failing closed, and with no
+  // exemption for an idle 队长 (it still holds the token a renewal would replace).
+  seatGate = createSeatGate({ occupied: async (seat) => (await occupiedClaudeSeats({ seats: ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
+    columns: seatConfig().columns || [], ptys, home: seatHome })).has(seat.id) });
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, env: ENV, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
@@ -963,6 +1068,9 @@ app.whenReady().then(async () => {
     // The Relay handoff reads the same board the heartbeat does, done and archived cards included.
     handoffOptions: { discussionsRoot: tudArg ? path.join(app.getPath('userData'), 'discussions') : undefined, cards: () => taskStore.list({ archived: true }), tasksDir: taskStore.dir, boardVersion: () => boardVersionOf(taskStore.dir),
       machine: { platform: process.platform, hostname: os.hostname(), appVersion: app.getVersion() } } });
+  // Token 用量: this machine's CLI logs, scanned in a utility process. A test profile reads only its own usage-home.
+  registerTokenUsageIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'usage-home') : HOME, userData: app.getPath('userData'),
+    getSeats: () => seatConfig().claudeSeats, test: !!tudArg });
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
@@ -985,10 +1093,9 @@ app.whenReady().then(async () => {
     // The phone records, reads and ticks to-dos; it never edits text or deletes.
     getTodos: () => todoStore.phone(),
     writeTodos: (input) => {
-      const item = input.op === 'add' ? todoStore.add({ text: input.text, source: 'phone' })
-        : todoStore.update({ id: input.id, done: input.done, ...(input.base ? { base: input.base } : {}), source: 'phone' });
+      const item = todoStore.phoneWrite(input);
       todosChanged();
-      return { id: item.id, text: item.text, done: item.done, doneAt: item.doneAt, created: item.created, updated: item.updated };
+      return item;
     },
     getOutput: (id) => requestMobile('output', { id }),
     getCaptain: async () => {
@@ -1164,11 +1271,11 @@ app.whenReady().then(async () => {
   } catch (_) {}
   const codexSeat = { id: 'codex', name: 'Codex', configDir: ENV.CODEX_HOME || '~/.codex' };
   const configuredAuthSeat = (sample) => sample.provider === 'Claude'
-    ? ClaudeSeatsCore.normalize(seatConfig().claudeSeats).find((s) => s.id === sample.seatId && s.configDir === sample.configDir)
+    ? ClaudeSeatsCore.normalize(seatViewConfig().claudeSeats).find((s) => s.id === sample.seatId && s.configDir === sample.configDir)
     : sample.provider === 'Codex' && sample.configDir === codexSeat.configDir ? codexSeat : null;
   const authSamples = () => seatAuth.samples().filter((s) => configuredAuthSeat(s));
   const queueAuthReceipts = () => {
-    const captain = seatConfig().columns?.find((c) => c.isMain);
+    const captain = seatViewConfig().columns?.find((c) => c.isMain);
     if (!captain || !boardRendererReady) return;
     for (const alert of seatAuth.pendingReceipts()) {
       if (pendingBoardCommands.has(alert.id)) continue;
@@ -1246,8 +1353,10 @@ app.whenReady().then(async () => {
     const seat = configuredAuthSeat(sample);
     if (!seat) return;
     try {
-      seatAuth.observe(seat, sample);
       const key = sample.provider === 'Claude' ? QuotaCore.seatKey(seat.id) : sample.provider;
+      // A lost-login alert names the account that was signed in there, not the fixed seat name:
+      // the directory's own account record, else the account the quota rows last saw.
+      seatAuth.observe(sample.provider === 'Claude' ? { ...seat, account: recordedAccount(seat, seatHome) || seatConfig().quotas?.[key]?.account } : seat, sample);
       if (!seatAuth.needsConfirmation(seat, sample.provider)) {
         clearTimeout(seatAuthChecks.get(key)); seatAuthChecks.delete(key);
       } else if (!tudArg && !seatAuthChecks.has(key)) {
@@ -1295,29 +1404,29 @@ app.whenReady().then(async () => {
   checkQuotaBark(); // A fresh low sample at launch alerts once, across relaunches too.
   let warmupCaptain = { id: '', idle: false, at: 0 };
   const idleCaptainId = () => warmupCaptain.idle && Date.now() - warmupCaptain.at <= 5000 &&
-    warmupCaptain.id === seatConfig().mainSession?.colId ? warmupCaptain.id : '';
+    warmupCaptain.id === seatViewConfig().mainSession?.colId ? warmupCaptain.id : '';
   quotaWarmupRunner = createQuotaWarmupRunner({ home: seatHome, env: ENV });
   if (tudArg) { app.testWarmupRuns = []; app.testWarmupResults = []; }
   quotaWarmup = createWarmupService({
     stateFile: path.join(app.getPath('userData'), 'quota-warmup-state.json'),
     logFile: path.join(app.getPath('userData'), 'quota-warmup.log'),
-    getSettings: () => seatConfig().quotaWarmup,
-    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatConfig().perpetualCaptain).threshold,
-    getSeats: () => ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
+    getSettings: () => seatViewConfig().quotaWarmup,
+    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatViewConfig().perpetualCaptain).threshold,
+    getSeats: () => ClaudeSeatsCore.normalize(seatViewConfig().claudeSeats),
     readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome, tudArg ? 'test' : process.platform),
-      quota: seatConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
-    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
+      quota: seatViewConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
+    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatViewConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
       tudArg ? async () => [] : undefined),
     run: tudArg ? async (seat) => {
       // Isolated UI tests can supply deterministic results from the Electron
       // harness; no test profile is allowed to call a real account.
       app.testWarmupRuns.push({ seatId: seat.id, configDir: seat.configDir });
       return app.testWarmupResults.shift() || { ok: false, status: 'test-disabled' };
-    } : (seat, options) => quotaWarmupRunner.run(seat, options),
+    } : (seat, options) => seatGate.launch(seat.id, () => quotaWarmupRunner.run(seat, options)),
   });
   handleMain('seats:warmup-status', () => quotaWarmup.snapshot());
   handleMain('seats:warmup-idle', (_e, { colId, idle }) => {
-    const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === colId);
+    const cfg = seatViewConfig(), col = cfg.columns?.find((c) => c.id === colId);
     if (!validId(colId) || colId !== cfg.mainSession?.colId || !col?.isMain || !ptys.has(colId) || typeof idle !== 'boolean') return false;
     const changed = warmupCaptain.id !== colId || warmupCaptain.idle !== idle;
     warmupCaptain = { id: colId, idle, at: Date.now() };
@@ -1353,6 +1462,7 @@ app.whenReady().then(async () => {
     catch (_) { e.returnValue = null; }
   });
   const writeConfig = (cfg) => {
+    const previousCaptain = notificationConfig.mainSession?.colId;
     cfg.mobileWeb = persistable(mobileSettings);
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
@@ -1365,6 +1475,7 @@ app.whenReady().then(async () => {
     fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
     fs.chmodSync(configPath + '.tmp', 0o600);
     fs.renameSync(configPath + '.tmp', configPath);
+    if (cfg.mainSession?.colId !== previousCaptain) scanTodoAi();
     checkQuotaBark();
     queueAuthReceipts();
     pumpBark().catch(() => {});
@@ -1458,7 +1569,8 @@ app.whenReady().then(async () => {
   onMain('pty:input', (_e, { id, data }) => {
     if (id === warmupCaptain.id) {
       warmupCaptain.idle = false;
-      const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === id);
+      // The seat it uses now; the cached view costs one stat per key, a parse only after a change.
+      const cfg = seatViewConfig(), col = cfg.columns?.find((c) => c.id === id);
       quotaWarmup.cancel(col?.claudeSeatId || cfg.activeClaudeSeatId);
     }
     const p = ptys.get(id); if (p) p.write(data);
@@ -1473,10 +1585,24 @@ app.whenReady().then(async () => {
   onMain('board:response', async (_e, { requestId, done, result, error, childId, snapshot, visible, turnId }) => {
     const pending = pendingBoardCommands.get(requestId);
     const action = pending?.command.action;
+    if (action === 'main-todo-delivery' && done === true && !error) {
+      todoErrors?.run('acknowledge', () => todoAi.acknowledge(pending.command.todoId, pending.command.taskId));
+    }
+    if (action === 'main-todo-error' && done === true && !error) todoErrors?.acknowledge(requestId);
+    if (action === 'main-todo-delivery' && error) todoErrors?.report('delivery', new Error('Todo receipt rejected.'));
     if (action === 'main-notify-user' && !error) {
+      const notificationAt = todoNotificationNow();
+      if (pending.todoNotifyResolve && nextAllowedTime(notificationAt) !== notificationAt) {
+        pendingBoardCommands.delete(requestId); pending.todoNotifyResolve(false); return;
+      }
       // Duplicate renderer acknowledgements share a single local/Bark delivery.
       pending.notifyPromise ||= notifyUser(pending.command, visible === true, turnId);
-      try { result = await pending.notifyPromise; }
+      try {
+        result = await pending.notifyPromise;
+        if (pending.todoNotifyResolve) todoErrors?.run('phone-reminder', () => {
+          if (/Bark 已跳过|Bark 发送失败/.test(result)) throw new Error('Bark reminder not delivered.');
+        });
+      }
       catch (err) { error = err.message; }
     }
     // 待我处理: a newly filed need item alerts the user here and on the phone.
@@ -1500,6 +1626,11 @@ app.whenReady().then(async () => {
       }
       return;
     }
+    if (pending?.todoNotifyResolve) {
+      if (error) pending.todoNotifyReject(new Error('Todo notification delivery failed.'));
+      else pending.todoNotifyResolve(true);
+      return;
+    }
     if (pending?.installResolve) {
       if (error) pending.installReject(new Error(error)); else pending.installResolve();
       return;
@@ -1519,6 +1650,7 @@ app.whenReady().then(async () => {
     for (const pending of pendingBoardCommands.values()) pending.delivered = false;
     dispatchPendingBoardCommands();
     queueAuthReceipts();
+    scanTodoAi();
     if (pendingFocusColumn) {
       send('focus-column', { id: pendingFocusColumn });
       pendingFocusColumn = null;
@@ -1767,8 +1899,10 @@ app.whenReady().then(async () => {
       return { ok: true, status: 200, json: async () => ({ code: 200 }) };
     } } : {}) });
   if (!tudArg) {
-    claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats,
-      intervalMs: () => Battery.pollMs('claudeQuotaSample', power.active()), onSample: observeAuth });
+    claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatViewConfig().claudeSeats,
+      intervalMs: () => Battery.pollMs('claudeQuotaSample', power.active()), onSample: observeAuth,
+      read: (seat, home) => readClaudeSeat(seat, home, (s, h, platform, exec, deps) =>
+        readClaudeCredentials(s, h, platform, exec, { ...deps, exclusive: (fn) => seatGate.renew(s, fn) })) });
     const refresh = async () => {
       await Promise.all([claudeQuotaRefresh.tick(), sampleCodex()]);
       send('quota:updated', [...claudeQuotaRefresh.samples(), ...authSamples()]);
@@ -1896,7 +2030,34 @@ function startFleet(configPath) {
   const device = loadDevice(path.join(userData, 'device.json'));
   taskStore.deviceId = device.id;
   todoStore.deviceId = device.id;
+  todoErrors = new TodoBackendErrors({ file: path.join(userData, 'todo-backend-errors.json'), log: nlog, deliver: queueTodoReceipt });
+  const todoTestStarted = Date.now();
+  if (tudArg) todoNotificationNow = () => new Date(2026, 9, 7, 12).getTime() + Date.now() - todoTestStarted;
+  todoFailures = todoErrors.run('notification-queue-read', () => new TodoFailureNotifications({ file: path.join(userData, 'todo-failure-notifications.json'),
+    // Isolated E2E uses a virtual midday clock and short coalescing window.
+    ...(tudArg ? { coalesceMs: 100, now: todoNotificationNow } : {}),
+    onError: (stage, error) => todoErrors.report('notification-' + stage, error),
+    notify: (command) => {
+      const cfg = readLocalConfig(), captain = cfg.columns?.find((c) => c.isMain && c.id === cfg.mainSession?.colId);
+      if (!captain || !boardRendererReady) return false;
+      return new Promise((resolve, reject) => {
+        pendingBoardCommands.set(command.id, { command: { ...command, action: 'main-notify-user', callerId: captain.id, nativeWeb: true },
+          delivered: false, todoNotifyResolve: resolve, todoNotifyReject: reject });
+        dispatchPendingBoardCommands();
+      });
+    } }));
+  todoFailures?.start();
+  todoAi = new TodoAI({ todos: todoStore, tasks: taskStore, deliver: deliverTodo,
+    changed: () => { send('todos:changed', {}); send('task-board:changed', {}); },
+    notify: (command) => {
+      try {
+        if (!todoFailures) throw new Error('Todo failure notification queue unavailable.');
+        todoFailures.enqueue(command);
+      } catch (error) { todoErrors.report('notification-queue-write', error); throw error; }
+    } });
   watchTodos();
+  scanTodoAi();
+  todoAiTimer = setInterval(() => { watchTodos(); scanTodoAi(); }, 60 * 60 * 1000);
   const settings = readFleetSettings({ env: process.env, fleetFile: path.join(userData, 'fleet.json') });
   if (!settings) return;
   if (settings.error) {
@@ -1908,19 +2069,28 @@ function startFleet(configPath) {
   }
   let version = '';
   try { version = require('./package.json').version; } catch (_) {}
-  fleetClient = new FleetClient({
-    baseUrl: settings.baseUrl, tokenFile: settings.tokenFile, device, taskStore,
-    historyDir: path.join(userData, 'fleet-history'), stateFile: path.join(userData, 'fleet-state.json'),
-    sessions: () => fleetSessions(configPath), version, syncMs: settings.syncMs,
-    onChange: () => send('task-board:changed', {}),
-  });
-  try {
-    const captain = fleetSessions(configPath).find((item) => item.role === 'captain');
-    for (const chat of loadAllChats(CHAT_DIR)) {
-      if (chat && (chat.captainArchive === true || chat.id === captain?.id)) fleetClient.noteCaptain(chat.id, chat);
-    }
-  } catch (_) {}
-  fleetClient.start();
+  // The window comes first (2.0.1 black window): reading the sync state, the
+  // board and every captain chat waits until it has had time to start. Board
+  // edits made meanwhile are picked up from the board files when sync starts.
+  const startTimer = setTimeout(() => {
+    fleetClient = new FleetClient({
+      baseUrl: settings.baseUrl, tokenFile: settings.tokenFile, device, taskStore,
+      historyDir: path.join(userData, 'fleet-history'), stateFile: path.join(userData, 'fleet-state.json'),
+      sessions: () => fleetSessions(configPath), version, syncMs: settings.syncMs,
+      onChange: () => send('task-board:changed', {}),
+    });
+    try {
+      const captain = fleetSessions(configPath).find((item) => item.role === 'captain');
+      for (const chat of loadAllChats(CHAT_DIR)) {
+        if (chat && (chat.captainArchive === true || chat.id === captain?.id)) fleetClient.noteCaptain(chat.id, chat);
+      }
+    } catch (_) {}
+    fleetClient.start();
+  }, settings.startDelayMs);
+  fleetClient = {
+    snapshot: () => ({ configured: true, devices: [], history: [], error: null, conflictCount: 0, selfId: device.id, lastSyncAt: null }),
+    stop() { clearTimeout(startTimer); }, noteResult() {}, noteCaptain() {},
+  };
 }
 
 // Ask the page to record in-flight crew, then quit on a later turn. A nested
@@ -2008,6 +2178,8 @@ app.on('before-quit', (event) => {
   clearInterval(barkPumpTimer);
   chatgptWebExecutor?.dispose();
   receiptListeners?.dispose(); receiptListeners = null;
+  clearInterval(todoAiTimer);
+  todoFailures?.stop();
 
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }

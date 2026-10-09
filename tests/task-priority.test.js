@@ -12,6 +12,7 @@ const { spawn } = require('child_process');
 const { TaskStore, priorityOf, syncedCard } = require('../task-board');
 const U = require('../task-board-ui-core');
 const M = require('../main-core');
+const { rulebook } = require('./fixtures/captain-rulebook');
 const B = require('../board-core');
 const S = require('../sidebar-core');
 const C = require('../crew-map-core');
@@ -107,12 +108,13 @@ test('ledger names the 高优先级 sessions; an ordinary line is unchanged', ()
 
 test('the briefing tells the Captain what 高优先级 means and how to mark it, inside the paste limit', () => {
   for (const platform of ['darwin', 'win32']) {
-    const text = M.instructions(platform);
+    const text = rulebook(platform);
+    assert.match(M.instructions(platform), /task add [^\n]*\[--priority high\]/);
     assert.match(text, /task add [^\n]*\[--priority high\]/);
     assert.match(text, /task priority --id 卡片或会话id --level high\|normal/);
     assert.match(text, /new --title [^\n]*\[--priority high\]/);
     assert.match(text, /用户说「高优先级」＝立刻派到后台开工：建卡或 new 加 --priority high，排队排最前/);
-    assert.ok((text + M.SAVER_RESUME).length <= M.BRIEFING_LIMIT, platform);
+    assert.ok((M.instructions(platform) + M.SAVER_RESUME).length <= M.CORE_LIMIT, platform);
   }
 });
 

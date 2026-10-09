@@ -139,7 +139,7 @@ async function request(command, waitForCompletion, authOverride) {
   fail(`Timed out waiting for board request ${id}.`, 2);
 }
 
-const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer'];
+const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer', 'main-todo'];
 
 // 待我处理: what the user should come back to. Plain words for 队长, who files the items.
 const INBOX_HELP = [
@@ -210,15 +210,78 @@ async function automationCommand(args) {
   process.stdout.write(`${response.result || ''}\n`);
 }
 
+// Every command lists the flags it takes. A flag outside the list is refused, never dropped:
+// `new --model … --verify` once ran a default model with no review and nobody noticed.
+// inbox and automation check their own flags above.
+const SUBCOMMANDS = ['task', 'queue', 'settings', 'worktree', 'discuss', 'todo'];
+const COMMAND_FLAGS = {
+  'create-child': ['title', 'task', 'agent', 'command', 'cwd', 'relationship', 'timeout'],
+  'spawn-child': ['title', 'task', 'agent', 'command', 'cwd', 'relationship', 'timeout'],
+  wait: ['task', 'timeout'],
+  send: ['task', 'message'],
+  progress: ['message', 'install-id', 'target-version'],
+  complete: ['result', 'files', 'failed', 'final'],
+  ask: ['question'],
+  'session-exit': ['code'],
+  'notify-user': ['message', 'urgent', 'test'],
+  'queue list': [],
+  'queue cancel': ['task-id'],
+  'task add': ['project', 'title', 'detail', 'id', 'depends', 'verify', 'priority'],
+  'task list': ['project', 'status', 'priority'],
+  'task move': ['id', 'status'],
+  'task priority': ['id', 'level'],
+  'task archive': ['done', 'project'],
+  stop: ['id'],
+  archive: ['id'],
+  ledger: [],
+  receipts: ['wait', 'timeout', 'snapshot', 'ack'],
+  new: ['title', 'task', 'project', 'reviews', 'task-id', 'cwd', 'worktree', 'base', 'branch', 'priority', 'seat', 'agent', 'command', 'web-mode', 'sub-captain'],
+  tell: ['to', 'message', 'replace', 'now'],
+  answer: ['to', 'key'],
+  peek: ['id', 'lines'],
+  read: ['id', 'turns', 'find'],
+  'settings battery': ['mode', 'cap', 'boost', 'for', 'until'],
+  status: [],
+  quota: [],
+  briefing: ['topic'],
+  'todo list': [],
+  'todo status': ['id', 'task-id', 'status', 'message', 'files'],
+  handoff: [],
+  'worktree clean': ['apply', 'path', 'root'],
+  'discuss start': ['topic', 'topic-file', 'gemini', 'participants-file', 'summarizer', 'max-rounds'],
+  'discuss status': ['id'],
+  'discuss wait': ['id', 'timeout'],
+  'discuss cancel': ['id'],
+  'discuss resume': ['id', 'retry', 'accept-saved', 'metadata-file', 'job', 'result-file', 'model', 'tier', 'effort', 'confirmed-ended'],
+  'discuss help': [],
+};
+const NEW_FLAG_HINT = '模型和档位写在 --command 里，例如 --command "claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high"；要验收先 task add --verify 再 new --task-id。';
+
+function rejectUnknownFlags(args) {
+  const action = args._[0];
+  const key = SUBCOMMANDS.includes(action) && args._[1] ? `${action} ${args._[1]}` : action;
+  const allowed = COMMAND_FLAGS[key];
+  if (!allowed) return; // an unknown command or operation gets its own error below
+  const extra = Object.keys(args).filter((name) => name !== '_' && !allowed.includes(name));
+  if (!extra.length) return;
+  fail(`${key} 不认识参数 ${extra.map((name) => `--${name}`).join('、')}（已拒绝，什么都没执行）。` +
+    (allowed.length ? `${key} 支持的参数：${allowed.map((name) => `--${name}`).join(' ')}。` : `${key} 不带任何参数。`) +
+    (action === 'new' ? NEW_FLAG_HINT : '') +
+    (action === 'task' && extra.includes('priority') ? ' --priority is high or normal, on task add and task list. Change a card with task priority --id <id> --level high|normal.' : ''));
+}
+
 function usage() {
   process.stdout.write(
     'AgentDeck managed-terminal bridge\n\n' +
-    '  create-child --title "Task" --task "Instructions" [--agent claude|agy|cursor|grok] [--cwd path]\n' +
+    '  Each command takes only the flags listed here; an unknown flag is refused (exit 1), never ignored.\n\n' +
+    '  create-child --title "Task" --task "Instructions" [--agent claude|agy|cursor|grok|codex | --command "launch"] [--cwd path]\n' +
+    '                                           小队长: opens a child at once and prints its id; its receipts come to your receipts\n' +
     '  spawn-child --title "Task" --task "Instructions" [--agent claude|agy|cursor|grok]\n' +
     '  wait --task <task-id>\n' +
     '  send --task <task-id> --message "Follow-up or answer"\n' +
     '  progress --message "Current progress"\n' +
-    '  complete --result "One to three sentences" [--files path1,path2] [--failed "Reason"]\n' +
+    '  complete --result "One to three sentences" [--files path1,path2] [--failed "Reason"] [--final]\n' +
+    '                                           --final: a 小队长\'s final delivery; its other completes are stage reports that leave its card alone\n' +
     '  ask --question "Decision needed from the Captain"\n' +
     '  status\n\n' +
     'Scheduled scripts on this computer (no terminal needed; automation help for details):\n' +
@@ -229,6 +292,8 @@ function usage() {
     'Captain only (队长, the main session):\n' +
     '  discuss start --topic "题目" [--gemini] [--participants-file path] [--summarizer id]\n' +
     '  discuss status [--id id] | wait --id id | resume --id id [--retry job-id] | cancel --id id\n' +
+    '  todo list                                personal Todo items and AI state\n' +
+    '  todo status --id td-… --task-id todo-… --status working|needs_user|done|failed [--message "Reason"] [--files path1,path2]\n' +
     '  notify-user --message "User action needed" [--urgent]   local alert; urgent also sends Bark\n' +
     '  notify-user --test                        Bark 【测试】 notification, shared volume setting (default 4)\n' +
     '  inbox need|report|list|resolve            the user\'s 待我处理 page; inbox help for details\n' +
@@ -249,9 +314,14 @@ function usage() {
     '                                           --boost on = 临时拉满: on battery, open sessions up to the normal limit instead of the battery cap\n' +
     '                                           (用户说「强度拉满」); ends at --for/--until, when plugged in, or --boost off. The battery mode itself stays on.\n' +
     '                                           --mode off = 不限制 for good, auto = 没插电时按 --cap 限制同时干活的会话数\n' +
-    '  briefing                                 current Captain instructions, read-only\n' +
+    '  briefing                                 the Captain core prompt, read-only\n' +
+    '  briefing --topic <name>|all|list          one of the Captain rule files (models, dispatch, review, inbox,\n' +
+    '                                           sessions, capacity, release, handoff, commands), read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
-    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--sub-captain] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat account|cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
+    '                                           model and effort go inside --command (…--model claude-opus-5-5 --effort high); new has no --model/--effort/--verify\n' +
+    '                                           --sub-captain (needs --project): a 小队长 that opens its own children with create-child;\n' +
+    '                                           their receipts go to it, not to you; ledger nests them under it\n' +
     '  worktree clean [--apply --path copy]      list copies a person may remove; deletion needs --apply and each --path\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
@@ -275,6 +345,7 @@ async function main() {
   if (!action || action === 'help' || args.help) { usage(); return; }
 
   if (action === 'automation') { await automationCommand(args); return; }
+  rejectUnknownFlags(args);
 
   if (action === 'discuss') {
     // The existing read-only action authenticates the Captain even when this
@@ -336,7 +407,8 @@ async function main() {
       action,
       title,
       task,
-      agent: String(args.agent || 'claude'),
+      // Unnamed: a 小队长's child runs its model; a conductor-board child runs claude.
+      agent: typeof args.agent === 'string' ? args.agent : '',
       command: typeof args.command === 'string' ? args.command : '',
       cwd: typeof args.cwd === 'string' ? args.cwd : '',
       relationship: typeof args.relationship === 'string' ? args.relationship : 'Delegated by parent',
@@ -382,7 +454,9 @@ async function main() {
     if (!result.trim()) fail('complete requires --result.');
     if (args.files !== undefined && typeof args.files !== 'string') fail('complete --files requires comma-separated paths.');
     if (args.failed !== undefined && (typeof args.failed !== 'string' || !args.failed.trim())) fail('complete --failed requires a reason.');
-    await request({ action, result, files: args.files ? args.files.split(',').map((p) => p.trim()).filter(Boolean) : [], failed: args.failed || '' }, false);
+    if (args.final !== undefined && args.final !== true) fail('complete --final takes no value.');
+    await request({ action, result, files: args.files ? args.files.split(',').map((p) => p.trim()).filter(Boolean) : [], failed: args.failed || '',
+      ...(args.final === true ? { final: true } : {}) }, false);
     process.stdout.write('Result delivered to the parent task.\n');
     return;
   }
@@ -404,6 +478,18 @@ async function main() {
   }
 
   // ---- main session ----
+  if (action === 'todo') {
+    const op = args._[1];
+    if (!['list', 'status'].includes(op)) fail('todo requires list or status.');
+    if (op === 'status' && (typeof args.id !== 'string' || typeof args['task-id'] !== 'string' || !['working', 'needs_user', 'done', 'failed'].includes(args.status) ||
+        (args.message !== undefined && typeof args.message !== 'string') || (args.files !== undefined && typeof args.files !== 'string'))) fail('todo status requires --id, --task-id and a valid --status.');
+    const response = await request({ action: 'main-todo', op, ...(op === 'status' ? { input: {
+      id: args.id, taskId: args['task-id'], status: args.status, message: args.message || '',
+      files: args.files ? args.files.split(',').map((file) => file.trim()).filter(Boolean) : [],
+    } } : {}) }, false);
+    process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
   if (action === 'queue') {
     const op = args._[1];
     if (!['list', 'cancel'].includes(op)) fail('queue requires list or cancel.');
@@ -516,9 +602,12 @@ async function main() {
     }
     for (const key of ['project', 'task-id']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key].trim())) fail(`new --${key} requires a value.`);
     if (args.reviews !== undefined && (typeof args.reviews !== 'string' || !args.reviews.split(',').every((id) => /^[A-Za-z0-9_-]{1,160}$/.test(id.trim())))) fail('new --reviews requires session ids separated by commas.');
-    if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(args.seat))) fail('new --seat requires a seat id.');
+    // A seat code, or the account signed in there (the part before the @, or the whole address).
+    if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9._%+@-]{1,254}$/.test(args.seat) || /\.\./.test(args.seat))) fail('new --seat requires an account name or a seat id.');
     if (args['web-mode'] !== undefined && (!['chat', 'deep-research'].includes(args['web-mode']) || args.agent !== 'chatgpt-web')) fail('new --web-mode requires --agent chatgpt-web and chat or deep-research.');
     if (args.priority !== undefined && !['high', 'normal'].includes(args.priority)) fail('new --priority is high or normal.');
+    if (args['sub-captain'] !== undefined && args['sub-captain'] !== true) fail('new --sub-captain takes no value.');
+    if (args['sub-captain'] === true && (typeof args.project !== 'string' || !args.project.trim())) fail('new --sub-captain requires --project "Project".');
     const worktree = args.worktree !== undefined;
     if (worktree && (typeof args.worktree !== 'string' || !args.worktree.trim())) fail('new --worktree requires a repository path.');
     if (!worktree && (args.base !== undefined || args.branch !== undefined)) fail('new --base and --branch require --worktree.');
@@ -533,11 +622,15 @@ async function main() {
       repo = path.resolve(raw);
       if (args.branch) { try { Worktree.assertBranch(args.branch.trim()); } catch (error) { fail(error.message); } }
     }
+    if (String(args.agent).toLowerCase() === 'claude' && !(typeof args.command === 'string' && args.command.trim())) {
+      process.stderr.write('[AgentDeck Board] 警告：未指定模型，将用本机默认模型（--agent claude 没带 --command）。\n');
+    }
     const response = await request({
       action: 'main-new', title, task,
       ...(args['web-mode'] !== undefined ? { webMode: args['web-mode'] } : {}),
       ...(args.seat !== undefined ? { seatId: args.seat } : {}),
       ...(args.priority !== undefined ? { priority: args.priority } : {}),
+      ...(args['sub-captain'] === true ? { subCaptain: true } : {}),
       ...(worktree ? { worktree: repo, base: typeof args.base === 'string' ? args.base.trim() : '', branch: typeof args.branch === 'string' ? args.branch.trim() : '' } : {}),
       project: typeof args.project === 'string' ? args.project.trim() : '',
       reviews: typeof args.reviews === 'string' ? [...new Set(args.reviews.split(',').map((id) => id.trim()))] : [],
@@ -587,8 +680,6 @@ async function main() {
 
   if (action === 'settings') {
     if (args._[1] !== 'battery' || args._.length > 2) fail('settings only has battery: settings battery [--mode off|auto] [--cap 1-10].');
-    const extra = Object.keys(args).find((key) => !['_', 'mode', 'cap', 'boost', 'for', 'until'].includes(key));
-    if (extra) fail(`settings battery does not take --${extra}. Use --boost on|off, --mode off|auto and/or --cap 1-10.`);
     const input = {};
     if (args.boost !== undefined) {
       if (args.boost !== 'on' && args.boost !== 'off') fail('settings battery --boost is on or off.');
@@ -621,6 +712,12 @@ async function main() {
     }
     const response = await request({ action: 'main-settings', op: 'battery', input }, false);
     process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
+  if (action === 'briefing' && args.topic !== undefined) {
+    // Rule files are read where the CLI is installed; the running app is not asked.
+    try { process.stdout.write(`${require('./captain-rules').briefing(args.topic)}\n`); }
+    catch (err) { fail(err.message); }
     return;
   }
   if (action === 'quota' || action === 'briefing' || action === 'handoff') {

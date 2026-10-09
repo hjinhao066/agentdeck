@@ -185,7 +185,7 @@ test('Claude seats isolate percentages and exhaustion; missing/stale windows sta
   const store = {};
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20, weeklyUsage: 30 }, now), seatId: 'east', configDir: '~/.claude', accountBound: true, accountKey: 'east-account' }, now);
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 100, sessionResetAt: new Date(now + 3600000).toISOString() }, now), seatId: 'west', configDir: '~/.claude-west', accountBound: true, accountKey: 'west-account' }, now);
-  assert.equal(Q.summary(store, 'Claude', now, seats[0], 'east').displayLabel, '5h 80% ↻未知 · 7d 70% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now, seats[0], 'east').displayLabel, '5h 剩 80% ↻未知 · 7d 剩 70% ↻未知');
   assert.match(Q.summary(store, 'Claude', now, seats[0], 'east').detail, /当前队长使用此席位/);
   assert.equal(Q.summary(store, 'Claude', now, seats[1]).label, '已用尽');
   assert.match(Q.summary(store, 'Claude', now, seats[1]).detail, /7d 无数据/);
@@ -209,10 +209,10 @@ test('a fresh numeric cache replaces a newer screen without quota numbers', () =
   const store = {};
   Q.observe(store, Q.screen('Claude', 'Claude Code', [], now), now);
   Q.observe(store, Q.cacheClaude({ sessionUsage: 46, weeklyUsage: 5 }, now - 60000), now);
-  assert.equal(Q.summary(store, 'Claude', now).displayLabel, '5h 54% ↻未知 · 7d 95% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now).displayLabel, '5h 剩 54% ↻未知 · 7d 剩 95% ↻未知');
   // A subsequent redraw without numbers must keep the known fresh windows.
   Q.observe(store, Q.screen('Claude', 'Claude Code', [], now + 1000), now + 1000);
-  assert.equal(Q.summary(store, 'Claude', now + 1000).displayLabel, '5h 54% ↻未知 · 7d 95% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now + 1000).displayLabel, '5h 剩 54% ↻未知 · 7d 剩 95% ↻未知');
 });
 
 
@@ -226,15 +226,15 @@ test('configured Claude seats discard shared screen numbers and persisted unboun
   assert.doesNotMatch(Q.text(store, now, seats), /剩余 53/);
   Q.observe(store, { ...shared, seatId: 'cn', configDir: '~/.claude', exhausted: true, resetText: '9:20 PM', resetAt: now + 3600000, sourceColumnId: 'cn-captain' }, now);
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 47, weeklyUsage: 45 }, now - 1000), seatId: 'us', configDir: '~/.claude-us', accountBound: true, accountKey: 'us-account' }, now);
-  assert.equal(Q.summary(store, 'Claude', now, seats[1]).displayLabel, '5h 53% ↻未知 · 7d 55% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now, seats[1]).displayLabel, '5h 剩 53% ↻未知 · 7d 剩 55% ↻未知');
   const cn = Q.summary(store, 'Claude', now, seats[0]);
   assert.equal(cn.label, '已用尽');
   assert.match(cn.detail, /已用尽 ↻/);
   assert.match(cn.detail, /报错会话：cn-captain/);
   assert.doesNotMatch(cn.detail, /剩余 53|剩余 55/);
-  assert.match(Q.text(store, now, seats), /Claude \/ 🇨🇳 CN：已用尽/);
+  assert.match(Q.text(store, now, seats), /Claude \/ 识别中（席位 cn）：已用尽 · 席位：cn；/);
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20 }, now), seatId: 'cn', configDir: '~/.claude', accountBound: true, accountKey: 'cn-account' }, now);
-  assert.match(Q.summary(store, 'Claude', now, seats[0]).detail, /5h 80% ↻/);
+  assert.match(Q.summary(store, 'Claude', now, seats[0]).detail, /5h 剩 80% ↻/);
 });
 
 
@@ -287,7 +287,7 @@ test('official success overrides a recent bound screen and supplies the reset fo
   const api = bind(Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [{ key: 'fiveHour', remaining: 91, resetText: new Date(now + 3600000).toISOString() }, { key: 'weekly', remaining: 90 }] }, now + 1));
   Q.observe(store, api, now + 1);
   assert.equal(store[Q.seatKey(seat.id)].sample.official, true);
-  assert.match(Q.summary(store, 'Claude', now + 1, seat).displayLabel, /5h 91% ↻.*7d 90%/);
+  assert.match(Q.summary(store, 'Claude', now + 1, seat).displayLabel, /5h 剩 91% ↻.*7d 剩 90%/);
   Q.observe(store, bind(Q.screen('Claude', 'Usage limit reached', [], now + 2)), now + 2);
   assert.equal(store[Q.seatKey(seat.id)].blocked.resetAt, now + 3600000);
   const priorError = {};
@@ -342,17 +342,17 @@ test('configured Claude seats discard shared screen numbers and persisted unboun
   assert.doesNotMatch(Q.text(store, now, seats), /剩余 53/);
   Q.observe(store, { ...shared, seatId: 'cn', configDir: '~/.claude', exhausted: true, resetText: '9:20 PM', resetAt: now + 3600000, sourceColumnId: 'cn-captain' }, now);
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 47, weeklyUsage: 45 }, now - 1000), seatId: 'us', configDir: '~/.claude-us', accountBound: true, accountKey: 'us-account' }, now);
-  assert.equal(Q.summary(store, 'Claude', now, seats[1]).displayLabel, '5h 53% ↻未知 · 7d 55% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now, seats[1]).displayLabel, '5h 剩 53% ↻未知 · 7d 剩 55% ↻未知');
   const cn = Q.summary(store, 'Claude', now, seats[0]);
   assert.equal(cn.label, '已用尽');
   assert.match(cn.detail, /已用尽 ↻/);
   assert.match(cn.detail, /报错会话：cn-captain/);
   assert.doesNotMatch(cn.detail, /剩余 53|剩余 55/);
-  assert.match(Q.text(store, now, seats), /Claude \/ 🇨🇳 CN：已用尽/);
+  assert.match(Q.text(store, now, seats), /Claude \/ 识别中（席位 cn）：已用尽 · 席位：cn；/);
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20 }, now), seatId: 'cn', configDir: '~/.claude', accountBound: true, accountKey: 'cn-account' }, now);
   const retained = Q.summary(store, 'Claude', now, seats[0]);
   assert.equal(retained.label, '已用尽');
-  assert.match(retained.detail, /上次采样：5h 80%/);
+  assert.match(retained.detail, /上次采样：5h 剩 80%/);
   assert.match(retained.detail, /报错会话：cn-captain/);
 });
 
@@ -593,7 +593,7 @@ test('resourceError ignores resource words in ordinary replies, code and grep ou
   }
 });
 
-test('phone rows carry display fields only: masked account, no config dir, and never show old or missing data as usable', () => {
+test('phone rows carry display fields only: account name, masked address, no config dir, and never show old or missing data as usable', () => {
   const seats = Q.claudeSeats([{ id: 'cn', configDir: '~/.claude' }, { id: 'us', configDir: '~/.claude-us' }]), store = {};
   const official = (seat, at, five, week, extra = {}) => ({ ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
     { key: 'fiveHour', remaining: five, resetText: new Date(now + 2 * 3600000).toISOString() }, { key: 'weekly', remaining: week, resetText: new Date(now + 3 * 86400000).toISOString() }] }, at),
@@ -603,7 +603,8 @@ test('phone rows carry display fields only: masked account, no config dir, and n
   Q.observe(store, { ...Q.screen('Codex', 'Weekly limit: 70% left (resets 10:00)', [], now), account: 'co***@example.com' }, now);
   const rows = Q.mobile(store, now, seats, 'cn');
   assert.deepEqual(rows.map((r) => [r.key, r.name, r.short, r.flag, r.captain, r.status]), [
-    ['Claude:cn', 'Claude 🇨🇳 CN', 'CN', '🇨🇳', true, 'normal'], ['Claude:us', 'Claude 🇺🇸 US', 'US', '🇺🇸', false, 'out'],
+    // A seat goes by its account name (the part before the @); one without a recognised account says which seat it is.
+    ['Claude:cn', 'Claude hjinhao', 'hjinhao', '', true, 'normal'], ['Claude:us', 'Claude 识别中（us）', '识别中（us）', '', false, 'out'],
     ['Codex', 'Codex', 'Codex', '', false, 'normal'], ['Cursor', 'Cursor Grok', 'Cursor', '', false, 'unknown'], ['Antigravity', 'Gemini', 'Gemini', '', false, 'unknown']]);
   assert.deepEqual(rows[0].cells.map((c) => [c.key, c.remaining, c.out]), [['5h', 26, false], ['7d', 61, false]]);
   assert.deepEqual([rows[0].account, rows[1].account, rows[2].account, rows[3].account], ['h***@gmail.com', 'u***@example.com', 'c***@example.com', '']);
@@ -614,7 +615,8 @@ test('phone rows carry display fields only: masked account, no config dir, and n
   assert.deepEqual(rows[2].cells.map((c) => c.key), ['7d']);
   for (const row of rows) {
     assert.deepEqual(Object.keys(row).sort(), ['account', 'captain', 'cells', 'failed', 'flag', 'key', 'name', 'provider', 'recoveryAt', 'sampledAt', 'short', 'source', 'status']);
-    assert.doesNotMatch(JSON.stringify(row), /\.claude|account-|-cred|hjinhao/);
+    // The name may go to the phone; a whole address never does (every @ there follows the mask).
+    assert.doesNotMatch(JSON.stringify(row), /\.claude|account-|-cred|hjinhao@|[^*]@/);
   }
   // Past the freshness window an official sample keeps its numbers but is marked old; a screen sample loses them.
   const later = Q.mobile(store, now + 31 * 60000, seats, 'cn');
@@ -641,8 +643,8 @@ test('an upgraded CN/US profile lists US2 in both the desktop items and the phon
   assert.deepEqual(Q.items(seats).map((item) => item.key), keys);
   const rows = Q.mobile({}, now, seats);
   assert.deepEqual(rows.map((row) => row.key), keys);
-  assert.equal(rows[2].short, 'US2');
-  assert.equal(rows[2].flag, '🇺🇸');
+  assert.equal(rows[2].short, '识别中（us2）');   // nothing known about its account yet: named by its seat code
+  assert.equal(rows[2].flag, '');
   assert.equal(rows[2].status, 'unknown');
 });
 
@@ -960,4 +962,101 @@ test('只有周窗口数据: 5 小时缺失时退回周数字，周剩 16% 和�
   const ok60Auto = Q.quotaFallback(ok60Store, opus, seats, 'cn', now, { explicit: false });
   assert.equal(ok60Auto.action, 'open');
   assert.equal(ok60Auto.reason, 'ok');
+});
+
+// ---- seat rows and 队长's quota text go by the account behind each seat ----
+test('quota rows and text name a seat by its signed-in account and plan; the phone still gets a masked address', () => {
+  const now = Date.parse('2026-10-08T22:00:00Z');
+  // Directory and account do not line up: CN holds the paid account, US2 a Pro one, US nobody.
+  const seats = Q.claudeSeats([
+    { id: 'cn', name: 'CN', icon: '🇨🇳', configDir: '~/.claude', info: { loggedIn: true, loginEmail: 'taylor0421us@example.com', accountEmail: 'taylor0421us@example.com', plan: 'Max 20x' } },
+    { id: 'us', name: 'US', icon: '🇺🇸', configDir: '~/.claude-us', info: { loggedIn: false, loginEmail: '', accountEmail: '', plan: '' } },
+    { id: 'us2', name: 'US2', icon: '🇺🇸', configDir: '~/.claude-us2', info: { loggedIn: true, loginEmail: 'taylor.h.sub@example.com', accountEmail: 'taylor.h.sub@example.com', plan: 'Pro', secret: 'never-kept' } },
+  ]);
+  assert.deepEqual(Object.keys(seats[2].info).sort(), ['accountEmail', 'loggedIn', 'loginEmail', 'plan']);
+  const store = {};
+  const official = (id, key) => ({ provider: 'Claude', scope: 'claude', official: true, source: Q.CLAUDE_OAUTH_SOURCE, seatId: id, configDir: seats.find((s) => s.id === id).configDir,
+    accountBound: true, accountKey: key, credentialKey: 'cred-' + id, at: now, confidence: '高（官方采样）',
+    windows: [{ key: 'fiveHour', label: '5 小时', remaining: 88, resetAt: now + 3600000 }, { key: 'weekly', label: '每周', remaining: 93, resetAt: now + 4 * 86400000 }] });
+  for (const [id, key, account, plan] of [['cn', 'k-paid', 'taylor0421us@example.com', 'Max 20x'], ['us2', 'k-sub', 'taylor.h.sub@example.com', 'Pro']]) {
+    Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: id, at: now, identityOnly: true, configDir: seats.find((s) => s.id === id).configDir, accountKey: key, account, plan, credentialKey: 'cred-' + id }, now);
+    Q.observe(store, official(id, key), now);
+  }
+  assert.equal(store['Claude:cn'].account, 'taylor0421us@example.com'); assert.equal(store['Claude:cn'].plan, 'Max 20x');
+
+  const paid = Q.summary(store, 'Claude', now, seats[0], 'cn');
+  assert.equal(paid.accountLabel, 'taylor0421us'); assert.equal(paid.account, 'taylor0421us@example.com');
+  assert.equal(paid.plan, 'Max 20x'); assert.equal(paid.planMark, 'Max'); assert.equal(paid.seatCode, 'cn');
+  assert.equal(paid.seatTitle, 'taylor0421us@example.com · 套餐 Max 20x · 席位 cn · ~/.claude');
+  assert.equal(paid.name, 'taylor0421us · 队长');
+  const sub = Q.summary(store, 'Claude', now, seats[2], 'cn');
+  assert.equal(sub.accountLabel, 'taylor.h.sub'); assert.equal(sub.plan, 'Pro'); assert.equal(sub.planMark, '');
+  const nobody = Q.summary(store, 'Claude', now, seats[1], 'cn');
+  assert.equal(nobody.accountLabel, '未登录'); assert.equal(nobody.account, ''); assert.equal(nobody.planMark, '');
+  assert.equal(nobody.seatTitle, '未登录 · 席位 us · ~/.claude-us');
+
+  // 队长's `quota`: the account name and the whole address, not masked; the seat only as its code.
+  const text = Q.text(store, now, seats, 'cn');
+  assert.match(text, /^Claude \/ taylor0421us：剩 88% · 席位：cn；当前队长使用此席位；配置目录：~\/\.claude · 模型：[^·]*；账号：taylor0421us@example\.com（Max 20x） · 5h 剩 88% /);
+  assert.match(text, /\nClaude \/ 未登录（席位 us）：未知 · 席位：us；配置目录：~\/\.claude-us · 模型：[^·]*；账号：未识别（此席位）/);
+  assert.match(text, /\nClaude \/ taylor\.h\.sub：剩 88% · 席位：us2；配置目录：~\/\.claude-us2 · 模型：[^·]*；账号：taylor\.h\.sub@example\.com（Pro）/);
+  assert.doesNotMatch(text, /\*\*\*|🇨🇳|🇺🇸|Claude \/ (?:CN|US)/);
+
+  // A confirmed lost login keeps saying which account it was.
+  Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'us2', configDir: '~/.claude-us2', at: now + 1, authOnly: true, authStatus: 'logged-out', loginCommand: 'CLAUDE_CONFIG_DIR=~/.claude-us2 claude auth login' }, now + 1);
+  const out = Q.summary(store, 'Claude', now + 1, seats[2], 'cn');
+  assert.equal(out.authStatus, 'logged-out'); assert.equal(out.accountLabel, 'taylor.h.sub'); assert.equal(out.seatCode, 'us2');
+  assert.equal(out.detail, 'Claude / taylor.h.sub：未登录\n此席位无法继续任务，请重新登录\n席位：us2；配置目录：~/.claude-us2');
+
+  // Without fresh seat info (main process, the first seconds after launch) the remembered account stands in;
+  // nothing remembered is said as such, with the seat code.
+  const plain = Q.claudeSeats([{ id: 'cn', name: 'CN', icon: '🇨🇳', configDir: '~/.claude' }, { id: 'us', name: 'US', icon: '🇺🇸', configDir: '~/.claude-us' }]);
+  assert.equal(plain[0].info, undefined);
+  const remembered = Q.summary(store, 'Claude', now, plain[0]);
+  assert.equal(remembered.accountLabel, 'taylor0421us'); assert.equal(remembered.plan, 'Max 20x'); assert.equal(remembered.account, 'taylor0421us@example.com');
+  assert.match(Q.summary(store, 'Claude', now, plain[1]).detail, /^Claude \/ 识别中（席位 us）：/);
+  // A masked address saved by an older version is not a name, and is not shown as one.
+  const legacy = { 'Claude:cn': { ...store['Claude:cn'], account: 't***@example.com', plan: undefined } };
+  assert.equal(Q.summary(legacy, 'Claude', now, plain[0]).accountLabel, '识别中');
+
+  // The account changes in the same directory: the old account's plan and numbers do not follow it.
+  Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'cn', at: now + 2, identityOnly: true, configDir: '~/.claude', accountKey: 'k-066', account: 'taylor0421@example.com', plan: 'Pro', credentialKey: 'cred-cn' }, now + 2);
+  assert.equal(store['Claude:cn'].account, 'taylor0421@example.com'); assert.equal(store['Claude:cn'].plan, 'Pro'); assert.equal(store['Claude:cn'].sample, undefined);
+
+  // The phone page: seats by account name too, but only the part before the @. The address stays masked.
+  const rows = Q.mobile(store, now, seats, 'cn');
+  assert.deepEqual(rows.slice(0, 3).map((r) => [r.key, r.name, r.short, r.flag]), [['Claude:cn', 'Claude taylor0421us', 'taylor0421us', ''],
+    ['Claude:us', 'Claude 未登录（us）', '未登录（us）', ''], ['Claude:us2', 'Claude taylor.h.sub', 'taylor.h.sub', '']]);
+  assert.equal(rows.find((r) => r.key === 'Claude:us2').account, 't***@example.com');
+  assert.equal(rows.find((r) => r.key === 'Claude:cn').account, 't***@example.com');
+  assert.doesNotMatch(JSON.stringify(rows), /[^*]@|🇨🇳|🇺🇸|Claude (?:CN|US)/);
+});
+
+// ---- every percentage 队长 reads is what is left, and says so ----
+test('quota text says 剩 before every Claude percentage, in the headline and in each window', () => {
+  const now = Date.parse('2026-10-08T22:00:00Z'), seat = Q.claudeSeats([{ id: 'us2', name: 'US2', configDir: '~/.claude-us2' }])[0];
+  const sample = (five, week, extra = {}) => ({ provider: 'Claude', scope: 'claude', official: true, source: Q.CLAUDE_OAUTH_SOURCE, seatId: 'us2', configDir: '~/.claude-us2',
+    accountBound: true, accountKey: 'k', credentialKey: 'c', at: now, confidence: '高（官方采样）', ...extra,
+    windows: [{ key: 'fiveHour', label: '5 小时', remaining: five, exhausted: five === 0, resetAt: now + 3600000 }, { key: 'weekly', label: '每周', remaining: week, exhausted: false, resetAt: now + 4 * 86400000 }] });
+  // 2% used, 98% left: the text must not be readable as "98% used".
+  let store = {}; Q.observe(store, sample(98, 71), now);
+  let row = Q.summary(store, 'Claude', now, seat), line = Q.text(store, now, [seat]).split('\n')[0];
+  assert.match(row.displayLabel, /^5h 剩 98% ↻\d\d:\d\d · 7d 剩 71% ↻\d\d-\d\d \d\d:\d\d$/);
+  assert.match(line, /^Claude \/ [^：]+：剩 71% · /);                 // the headline is the least that is left
+  assert.match(line, / · 5h 剩 98% ↻\d\d:\d\d · 7d 剩 71% ↻/);
+  assert.doesNotMatch(line, /(?:5h|7d) \d|：\d/);                     // no bare percentage anywhere
+  assert.equal(row.label, '71%'); assert.equal(row.fiveHour, 98);     // the fields other code reads are unchanged
+  // Next to nothing left, and used up.
+  store = {}; Q.observe(store, { ...sample(0.04, 50), windows: sample(0.04, 50).windows.map((w) => w.key === 'fiveHour' ? { ...w, remaining: 0, exhausted: false } : w) }, now);
+  assert.match(Q.summary(store, 'Claude', now, seat).displayLabel, /^5h 剩 <0\.1% ↻/);
+  store = {}; Q.observe(store, sample(0, 50), now);
+  row = Q.summary(store, 'Claude', now, seat);
+  assert.match(row.displayLabel, /^5h 已用尽 ↻\d\d:\d\d · 7d 剩 50% ↻/);
+  assert.match(row.detail, /：已用尽\n/); assert.doesNotMatch(row.detail, /剩 已用尽/);
+  // Nothing known: no number, so no 剩 either.
+  assert.match(Q.summary({}, 'Claude', now, seat).detail, /：未知\n[^]*5h 无数据 ↻未知\n7d 无数据 ↻未知/);
+  // The other providers already said 剩余 in each window; their headline now says 剩 as well.
+  store = {}; Q.observe(store, Q.screen('Codex', '5-hour limit: 8% left (resets 23:59)\nWeekly limit: 60% left (resets 10:00)', [], now), now);
+  const codex = Q.text(store, now, []).split('\n').find((l) => l.startsWith('Codex'));
+  assert.match(codex, /^Codex \/ ChatGPT：剩 8% · /); assert.match(codex, /5 小时剩余 8%；/); assert.match(codex, /每周剩余 60%；/);
 });

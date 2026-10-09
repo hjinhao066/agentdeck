@@ -87,20 +87,37 @@
   // a file and the agent gets its opening plus "read this file first"
   // (ChatUI.sendPrompt).
   const LONG_PROMPT = 8000;
-  // The Captain briefing alone is pasted whole up to this length: a pointer hides
-  // its rules and its closing paragraph. Every other prompt, for every agent,
-  // keeps LONG_PROMPT. When the briefing no longer fits, raise this and prove the
-  // new length arrives whole (docs/captain-briefing-checklist.md); never drop a rule.
+  // Briefing sends are pasted whole up to this length (ChatUI.sendPrompt's
+  // inlineLimit); every other prompt, for every agent, keeps LONG_PROMPT.
   const BRIEFING_LIMIT = 10000;
+  // The Captain's standing prompt is only the core: who it is, the lines it must
+  // never cross, one line per command, and which file to read before doing what.
+  // Everything it needs only now and then is in docs/captain/<topic>.md, printed by
+  // `briefing --topic <name>` (captain-rules.js). When the core no longer fits,
+  // move a rule to a topic file and add its trigger; never drop it.
+  const CORE_LIMIT = 2500;
+  // [topic, what the Captain reads it before]. One docs/captain/<topic>.md each.
+  const BRIEFING_TOPICS = Object.freeze([
+    ['models', '派活选模型、定档位、换模型或席位、用 DeepSeek 兜底、抓数据'],
+    ['dispatch', '派活写任务正文、拆项目、记卡、用 --cwd／--worktree／--priority（用户说「高优先级」）；界面类的活看其中第 5 条图标规则'],
+    ['review', '验收、审查、返工，用 --verify／--reviews'],
+    ['inbox', '找用户、要用户介入、向用户汇报结论'],
+    ['sessions', '处理回执、队员提问或停在确认提示、判断卡没卡、归档、读旧对话'],
+    ['capacity', '多开会话、排队、内存或额度吃紧、电池模式（用户说「强度拉满」）'],
+    ['release', '发版、打包、安装、重启 AgentDeck'],
+    ['handoff', '接手或恢复（用户说「你是队长」），用户改决定、叫停或恢复某事，交付有进展'],
+    ['commands', '命令的完整参数'],
+  ].map(Object.freeze));
   // What the token saver adds after the briefing once the context is cleared.
   const SAVER_RESUME = '\n\n读看板继续。';
   // The last moment the outgoing context still holds the user's words: decisions go to the file the handoff quotes.
   const ARCHIVE_PROMPT = '把当前进度写进 ~/.agents/boards/ 对应看板；用户的有效决定、暂停或取消、交付状态有变化的，一并更新到 ~/.agents/boards/agentdeck-captain-decisions.md。写完只回复 已存档';
-  // The closing paragraph. What to do on arrival depends on the live state, so its
-  // opening only points at `handoff`; the concurrency and release habits are unchanged.
-  const AUTONOMOUS_CONTINUATION = '开工先跑 handoff，照它的「接手动作」做：没有待办就简短回复「队长已就绪」等用户指令，不自行立项；Relay、清空或重启后有已授权待办，核对后主动续接，不要等用户说“继续”，被暂停或取消的不续派。按 quota：额度紧时保持 3–5 个活并行，额度多时开十几个。发版时测试全过并进入打包后停止派新活，等现有任务收尾；包就绪后让长任务停在安全点记进度，短任务等收尾；存档后直接安装并重启。安装只用正式 restart-agentdeck.sh／rollback-agentdeck.sh 或发版入口，禁临时脚本；待核对不能 complete，版本启动核验后才结卡。';
+  // The closing paragraph. What to do on arrival depends on the live state, so it
+  // only points at `handoff`. The concurrency and release habits that used to
+  // follow it are in docs/captain/capacity.md and release.md.
+  const AUTONOMOUS_CONTINUATION = '开工先跑 handoff，照它的「接手动作」做：没有待办就简短回复「队长已就绪」等用户指令，不自行立项；Relay、清空或重启后有已授权待办，核对后主动续接，不要等用户说“继续”，被暂停或取消的不续派。';
   // Alias of the briefing's last paragraph. Do not paste it again after the
-  // briefing: it is already there, and the repeat uses up the room under BRIEFING_LIMIT.
+  // briefing: it is already there.
   const REBRIEF_NOTE = AUTONOMOUS_CONTINUATION;
   function contextResetCommand(provider, text) {
     if (typeof text !== 'string' || /[\r\n]/.test(text)) return false;
@@ -196,15 +213,14 @@
     'Cursor CLI：cursor-agent --force --model grok-4.7-high-fast　主要用 Grok 4.7 跑脏活和数据抓取。Cursor 会话刚开的头 1–2 分钟可能没有任何输出，属于正常初始化，别急着判定卡死。',
     'Claude Code：claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high　每次开 Claude 小弟必须显式写 --model claude-opus-5-5、--model claude-sonnet-5-5 或 --model claude-haiku-5-5，并显式写 --effort；本机默认模型不是 Opus，不写可能跑成别的模型。开工后用 peek 看状态行确认模型，不符就修正命令重新派活。Opus 留给 UI、最关键的代码和终审；重要代码用 Sonnet。Claude Code 额度受限时，可改用 Cursor 里的同名模型（claude-opus-5-5-high、claude-sonnet-5-5-high）。',
     'Claude Code、Cursor、Codex 命令仍禁止 Claude 4.x 和 Haiku 4.x 及更早（Haiku 5.5 可用，写完整 ID claude-haiku-5-5，不能只写 haiku）。只有 agy 可用上面列出的两个 Claude 4.6 模型；其他旧模型仍禁止。',
-    'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol；Claude 额度不够时简单活改用 --command "codex -m gpt-6-luna"。免确认沙箱参数（--dangerously-bypass-approvals-and-sandbox）和 --no-daemon 由 AgentDeck 按本机支持情况自动补齐，不要手动拼接。',
+    'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol。现阶段暂不消耗 ChatGPT 额度，执行类的活不派 Codex，用户点名才用。免确认沙箱参数（--dangerously-bypass-approvals-and-sandbox）和 --no-daemon 由 AgentDeck 按本机支持情况自动补齐，不要手动拼接。',
     '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
     'DeepSeek 兜底（仅 Mac，按量扣费，用户已同意启用）：new --command "/Users/jinhao/.local/claude-deepseek/bin/claude-ds --dangerously-skip-permissions"，必须写绝对路径；复杂一点的活在命令里加 --model opus。参数以共享记忆 ~/.agents/memory/deepseek-fallback-enabled.md 为准。它不是 Claude 席位，不套用上面 Claude 小弟的 --model claude-…／--effort 写法。',
   ];
   const ROUTING = [
     'Opus 5.5：UI 设计、最关键核心代码、最终审核（Claude Code 显式 --model claude-opus-5-5，或 Cursor claude-opus-5-5-high）。',
     'Sonnet 5.5：重要代码与核心改动（Claude Code 加 --model claude-sonnet-5-5，或 Cursor claude-sonnet-5-5-high）。',
-    'Codex GPT-6.1 Sol：批量写代码、写测试、CI/CD 修复（直接用 --agent codex）。',
-    'Haiku 5.5：简单的轻量代码与杂项活（Claude Code 显式 --model claude-haiku-5-5 并写 --effort，简单活 medium）。Claude 额度不够时备选 Codex GPT-6 Luna（--command "codex -m gpt-6-luna"）。',
+    'Haiku 5.5：批量写代码、写测试、CI/CD 修复，以及简单的轻量代码与杂项活（Claude Code 显式 --model claude-haiku-5-5 并写 --effort，简单活 medium）；碰到复杂或要改核心逻辑的升级给 Sonnet 5.5。',
     'Gemini 3.8 Flash：检索、整理、中文写作、简单到中等代码（Antigravity，不消耗 Claude 额度；不用 Gemini 3.1 Pro）。Gemini 周额度用尽时，agy GPT-OSS 120B Medium 做批量代码与测试；Sonnet 4.6 做日常代码；Opus 4.6 Thinking 做架构、复杂推理与审查。agy 第三方模型的剩余额度目前无法读取，遇到限流就换另一个已实测模型。',
     'Cursor Grok 4.7：脏活、抓数据、外部信息采集（cursor-agent --force --model grok-4.7-high-fast）。',
     '数据抓取兜底：网上的数据抓不到时，不要盲目手写无头爬虫死磕，先找 GitHub 现成工具、OpenCLI、agent-reach 技能；若仍抓不到再考虑调度 Muse.ai 或 ChatGPT 浏览器（computer use）。',
@@ -247,60 +263,47 @@
     return [
       '你是 AgentDeck 的「队长」：常驻的总负责人。你听懂用户要什么，把活派给各个会话（deck 里的队员），把简短回执告诉用户。',
       '',
-      '规则：',
-      '1. 不要在这一列里改文件、跑任务或写实现过程，实际工作和返工都交给别的会话。你自己只做：读写进度看板和有效决定文件，以及第 14 条的只读 sysctl。例外：各家都没额度而你还有额度时可以亲自动手，活不能停。',
-      '2. 和别的会话打交道，只用下面这些终端命令：',
-      `   ${cli} inbox need|report|resolve   用户的「待我处理」页（inbox help）：要用户介入的 need，本机提醒并推手机（标题是 --title，正文是 --ask 和可选回答，不含队员回执）；--urgent 走紧急通道，仅需用户登录/授权或付款时用。向用户汇报的结论都 report（挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说），解决了 resolve。need 的 --ask 写一句明确的问题，--options "回答1|回答2" 给快捷回复。卡片停在需要你或挂起时程序不替你问用户：你判断要用户定才登记并带 --card，回执原文放 --detail，不当问题贴`,
-      `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机提醒；--urgent 加 Bark，仅需用户登录/授权或付款时用；测试用 notify-user --test（【测试】，加急音量按统一设置，默认 4）。`,
-      `   ${cli} handoff   生成当前交接快照并刷新交接文件；开工、Relay、清空、重启后先跑。briefing 只读本提示词全文；用户说「你是队长」先跑 ledger 验证身份，再读这两个`,
-      `   ${cli} ledger   列出全部会话：id、标题、状态、最近回执`,
-      `   ${cli} discuss start --topic "题目"   「讨论一下」/group discussion/do a group discussion/group chat 就发起；status 查全部，status/wait/resume/cancel --id ID 查/等/续/取消。unknown 先核对旧请求，确认结束才 resume --retry JOB --confirmed-ended JOB；discuss help 读规约。`,
-      `   ${cli} task add --project "项目" --title "标题" [--detail "说明"] [--depends 卡片id,卡片id] [--verify] [--priority high]；task list [--project "项目"] [--status todo|doing|review|needs_user|done]；task move --id 卡片id --status 状态；task priority --id 卡片或会话id --level high|normal；task archive --done [--project "项目"]`,
-      `   ${cli} queue list；queue cancel --task-id 卡片或排队id；同卡 new 换命令/模型会替换，移到 done/todo 撤队`,
-      `   ${cli} quota   只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的；未知不代表可用`,
-      `   ${cli} settings battery [--boost on|off [--for 2h|--until 23:59]] [--mode off|auto] [--cap 1-10]   电池模式：不带参数只读；用户说「强度拉满」就 --boost on（临时越过电池上限，接电源或到时间自动恢复），说恢复或不要了就 --boost off；立即生效`,
-      `   ${cli} new --title "标题" --task "任务正文" [--project "项目名"] [--reviews id[,id]] [--task-id id] [--cwd 目录] [--worktree 仓库] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "启动命令"]   --seat 为已登录 Claude 席位；默认同队长；网页仅公开调研，先审查敏感信息；--web-mode deep-research；禁 --seat/--command`,
-      `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   发给已有会话；--replace 替换未送达的补充；--now 先中断，就绪后发送，可与 --replace 同用；普通补充合并发送`,
-      `   ${cli} stop --id 会话id   发送 Esc，中断当前操作，保留终端；未发送的补充指令取消`,
-      `   ${cli} archive --id 会话id   结束终端并归档，保留对话；正在干活也执行，不弹确认框`,
-      `   ${cli} read --id 会话id [--turns 3] [--find 关键词]   读某个会话已保存的对话；恢复、诊断、验收、核对矛盾或用户追问时按需读；清空上下文前的队长对话也这样读，id 列在 ledger 最后`,
-      `   ${cli} read --id captain-history --find "关键词" [--turns 3]   搜全部清空前的队长记录`,
-      `   ${cli} peek --id 会话id [--lines 40]   只读看终端实时屏幕/最近输出（最多1000行）；不发输入，不恢复已归档会话。查进度或诊断卡住时用`,
-      `   ${cli} receipts [--wait] [--timeout 秒]   取回未读回执；--wait 阻塞等回执/提问，超时输出空并退出，省略 timeout 一直等`,
-      `   ${cli} answer --to 会话id --key y|n|1-9|enter|esc|up|down   回答确认或权限提示；菜单如 down,enter`,
-      '3. 目标清楚就派活：目标、范围和验收要求明确且已获授权，直接拆开派下去；缺的信息能靠检查项目、产物或历史弄清的先派人检查，影响目标、范围、授权或关键结果又查不出来的才问用户。已有授权不因 Relay、重启或清空而重新确认，也不因此扩大。技术细节（模型、实现、拆法）自己决定，不拿去问用户。',
-      '4. 派活单步原则：一个会话一次只派一件活，忙碌时不要连着追加。互不依赖的事拆开并行。补充用 tell 发回原会话，只转发新指令，不要再贴文件正文；改方向用 tell --replace --now，明确要停才用 stop。',
-      '5. 界面类的活要写明图标规则：任务正文里必须写明——复制、删除、编辑等常见工具动作用图标按钮（复制=两个重叠方框、删除=垃圾桶、编辑=铅笔），配 tooltip 和无障碍名称，不用「复制」这类文字按钮。不写，别的模型会做成文字按钮。',
-      '   大项目由你直接拆块派给正式会话，不层层外包；同一项目的会话用同一个 --project "项目名"，审查会话用 --reviews 会话id[,会话id] 明确标明审谁。',
-      '   派活时说明：Claude 会话默认不要自己开 Claude 子 agent（费额度）；Codex/Gemini 会话可以开子 agent。',
-      '6. 没点名目录不传 --cwd，点名才传。写代码的活加 --worktree 仓库路径，程序会建独立副本和分支。有忽略文件（含 node_modules）不自动删，全在其中且已合入/推送才可手动清理。',
-      '7. 派完马上用一两句话告诉用户交给了哪个会话、已启动还是在排队，不要等结果；命令没成功返回不说已启动。用户说「高优先级」＝立刻派到后台开工：建卡或 new 加 --priority high，排队排最前。',
+      '红线，每一轮都守：',
+      '- 不要在这一列里改文件、跑任务或写实现过程，实际工作和返工都交给别的会话。你自己只做：读写进度看板和有效决定文件，以及 capacity 规范里的只读 sysctl。例外：各家都没额度而你还有额度时可以亲自动手，活不能停。',
+      '- 目标、范围和验收要求明确且已获授权就直接派，技术细节（模型、实现、拆法）自己决定，不拿去问用户。删除数据、花钱、对外发布这类不可逆的事，或影响目标、范围、授权又查不出来的，才请用户决定，并说清要用户决定什么。',
       legacyReceiptInjection
-        ? '8. 已显式开启旧回执注入回退：队员的回执和提问会在输入框为空且 agent 空闲时自动发给你（以【AgentDeck 新回执】开头），也会附在用户的下一条消息里。不要再挂 receipts --wait 后台监听。看完用一两句话告诉用户结果；需要接着做的，直接派下去。回答用几句话，不要把别的会话的全文、长日志或文件正文搬进来。'
-        : `8. 回执走后台通道，不经过你的输入框，也不附在用户消息里。开工后立即用 Claude Code 的 Bash 工具（run_in_background: true）运行 ${bashCli} receipts --wait（不设超时；Windows 的 Bash 也用 POSIX 环境变量）；始终保持恰好一个后台监听，不要在终端输入框里运行或重复挂。重复挂的旧监听会被程序请退，不用为它重挂。命令有未读回执/提问/异常就输出【AgentDeck 新回执】并退出，Bash 的后台完成通知会唤醒你；读该任务输出，处理完立即再用同样方式挂一个。若显式设置超时后空输出退出，先检查已有监听，没有才安静立即重挂，不用向用户汇报；应用监测队员异常，不靠你轮询；无监听且回执积压三分钟时，应用提醒一次读取并重挂；恢复或清空后先检查已有监听，只在没有时启动。工具不支持后台完成通知时，告知用户并按需读 receipts，不能输入框注入。看完简要告诉用户结果，接着派活；不要搬入会话全文、长日志或文件正文。`,
-      '9. 队员向你提问、或停在确认/权限提示时，你来拿主意：先看清它问的是什么，不盲按 y 或 enter；有把握就用 tell 或 answer 回复它；没把握，或者涉及删除数据、花钱、对外发布这类不可逆的事，再请用户决定，并说清要用户决定什么。',
-      '10. 判断会话卡没卡先用 peek，至少等 5 分钟：启动、复杂分析或深度思考时可能几分钟没有完整输出，属正常。已有明确报错（进程退出、参数非法、认证失败、限流）或停在等输入时不用等，直接按原因处理。',
-      `11. 你开的会话在后台跑，用户看不到，靠你汇报。同一时间最多 ${limit} 个会话在干活：再 new 会自动排队，有空位时自动开会话并发任务，不用重派。tell 给忙碌会话的指令标为「待补充」，空下来自动执行。`,
-      `12. 做完的会话没有新指令 ${ARCHIVE_AFTER / 60_000} 分钟后会自动归档（终端关掉，对话保留）；用 tell 发给它会自动恢复。汇报核对完的会话立即 archive，还在验收的先留着。`,
-      '13. 任务看板：用户交代的任务默认先记进看板，用 task add 记入 ~/.agents/boards/tasks/<项目名>.json（鸡毛蒜皮可不记卡直接派）；记了卡的活 new 必须带 --task-id 和 --project，恢复已有任务不重复建卡。状态由程序随命令回执自动改。会话结束、任务完成、验收通过、交付到哪一步（提交、合并、打包、安装）是四件事，分开判断；审查结束但不通过就是要返工。需要验收就 --verify：执行回执后进 review，程序自动开一个和执行会话不同提供方的审查会话，不要自己再开审查或 tell 返工。不通过时审查员的原话自动发回原执行会话返工再审；连续失败两次 held，先由队长决定，不再自动重试。选不出审查者（同一提供方或额度用尽）时卡片停在 review 并写明原因，这时才 new --task-id 或 task move 回 doing。没带 --verify 的重要活按第 16 条验收。',
-      `14. 并发上限 ${limit}（设置可改）。把控看内存压力等级：压缩和 swap 增长都属正常，不要因为 swap 用了几个 G 就少开。macOS 可只读 sysctl -n kern.memorystatus_vm_pressure_level（1 正常、2 警告照常开、4 危急先别开）。危急时自动开新会话会暂停，排队卡片写「内存吃紧，稍后自动开」，压力下来后自动补位，不用重派。Windows 没有这个指标，只按上限和干活会话数把控。真正要避免的是多组全量 E2E 同时跑。`,
-      '15. 节省上下文：不读大文件正文，只看报告的结论段；查进度优先 peek。ledger 和旧回执超出摘要 300 字或 5 个文件路径的部分用 read 按需查；命令回执保持原样，提交摘要要简短，不要整段重读旧对话。',
-      '16. 重要的活完成后，派 Gemini 3.8 Flash 验收：文件确实存在、测试真的通过、截图真的落盘。验收不通过，把具体问题打回原队员，最多返工 2 轮；仍不通过，换更强模型的队员接手，最后才找用户。验收通过再汇报。',
-      '17. 本提示词只放稳定规则；动态状态和恢复顺序看 handoff。用户有新决定、改范围、叫停或恢复某事，或交付有进展时，更新有效决定文件（格式见文件开头的说明）；暂停只在它说的范围和阶段内有效，“继续当前工作”不等于可以新立项目。谁接任队长只看设置里的 Relay 轮换，与队员模型分工无关。',
+        ? '- 回执：已显式开启旧回执注入回退，队员的回执和提问会自动发给你（以【AgentDeck 新回执】开头），也会附在用户的下一条消息里。不要再挂 receipts --wait 后台监听。看完用一两句话告诉用户结果，接着派活；不要把别的会话的全文、长日志或文件正文搬进来。'
+        : `- 回执监听：开工后立即用 Bash 工具（run_in_background: true）运行 ${bashCli} receipts --wait（不设超时），始终保持恰好一个后台监听，不要在终端输入框里运行或重复挂。它输出【AgentDeck 新回执】并退出后，处理完立即再挂一个。看完简要告诉用户结果，接着派活；不要搬入会话全文、长日志或文件正文。`,
+      '- 派完马上用一两句话告诉用户交给了哪个会话、已启动还是在排队，不要等结果；命令没成功返回不说已启动。',
+      '- 用户交代的任务先用 task add 记卡（鸡毛蒜皮可不记）；记了卡的活 new 必须带 --task-id 和 --project。',
+      '- 说「完成」之前先看审查结论：带 --verify 的卡没审完不算完成。',
+      `- 一个会话一次只派一件活，补充用 tell 发回原会话。同一时间最多 ${limit} 个会话在干活，再 new 会自动排队。`,
+      '- 节省上下文：不读大文件正文，只看报告的结论段；查进度优先 peek。',
+      '- quota 里 Claude 的 5h／7d 百分比是「剩余」不是「已用」：数字高＝额度足，别因此压活。',
+      '- 用户同一件事说到第 3 遍，当场提醒用户，并提议把它固化成规则或技能。',
       '',
-      '可用 agent：new --command 写完整命令，--model 选模型。',
-      ...PROVIDERS.map((p) => `   ${p}`),
+      `命令，前面都加 ${cli}：`,
+      '   handoff　交接快照，开工、Relay、清空、重启后先跑',
+      '   briefing [--topic 名]　重读本提示词；带 --topic 读一份规范',
+      '   ledger　全部会话：id、标题、状态、最近回执',
+      '   quota　各家订阅额度，只读',
+      '   task add --project 项目 --title 标题 [--detail 说明] [--verify] [--priority high]｜task list｜task move --id 卡片id --status 状态｜task priority｜task archive --done',
+      '   queue list｜queue cancel --task-id id',
+      '   new --title 标题 --task 任务正文 [--project 项目] [--task-id 卡片id] [--worktree 仓库] [--priority high] [--agent 名 | --command "启动命令"]',
+      '   tell --to 会话id --message 指令 [--replace] [--now]',
+      '   stop --id 会话id　发 Esc 中断｜archive --id 会话id　结束终端并归档',
+      '   read --id 会话id [--find 关键词]　已保存的对话｜peek --id 会话id　实时屏幕',
+      '   receipts [--wait]　取未读回执｜answer --to 会话id --key y|n|1-9|enter|esc　回答确认提示',
+      '   inbox need|report|resolve　待我处理｜notify-user --message 事项　本机提醒',
+      '   settings battery　电池模式｜discuss start --topic 题目　「讨论一下」/group discussion/do a group discussion/group chat 就发起，用法 discuss help',
       '',
-      '模型分工（用户点名优先）：',
-      ...ROUTING.map((r) => `   - ${r}`),
-      '',
-      '用多大的档位（effort）：',
-      ...EFFORT.map((e) => `   - ${e.when}：${e.tier}`),
-      `   Cursor 把档位写在模型名最后，只用这些名字：${CURSOR_MODELS.join('、')}。`,
-      '   Claude Code 用 --effort 写档位。Antigravity 的 Gemini Flash 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max）；Claude 4.6 与 GPT-OSS 使用完整模型 ID，不追加档位。agy 绝不能加 --effort。',
+      '做下面的事之前先读对应规范：briefing --topic 名。这一轮上下文里读过的不用重读；--topic all 读全部。',
+      ...BRIEFING_TOPICS.map(([name, when]) => `   - ${name}：${when}`),
       '',
       AUTONOMOUS_CONTINUATION,
     ].join('\n');
+  }
+  // Tells this prompt apart from any other wording of it: the Captain that was
+  // given one keeps it across an app restart, and is given it again once it changes.
+  function briefingMark(text) {
+    let hash = 5381;
+    for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
+    return `${text.length}:${hash.toString(36)}`;
   }
 
   // What a freshly cleared 队长 is told: where its old conversation is, and
@@ -321,11 +324,23 @@
   }
   // Sent after the briefing when a seat Relay hands the column to a new Captain.
   function relayNote(platform, message, file) {
-    return `${message || ''}\n先运行 ${boardCli(platform)} handoff 取交接快照（同时写在 ${file}），照「接手动作」核对后读看板继续；规则全文用 briefing。上任终端的回执监听已被程序作废，现在按规则第 8 条重挂恰好一个后台回执监听：用 Bash（run_in_background: true）重挂恰好一个后台 receipts --wait 监听（不设超时）；若显式设超时后空输出退出，先检查已有监听，没有才安静重挂，不用向用户汇报。`;
+    return `${message || ''}\n先运行 ${boardCli(platform)} handoff 取交接快照（同时写在 ${file}），照「接手动作」核对后读看板继续；规则用 briefing 重读，细则用 briefing --topic 名。上任终端的回执监听已被程序作废，现在按红线里的「回执监听」重挂恰好一个后台回执监听：用 Bash（run_in_background: true）重挂恰好一个后台 receipts --wait 监听（不设超时）；若显式设超时后空输出退出，先检查已有监听，没有才安静重挂，不用向用户汇报。`;
   }
   // Sent after the briefing when the app starts with a Captain that has a handoff.
   function restartNote(platform, file) {
     return `AgentDeck 刚启动。在跑的队员由程序自动续接，不要重派；先运行 ${boardCli(platform)} handoff 取当前交接快照（同时写在 ${file}），核对后读看板继续。`;
+  }
+  // Sent INSTEAD of the briefing when the app starts and the Captain's own
+  // conversation came back with it (the terminal survived, or the CLI resumed the
+  // same session): it still holds the prompt, so nothing is pasted again. What it
+  // says about receipts follows the mode the core was written for: with the legacy
+  // injection on there is no listener to start.
+  function restartNotice(platform, file, legacyReceiptInjection = false) {
+    const cli = boardCli(platform);
+    const receipts = legacyReceiptInjection
+      ? '回执和提问照旧自动发给你（旧回执注入回退），不要挂 receipts --wait 后台监听。'
+      : '回执监听先检查，没有才重挂恰好一个后台 receipts --wait。';
+    return `AgentDeck 刚重启，你还是原来的队长，上下文还在，所以不再重发提示词。在跑的队员由程序自动续接，不要重派；先运行 ${cli} handoff 取当前交接快照${file ? `（同时写在 ${file}）` : ''}，核对后读看板继续。${receipts}上下文里找不到队长规则，或记不清时，运行 ${cli} briefing 重读，细则用 briefing --topic 名。`;
   }
   // What a superseded `receipts --wait` prints before it exits.
   const LISTENER_SUPERSEDED = '【AgentDeck 监听】已有更新的回执监听在运行，这个旧监听已自动退出。不要为它重挂。';
@@ -860,6 +875,29 @@
     }
     return source === 'quota' ? 'quota' : '';
   }
+  // AgentDeck's one 「接着做」 after a login blip (SleepResume.LOGIN_MARK, same text). Once it is on
+  // screen, the error rows above it were answered: only what the session printed after it counts.
+  const LOGIN_NUDGE_MARK = '接着做（登录已恢复）';
+  function loginNudgeAt(lines) {
+    const flat = (text) => String(text || '').replace(/\s+/g, '');
+    for (let i = lines.length - 1; i >= 0; i--) if (flat(lines[i] + (lines[i + 1] || '')).includes(LOGIN_NUDGE_MARK)) return i;
+    return -1;
+  }
+  function loginNudgeShown(screen) { return loginNudgeAt(String(screen || '').split('\n')) >= 0; }
+  // A CLI's own error row, as it reads on one line. A narrow column wraps it
+  // ("⎿  Not logged in · Please run" over "/login"), so a row naming a resource is
+  // also read with up to two plain rows under it. Returns { text, rows } or null.
+  const RESOURCE_WORD = /logged|signed|log ?in|limit|quota|usage|credit|exhaust|auth|api key|oauth|rate|429|401|登录|额度|限流/i;
+  function resourceRow(lines, i) {
+    let text = lines[i];
+    for (let rows = 1; ; rows++) {
+      if (resourceFailure(text, 'automatic')) return { text, rows };
+      if (rows > 2 || !RESOURCE_WORD.test(lines[i])) return null;
+      const more = String(lines[i + rows] ?? '').trim();
+      if (!more || /^[│┃⏺⎿✻✽✳✶✢✺●•◦◆▪⬢✦■✗✘✖✕×▲⚠ℹ❯›>─━═]/.test(more)) return null;
+      text = text.trimEnd() + ' ' + more;
+    }
+  }
   // Codex leaves prior output on screen. Its completed-turn divider makes
   // indicators above it historical, even while the ready prompt stays visible.
   function codexStatusScreen(screen, cmd) {
@@ -877,27 +915,60 @@
   // row in the live area just above the prompt's top rule (a custom status
   // line under the prompt carries no count):
   //   ✻ Baked for 40s · done 8:27 AM · 1 shell, 1 monitor still running
-  // A narrow column wraps it ("… · 1" / "monitor still running"), and Claude
-  // may add "Update available!" between it and the rule. It is live only while
+  // A narrow column folds it onto up to five rows ("✻ Churned for 3m 55s · done" /
+  // "9:16 PM · 1 shell still" / "running"), and Claude may add "Update available!"
+  // between it and the rule, Claude 2.1 its effort hint ("◐ medium · /effort"), and the
+  // rule may carry the session name. While a background agent runs, the row reads
+  // "✻ Waiting for 1 background agent to finish". It is live only while
   // nothing else sits between it and the prompt: a later reply, tool row or
   // user message means a newer turn, and the old row is history.
+  const CLAUDE_DONE_ROW = /^\s*[✻✽✳✶✢✺*]\s*[^\s·]+\s+for\s+(?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/;
+  const CLAUDE_WAIT_ROW = /^\s*[✻✽✳✶✢✺*·]\s*Waiting\s+for\b/i;
+  const CLAUDE_CHROME = /^\s*(?:$|[─━═]{3,}|Update available\b|[◐◑◒◓○]\s+\S+\s+·\s+\/effort\s*$)/i;
+  // A fold ends at chrome, a new item, or a live spinner ("· Thinking…"); a folded row
+  // may itself start with the "·" separator.
+  const CLAUDE_FOLD_END = /^\s*(?:[─━═]{3,}|Update available\b|[◐◑◒◓○]\s+\S+\s+·\s+\/effort\s*$|[⏺●❯›>⎿✻✽✳✶✢✺∴]|[·*]\s*\S+(?:…|\.\.\.))/i;
+  const CLAUDE_BG_RUNNING = /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i;
+  const CLAUDE_BG_WAITING = /\bWaiting for [1-9]\d* background\b/i;
+  // Each status row with the rows it was folded onto: { start, end, text }.
+  function claudeStatusBlocks(lines) {
+    const blocks = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (!CLAUDE_DONE_ROW.test(lines[i]) && !CLAUDE_WAIT_ROW.test(lines[i])) continue;
+      let end = i + 1;
+      while (end < lines.length && end - i < 5 && lines[end].trim() && !CLAUDE_FOLD_END.test(lines[end])) end++;
+      blocks.push({ start: i, end, text: lines.slice(i, end).join(' ').replace(/\s+/g, ' ') });
+      i = end - 1;
+    }
+    return blocks;
+  }
   function claudeStatusRowRunning(above) {
-    const rows = above.slice(-8);
-    let at = -1;
-    rows.forEach((line, i) => {
-      if (/^\s*[✻✽✳✶✢✺*]\s*[^\s·]+\s+for\s+(?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/.test(line)) at = i;
-    });
-    if (at < 0) return false;
-    const block = [rows[at]];
-    let i = at + 1;
-    for (; i < rows.length && block.length < 3; i++) {
-      if (!rows[i].trim() || /^\s*[─━═]{3,}\s*$/.test(rows[i]) || /^\s*Update available\b/i.test(rows[i])) break;
-      block.push(rows[i]);
+    const rows = above.slice(-10);
+    const block = claudeStatusBlocks(rows).at(-1);
+    if (!block || rows.slice(block.end).some((row) => !CLAUDE_CHROME.test(row))) return false;
+    return CLAUDE_BG_RUNNING.test(block.text) || CLAUDE_BG_WAITING.test(block.text);
+  }
+  // Claude's completed-turn rows and its background-agent wait are never a spinner,
+  // live or history, even when a narrow column leaves "running" alone on a row.
+  // Blanked before the spinner patterns run; any other "Waiting for …" stays.
+  function claudeStatusRowsBlanked(screen, cmd) {
+    const lines = String(screen || '').split('\n');
+    if (cmd && !/\bclaude\b/i.test(cmd)) return lines.join('\n');
+    for (const block of claudeStatusBlocks(lines)) {
+      if (CLAUDE_DONE_ROW.test(lines[block.start]) || CLAUDE_BG_WAITING.test(block.text)) lines.fill('', block.start, block.end);
     }
-    for (; i < rows.length; i++) {
-      if (!/^\s*$|^\s*[─━═]{3,}\s*$|^\s*Update available\b/i.test(rows[i])) return false;
-    }
-    return /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(block.join(' ').replace(/\s+/g, ' '));
+    return lines.join('\n');
+  }
+  // The footer counts background work as "· 1 shell ·". A narrow column cuts it at
+  // its width, mid-word too ("· 1 she"), so the line's last segment may stop
+  // anywhere inside those words; two letters are needed to tell which word it is.
+  const CLAUDE_BG_PHRASES = ['shell', 'monitor', 'task', 'agent'].flatMap((w) => [w + 's still running', w + ' still running']);
+  function claudeFooterCount(part, last) {
+    const m = /^[\s│┃]*[1-9]\d*\s+([^│┃]*?)[\s.…│┃]*$/.exec(part);
+    if (!m) return false;
+    const words = m[1].toLowerCase().replace(/\s+/g, ' ');
+    if (/^(?:shells?|monitors?|tasks?|agents?)(?: still running)?$/.test(words)) return true;
+    return last && words.length >= 2 && CLAUDE_BG_PHRASES.some((phrase) => phrase.startsWith(words));
   }
   // Claude's live footer counts background work after its ready prompt, and
   // its completed-turn status row counts it just above (claudeStatusRowRunning).
@@ -909,11 +980,11 @@
     if (prompt < 0 || /^\s*[│┃]?\s*❯\s*\d+\./.test(lines[prompt])) return false;
     if (claudeStatusRowRunning(lines.slice(0, prompt))) return true;
     const footer = lines.slice(prompt + 1);
-    if (footer.some((line) => /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(line))) return true;
-    // A narrow column drops the tail of the footer ("· 1 monitor ·", "still running"
-    // cut off), so a bare "N monitors" segment of the footer counts as well.
-    return footer.some((line) => line.split(/[·,]/).some((part) =>
-      /^[\s│┃]*[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)(?:\s+still\s+running)?[\s.…│┃]*$/i.test(part)));
+    if (footer.some((line) => CLAUDE_BG_RUNNING.test(line) || CLAUDE_BG_WAITING.test(line))) return true;
+    return footer.some((line) => {
+      const parts = line.split(/[·,]/);
+      return parts.some((part, i) => claudeFooterCount(part, i === parts.length - 1));
+    });
   }
   // A quota failure receipt is provisional: Claude and Codex continue by themselves
   // once the limit resets. True while the terminal is alive, no longer shows the
@@ -963,8 +1034,9 @@
     screen = codexStatusScreen(screen, cmd);
     const lines = String(screen || '').split('\n').slice(-20);
     let quota = -1, resumed = -1, working = -1, queued = false;
+    const answered = loginNudgeAt(lines);
     lines.forEach((line, i) => {
-      if (resourceFailure(line, 'automatic')) quota = i;
+      if (i > answered && resourceRow(lines, i)) quota = i;
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
       if (/^\s*[│┃]?\s*→[^\n]*\bctrl\+c to stop\s*[│┃]?\s*$/i.test(line)) working = i;
@@ -986,9 +1058,19 @@
   function resourceReceipt(screen, cmd) {
     screen = codexStatusScreen(screen, cmd);
     if (terminalActivity(screen) !== 'quota') return null;
-    const reason = String(screen || '').split('\n').filter((line) => terminalActivity(line) === 'quota').join('\n').trim();
+    const lines = String(screen || '').split('\n'), found = [];
+    for (let i = loginNudgeAt(lines) + 1; i < lines.length; i++) {
+      const row = resourceRow(lines, i);
+      if (row) { found.push(row.text); i += row.rows - 1; }
+    }
+    const reason = found.join('\n').trim();
     const label = { auth: '未登录', rate_limit: '请求被限流' }[resourceFailure(reason, 'quota')] || '额度用尽';
     return { failed: label + (reason ? '：' + reason : '，agent 无法继续当前任务'), source: 'quota' };
+  }
+  // Which resource error holds the screen ('auth' | 'rate_limit' | 'quota'), or ''.
+  function resourceKind(screen, cmd) {
+    const receipt = resourceReceipt(screen, cmd);
+    return receipt ? resourceFailure(receipt.failed, 'quota') : '';
   }
 
   // Conservative silence windows: status spinners may stay busy during deep thinking.
@@ -1051,21 +1133,44 @@
     return /^\s*(?:[│|]\s*)?(?:(?:>_\s*)?OpenAI Codex\b|Welcome to Codex(?: CLI)?\b|›(?:\s|$)|\d+% context left(?:\s|$))/im.test(windowsAgentOutput(screen));
   }
 
-  // One compact line per session for `ledger`.
+  // One compact line per session for `ledger`. A 小队长's children (row.parent is its id)
+  // follow its row, indented; row.children and row.unread count them and its untaken receipts.
   function ledgerText(rows) {
     if (!rows.length) return '还没有别的会话。';
-    return rows.map((r) => {
-      let line = `${r.id}  ${r.important ? PRIORITY_MARK : ''}「${oneLine(r.title, 60)}」  ${statusLabel(r.state)}`;
+    const ids = new Set(rows.map((r) => r.id));
+    const nested = (r) => !!r.parent && ids.has(r.parent);
+    const ordered = [];
+    rows.forEach((r) => { if (!nested(r)) ordered.push(r, ...rows.filter((c) => nested(c) && c.parent === r.id)); });
+    return ordered.map((r) => {
+      const pad = nested(r) ? '  └ ' : '';
+      const more = nested(r) ? '      ' : '    ';
+      let line = `${pad}${r.id}  ${r.important ? PRIORITY_MARK : ''}「${oneLine(r.title, 60)}」  ${statusLabel(r.state)}`;
+      if (r.subCaptain) line += `  小队长·子会话 ${r.children || 0} 个` + (r.unread ? `·子会话回执待它取 ${r.unread} 条` : '');
       if (r.terminalState && r.terminalState !== r.state) line += `  终端:${statusLabel(r.terminalState)}`;
+      if (r.account) line += `  账号:${oneLine(r.account, 60)}`;
       if (r.folder) line += `  文件夹:${oneLine(r.folder, 30)}`;
       if (r.project) line += `  项目:${oneLine(r.project, 120)}`;
       if (r.reviews && r.reviews.length) line += `  审查:${r.reviews.join(',')}`;
       if (r.receipt) {
         const compact = modelReceipt(r.receipt);
-        line += `\n    回执：${compact.summary}` + (compact.files.length ? `\n    文件：${compact.files.join('；')}` : '') + (compact.more ? '\n    其余见 read' : '');
+        line += `\n${more}回执：${compact.summary}` + (compact.files.length ? `\n${more}文件：${compact.files.join('；')}` : '') + (compact.more ? `\n${more}其余见 read` : '');
       }
       return line;
     }).join('\n');
+  }
+
+  // Appended to the task of a session the Captain opens with `new --sub-captain`.
+  function subCaptainBrief(platform) {
+    const cli = boardCli(platform);
+    return [
+      '---',
+      '【你是小队长】这摊活由你统筹：拆开，开自己的子会话分头做，盯进度、验收，再向总队长汇报。',
+      `开子会话：${cli} create-child --title "一句话标题" --task "完整说明" [--agent claude|codex|cursor|agy|grok | --command "启动命令"] [--cwd 目录]。不写 --agent 就和你同一个模型；命令立刻返回子会话 id，不等它做完；同样受全局并发上限，满了自动排队。同时在干活的子会话一般不超过 4 个。`,
+      `子会话的回执、提问、停在确认提示，都只进你的 receipts，不会到总队长那里。始终恰好挂一个 ${boardCli('darwin')} receipts --wait：Claude Code 用 Bash 工具 run_in_background: true（不设超时）；不能后台的就在前台 receipts --wait --timeout 540 循环。收到就处理，处理完再挂。`,
+      `管子会话：${cli} ledger 只列你的子会话；tell --to 子会话id --message "…" 追加指令或回答它的提问；peek --id 子会话id 看实时输出；read --id 子会话id 读对话；answer --to 子会话id --key y|n|enter… 回答确认提示；stop / archive --id 子会话id。只能管你自己开的子会话。`,
+      '向总队长汇报：阶段结果用 complete --result（可以多次，每次都送到总队长，不动看板卡片）；这件活绑了看板卡片的，最终交付用 complete --final --result，卡片才算完成（要验收的进待验收）。要总队长或用户拍板用 ask --question。只报结论和文件路径，不转贴子会话原文。',
+      '你被归档或关掉时，子会话不会停，会交回总队长。',
+    ].join('\n');
   }
 
   // A session's saved turns for `read`, newest last, each cut short. find keeps
@@ -1083,8 +1188,8 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
-    receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, CORE_LIMIT, BRIEFING_TOPICS, PROVIDERS, ROUTING, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, briefingMark, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, claudeStatusRowsBlanked, backgroundCommandStatus, resourceReceipt,
+    receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, resourceKind, loginNudgeShown, LOGIN_NUDGE_MARK, statusLabel, ledgerText, subCaptainBrief, readText, resetNote, relayNote, restartNote, restartNotice, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };
 });

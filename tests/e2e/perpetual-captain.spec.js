@@ -167,14 +167,14 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
   const usId = await captainId();
   expect(usId).not.toBe(CN);
   const usBanner = page.locator(`.column[data-col-id="${usId}"] .perpetual-relay-banner`);
-  await expect(usBanner).toContainText('US');
+  await expect(usBanner).toContainText('永动机自动轮换：cn → us；');   // account names, not the fixed CN / US
   await expect(usBanner).toContainText('3%');
   await screenshot('perpetual-02-us-automatic');
   const board = path.join(home, '.agents', 'boards', 'agentdeck-captain-handoff.md');
   expect(fs.readFileSync(path.join(path.dirname(board), 'agentdeck-captain-handoff', 'tasks.md'), 'utf8')).toContain('继续跑的任务');
   expect(fs.readFileSync(board, 'utf8')).toContain('# AgentDeck 队长交接');
   expect(fs.readFileSync(board, 'utf8')).toContain('触发：席位 Relay');
-  expect(fs.readFileSync(board, 'utf8')).toContain('CN → US');
+  expect(fs.readFileSync(board, 'utf8')).toContain('cn → us');
   const firstArchive = JSON.parse(fs.readFileSync(path.join(profile, 'chats', CN + '.json')));
   expect(firstArchive.captainArchive).toBe(true);
   await expect.poll(() => promptsFor(usId).some((p) => p.includes('handoff') && p.includes('briefing') && p.includes('读看板继续') && p.includes('重挂恰好一个后台 receipts --wait') && p.includes('不设超时') && p.includes('不用向用户汇报') && !p.includes('--timeout 300')), { timeout: 20000 }).toBe(true);
@@ -193,7 +193,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
   const secondArchive = JSON.parse(fs.readFileSync(path.join(profile, 'chats', usId + '.json')));
   expect(secondArchive.turns.some((t) => t.user === 'wait for quota' && t.interrupted)).toBe(true);
   expect(fs.readFileSync(board, 'utf8')).toContain(`上任会话 ${usId}`);
-  expect(fs.readFileSync(board, 'utf8')).toContain('US → ChatGPT');
+  expect(fs.readFileSync(board, 'utf8')).toContain('us → ChatGPT');
   const notices = await page.evaluate((id) => ChatUI.turnsOf(id).filter((t) => t.kind === 'notice'), codexId);
   expect(notices).toHaveLength(1);
   expect(notices[0].reply).toContain('ChatGPT');
@@ -212,12 +212,12 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
     // Recovery belongs to the Captain's own controlling PTY, never the external test runner.
     await expect(boardWithoutCapabilities(codexId, ['ledger'])).rejects.toThrow(/independent|conductor-managed/);
     await boardViaAgent(codexId, ['ledger'], '不中断的队员', true);
-    await boardViaAgent(codexId, ['briefing'], '动态状态和恢复顺序看 handoff', true);
+    await boardViaAgent(codexId, ['briefing'], '做下面的事之前先读对应规范：briefing --topic 名', true);
   }
   const alerts = await application.evaluate(({ app }) => app.testRelayAlerts);
   expect(alerts).toHaveLength(2);
   expect(alerts.every((alert) => alert.level === 'active' && !Object.hasOwn(alert, 'volume'))).toBe(true);
-  expect(alerts.map((alert) => alert.body).join('\n')).toContain('US');
+  expect(alerts.map((alert) => alert.body).join('\n')).toContain('cn → us');
   expect(alerts.map((alert) => alert.body).join('\n')).toContain('ChatGPT');
   await idle(codexId);
   // Both the in-memory observation and its fixture cache must simulate the
@@ -348,7 +348,7 @@ test('the idle current Captain renews its expired window before switching to the
   const id = await captainId();
   await expect(page.locator(`.column[data-col-id="${id}"] .perpetual-relay-banner`)).toContainText('快到期');
   await page.evaluate(async () => { await ClaudeSeats.refresh(); renderQuotaBar(); });
-  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-detail', /正在用.*US/);
+  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-detail', /正在用 us(?: ·|$)/);
 });
 
 test('changed identities reject the old slot sample before rotation', async () => {

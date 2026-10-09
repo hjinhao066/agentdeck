@@ -48,7 +48,7 @@ function boot(w, persisted) {
       },
       memoryPressure: async () => ({ level: w.pressure }), saveLongPrompt: async () => '/tmp/long-task.txt', onTasksChanged() {},
     },
-    MainCore: M, BoardCore: B, AutoVerifyCore: AV,
+    MainCore: M, BoardCore: B, AutoVerifyCore: AV, ClaudeSeatsCore: require('../claude-seats-core'),
     QuotaCore: {
       commandQuota: (_store, cmd) => ({ out: [...w.out].some((p) => String(cmd).startsWith(p)) }),
       // Same out-set as commandQuota. This harness does not model same-tier switches.
@@ -554,4 +554,87 @@ test('the automatic switch defaults to on, is persisted for the main-process hea
   assert.deepEqual({ ...TB.settings() }, { dispatcher: 'captain' });
   assert.throws(() => TB.autoVerify('no'), /boolean/);
   assert.equal(TB.autoVerify(true), true); assert.equal(TB.settings('gemini').dispatcher, 'gemini'); assert.equal(w.config.taskBoard.autoVerify, true);
+});
+
+// ---- a second receipt from an executor who was told more ----
+let tellSeq = 0;
+const tellExec = (app, col, message = '补充：再把 README 也改了') => app.api.handle({ action: 'main-tell', id: 'tell-req-' + (++tellSeq), to: col.id, message }, app.captain);
+test('one receipt opens exactly one reviewer; a supplement before the reviewer starts and a second receipt void that round and open a new one', async (t) => {
+  const w = world(t); const app = w.boot();
+  const card = await newCard(app);
+  const exec = await app.execute(card);
+  await app.finish(exec, '第一版做完', { files: ['/repo/a.js'] });
+  assert.equal(app.card(card.id).review_round, 1);
+  // The round is claimed but its reviewer has not started: the Captain sends the executor more work.
+  const claim = app.store.claimReview({ id: card.id }); assert.equal(claim.card.review_claim.round, 1);
+  await tellExec(app, exec); await tick();
+  const told = app.card(card.id);
+  assert.equal(told.session_id, exec.id, 'the executor is working on the card again');
+  assert.equal(told.review_session, false, 'an executor is never taken for a reviewer');
+  assert.notEqual(told.status, 'done');
+  for (let i = 0; i < 3; i++) await app.scan();
+  assert.equal(app.reviewers(card).length, 0, 'the old round is void: no reviewer for the receipt that was replaced');
+  await app.finish(exec, '补充做完', { files: ['/repo/a.js', '/repo/README.md'] });
+  const second = app.card(card.id); assert.equal(second.status, 'review'); assert.equal(second.review_round, 2); assert.equal(second.exec_receipt.text, '补充做完');
+  await app.scan();
+  const [reviewer, ...extra] = app.reviewers(card);
+  assert.equal(extra.length, 0); assert.equal(reviewer.boardAttempt, AV.reviewAttemptId(card.id, 2));
+  assert.match(reviewer.cmd, /^agy .*gemini-3\.8-flash-high/, 'still a different provider from the Claude executor');
+  assert.ok(app.texts(reviewer)[0].includes('补充做完'));
+  for (let i = 0; i < 3; i++) await app.scan();
+  assert.equal(app.reviewers(card).length, 1, 'still exactly one reviewer for round 2');
+  await app.finish(reviewer, '通过：核对过'); assert.equal(app.card(card.id).status, 'done');
+});
+
+test('a receipt that arrives while the reviewer is working voids that review and opens a new round, though the old reviewer is still busy', async (t) => {
+  const w = world(t); const app = w.boot();
+  const card = await newCard(app);
+  const exec = await app.execute(card);
+  await app.finish(exec, '第一版做完', { files: ['/repo/a.js'] });
+  await app.scan();
+  const [r1] = app.reviewers(card); assert.equal(r1.boardAttempt, AV.reviewAttemptId(card.id, 1));
+  assert.equal(app.card(card.id).session_id, r1.id);
+  // the old reviewer is still working
+  w.config.mainSession.tasks.push({ id: 'rt', colId: r1.id, status: 'working', boardId: card.id, boardAttempt: r1.boardAttempt });
+  await tellExec(app, exec); await tick();
+  await app.finish(exec, '补充做完', { files: ['/repo/a.js', '/repo/README.md'] });
+  const second = app.card(card.id);
+  assert.equal(second.status, 'review'); assert.equal(second.review_round, 2); assert.equal(second.exec_receipt.text, '补充做完');
+  assert.equal(second.exec_receipt.session_id, exec.id); assert.equal(second.exec_receipt.assignee.agent, 'Claude', 'the executor, not the old reviewer, is who made the receipt');
+  // the voided reviewer's verdict changes nothing
+  await app.finish(r1, 'x', { failed: '不通过：旧结论' });
+  assert.equal(app.card(card.id).status, 'review'); assert.equal(app.card(card.id).rework_count, 0); assert.ok(!app.card(card.id).review_reject);
+  await app.scan(); await app.scan();
+  const reviewers = app.reviewers(card);
+  assert.equal(reviewers.length, 2); const r2 = reviewers.find((c) => c.boardAttempt === AV.reviewAttemptId(card.id, 2)); assert.ok(r2, 'round 2 has its own reviewer');
+  assert.match(r2.cmd, /^agy .*gemini-3\.8-flash-high/);
+  assert.equal(app.card(card.id).session_id, r2.id);
+  await app.scan(); assert.equal(app.reviewers(card).length, 2);
+});
+
+test('after a supplement the two-failure hold still applies: the third round\'s rejection holds the card, a held card opens nothing', async (t) => {
+  const w = world(t); const app = w.boot();
+  const card = await newCard(app);
+  const exec = await app.execute(card);
+  await app.finish(exec, '第一版', { files: ['/repo/a.js'] }); await app.scan();
+  const [r1] = app.reviewers(card);
+  await app.finish(r1, 'x', { failed: '不通过：第一轮' });
+  await app.scan();   // rework goes back to the executor
+  assert.equal(app.card(card.id).rework_count, 1);
+  await app.finish(exec, '返工完成', { files: ['/repo/a.js'] }); await app.scan();
+  assert.equal(app.card(card.id).review_round, 2);
+  const r2 = app.reviewers(card).find((c) => c.boardAttempt === AV.reviewAttemptId(card.id, 2)); assert.ok(r2);
+  // supplement + receipt while round 2 is being reviewed
+  await tellExec(app, exec); await tick();
+  await app.finish(exec, '补充完成', { files: ['/repo/a.js'] });
+  assert.equal(app.card(card.id).review_round, 3); assert.equal(app.card(card.id).consecutive_failures, 1, 'the earlier failure still counts');
+  await app.scan();
+  const r3 = app.reviewers(card).find((c) => c.boardAttempt === AV.reviewAttemptId(card.id, 3)); assert.ok(r3);
+  await app.finish(r3, 'x', { failed: '不通过：第三轮' });
+  const held = app.card(card.id); assert.equal(held.flag, 'held');
+  const count = app.reviewers(card).length;
+  await app.finish(exec, '再来一次', { files: [] });
+  for (let i = 0; i < 3; i++) await app.scan();
+  assert.equal(app.reviewers(card).length, count, 'held: no further automatic review');
+  assert.equal(app.card(card.id).flag, 'held');
 });

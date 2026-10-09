@@ -80,7 +80,7 @@ for (const cli of ['claude', 'codex']) {
 
     // AgentDeck briefs the Captain by itself once the CLI is ready.
     const brief = await page.evaluate(() => MainCore.instructions(env.platform, '', config.mainSession?.legacyReceiptInjection === true, config.concurrencyCap));
-    expect(brief.length).toBeGreaterThan(M.LONG_PROMPT);
+    expect(brief.length).toBeLessThanOrEqual(M.CORE_LIMIT);
     await arrives('first briefing', cli, brief);
 
     const full = grown(brief, M.BRIEFING_LIMIT);

@@ -11,6 +11,7 @@ const crypto = require('node:crypto');
 
 const FilePreview = require('../../file-preview-core');
 const BatteryCore = require('../../battery-core');
+const { todoRequest, TODO_BASE_KEYS } = require('../../mobile-web');
 
 const HUB = path.join(__dirname, '..', '..', 'mobile-web', 'hub');
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/releases.js': ['releases.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
@@ -35,13 +36,15 @@ function readJson(req) {
 // (a hostile machine: every answer is a 307 to machine.redirectTo, e.g. a path on the other machine).
 // todos: this machine's answer to api/todos, as the phone view mobile-web.js sends
 // (live items plus bare deletion marks); null is an older build without the route.
+// The list form answers like a build before part clocks (no baseKeys).
+// todoStore: a real TodoStore answering exactly as this build's mobile-web.js does.
 // files: { home, … } for file-preview-core, the real rules over a stand-in home folder; null is a build without api/file.
-async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', battery = null, sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], plainCookie = false, files = null, progress = null }) {
+async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', battery = null, sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], todoStore = null, plainCookie = false, files = null, progress = null }) {
   // plainCookie: WebKit refuses Secure cookies over http, even on localhost.
   const base = `/${id}/`, cookieName = plainCookie ? `agentdeck_${id}` : `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
   const machine = { id, label, mode: 'online', token: crypto.randomBytes(32).toString('hex'), devices: new Set(), failures: 0, bannedUntil: 0,
-    requests: [], messages: [], sessions, cards, outputs, quota, files, progress, fileReads: [], boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoWrites: [], todoRefuse: '', busy: false, queued: [],
+    requests: [], messages: [], sessions, cards, outputs, quota, files, progress, fileReads: [], boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoStore, todoWrites: [], todoRefuse: '', busy: false, queued: [],
     releaseQueued() { machine.busy = false; machine.captain.turns.push(...machine.queued.splice(0)); },
     captain: captain ? { id: `${id}-captain`, title: '队长', status: (sessions.find((s) => s.isMain) || { status: 'idle' }).status, turns } : null,
     setMode(mode) { machine.mode = mode; },
@@ -89,7 +92,7 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     if (machine.mode === 'legacy') return json(res, 401, { error: 'Unauthorized.' });
     if (req.method === 'POST' && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Same origin required.' });
     // Unauthenticated capability probe; fixed, non-sensitive fields only.
-    if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath', ...(machine.todos ? ['todos'] : []), ...(machine.files ? ['files'] : [])], machine: { id, label, platform }, appVersion });
+    if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath', ...(machine.todos || machine.todoStore ? ['todos'] : []), ...(machine.files ? ['files'] : [])], machine: { id, label, platform }, appVersion });
     if (req.method === 'POST' && url.pathname === '/login') {
       const body = await readJson(req);
       const ban = Math.ceil((machine.bannedUntil - Date.now()) / 1000);
@@ -179,6 +182,14 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       machine.relay.job = { id: crypto.randomBytes(6).toString('hex'), status: 'switching', fromId: state.currentId, fromName: name(state.seats.find((s) => s.current) || { name: '' }),
         targetId: seat.id, targetName: name(seat), startedAt: Date.now(), finishedAt: null, error: '' };
       return json(res, 200, { started: true, id: machine.relay.job.id });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/todos' && machine.todoStore) return json(res, 200, { ...machine.todoStore.phone(), baseKeys: TODO_BASE_KEYS });
+    if (req.method === 'POST' && url.pathname === '/api/todos' && machine.todoStore) {
+      const body = await readJson(req);
+      machine.todoWrites.push(body);
+      const input = body && todoRequest(body);
+      if (!input) return json(res, 400, { error: 'Invalid to-do request.' });
+      try { return json(res, 200, { item: machine.todoStore.phoneWrite(input) }); } catch (err) { return json(res, 400, { error: err.message }); }
     }
     // 随手记待办, like mobile-web.js: record one or tick one; the base stands in for an item not synced here yet.
     if (req.method === 'GET' && url.pathname === '/api/todos' && machine.todos) return json(res, 200, { items: machine.todos });

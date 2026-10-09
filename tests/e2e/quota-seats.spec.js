@@ -39,12 +39,12 @@ test.afterAll(async () => { if (app) await closeElectron(app); if (profile) fs.r
 test('each Claude seat keeps its own windows and reset times, marks the real Captain seat and survives reload', async () => {
   await agentsReady();
   await expect(seat('us').locator('[data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
-  await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
+  await expect(seat('us')).toHaveAttribute('aria-label', /^us（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'unknown');
   await expect(seat('cn')).toHaveAttribute('data-detail', /7d 无数据 ↻未知/);
 
   await page.evaluate(() => { config.activeClaudeSeatId = 'cn'; renderQuotaBar(); });
-  await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/); // Switching the next seat is not switching the running Captain.
+  await expect(seat('us')).toHaveAttribute('aria-label', /^us（队长）：/); // Switching the next seat is not switching the running Captain.
   // The same shared footer cannot populate the other seat.
   await page.evaluate(() => window.deck.ptyInput('cn-column', 'quota-data\r'));
   await expect.poll(() => page.evaluate(() => terms.get('cn-column')?.lastScreen || '')).toContain('Session: 35%');
@@ -52,7 +52,7 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   writeCache('cn', [65, 30]);
   await page.evaluate(async () => { for (const q of await window.deck.quotaLocal()) QuotaCore.observe(config.quotas, q); renderQuotaBar(); });
   await expect(seat('cn').locator('[data-window="5h"] .quota-pct')).toHaveText('65%');
-  await expect(seat('cn')).toHaveAttribute('data-detail', /5h 65% ↻.*7d 30% ↻/s);
+  await expect(seat('cn')).toHaveAttribute('data-detail', /5h 剩 65% ↻.*7d 剩 30% ↻/s);
   await expect(seat('us').locator('[data-window="5h"] .quota-pct')).toHaveText('19%');
 
   await page.evaluate(() => window.deck.ptyInput('cn-column', 'exhausted\r'));
@@ -76,12 +76,12 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await page.reload();
   // The US replay is deliberately held; screen readiness is checked after
   // releasing it so this wait cannot deadlock the replay race fixture.
-  await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
+  await expect(seat('us')).toHaveAttribute('aria-label', /^us（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
-  await expect(seat('us')).toHaveAttribute('data-detail', /us\*\*\*@example.com/);
+  await expect(seat('us')).toHaveAttribute('data-detail', /账号：us@example\.com/);   // 队长's text shows the address unmasked
   const text = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
-  expect(text).toMatch(/Claude \/ 🇨🇳 CN：已用尽[^\n]*上次采样：5h 65%/);
-  expect(text).toMatch(/Claude \/ 🇺🇸 US：19%[^\n]*5h 19%/);
+  expect(text).toMatch(/Claude \/ cn：已用尽[^\n]*账号：cn@example\.com[^\n]*上次采样：5h 剩 65%/);
+  expect(text).toMatch(/Claude \/ us：剩 19%[^\n]*账号：us@example\.com[^\n]*5h 剩 19%/);
   // The Captain's own statusline is recorded under its seat's account only.
   await expect.poll(() => app.evaluate(({ app }) => typeof app.releaseQuotaReplay)).toBe('function');
   await page.evaluate(() => {
@@ -102,8 +102,8 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await expect(seat('us')).toHaveAttribute('data-detail', /会话状态行/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   const after = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
-  expect(after).toMatch(/Claude \/ 🇺🇸 US：59%[^\n]*5h 83%/);
-  expect(after).toMatch(/Claude \/ 🇨🇳 CN：已用尽[^\n]*上次采样：5h 65%/);
+  expect(after).toMatch(/Claude \/ us：剩 59%[^\n]*5h 剩 83%/);
+  expect(after).toMatch(/Claude \/ cn：已用尽[^\n]*上次采样：5h 剩 65%/);
   // Top bar tooltip, keyboard popover and board-cli quota share one summary.
   for (const id of ['us', 'cn']) {
     const title = await seat(id).getAttribute('data-detail');

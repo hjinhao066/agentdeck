@@ -31,6 +31,9 @@ const LOGIN_LIMITS = { perIp: 5, global: 30, windowMs: 10 * 60 * 1000, banMs: 15
 const IMAGE_LIMITS = { bytes: 4 * 1024 * 1024, perMessage: 6, keepMs: 30 * 24 * 60 * 60 * 1000,
   maxFiles: 200, maxTotalBytes: 200 * 1024 * 1024, evictAfterMs: 24 * 60 * 60 * 1000 };
 const IMAGE_ID = /^[a-f0-9]{32}\.(jpg|png|gif|webp)$/;
+// A message's deduplicationKey: made once on the phone, reused by its retries.
+const SEND_KEY = /^[A-Za-z0-9_-]{16,64}$/;
+const SEND_KEYS = { keepMs: 24 * 60 * 60 * 1000, max: 1000 };
 const IMAGE_TYPES = { jpg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
 // core.js is the hub's rule module: both pages group the conversation and clean replies the same way.
 const ASSETS = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['hub/core.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'] };
@@ -55,9 +58,11 @@ function imageKind(data) {
 // Quota rows are rebuilt field by field: whatever the desktop hands over, the
 // phone gets display values only, and an account is always h***@example.com.
 const QUOTA_STATUS = ['out', 'stale', 'normal', 'warning', 'danger', 'nodigits', 'expired', 'unknown'];
+// A seat's name is its account name, the part before the @: a whole address never goes to the phone.
+const nameOnly = (value) => value.replace(/@[^\s，；（）()]*/g, '');
 function quotaView(data, now) {
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
-  const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
+  const text = (value, max) => typeof value === 'string' ? nameOnly(value.replace(/[\x00-\x1f\x7f]/g, ' ')).slice(0, max) : '';
   const rows = (Array.isArray(data?.rows) ? data.rows : []).slice(0, 16).filter((row) => row && typeof row === 'object').map((row) => ({
     key: text(row.key, 60), provider: text(row.provider, 20), name: text(row.name, 100), short: text(row.short, 40), flag: text(row.flag, 8),
     captain: row.captain === true,
@@ -76,7 +81,9 @@ function quotaView(data, now) {
 const SEAT_ID = /^[a-zA-Z0-9_-]{1,40}$/;
 // 随手记待办 from the phone: record one, or tick/untick one. Nothing else.
 const TODO_ID = /^td-[A-Za-z0-9-]{8,64}$/;
-const TODO_BASE_KEYS = ['text', 'done', 'doneAt', 'created', 'updated'];
+// textUpdated names the content version the phone saw. api/todos lists these
+// keys, so the phone sends an older build only the fields it accepts.
+const TODO_BASE_KEYS = ['text', 'done', 'doneAt', 'created', 'updated', 'textUpdated'];
 function todoRequest(body) {
   const keys = Object.keys(body);
   if (body.op === 'add') {
@@ -89,7 +96,7 @@ function todoRequest(body) {
     if (!base || typeof base !== 'object' || Array.isArray(base) || Object.keys(base).some((key) => !TODO_BASE_KEYS.includes(key))) return null;
     if (typeof base.text !== 'string' || base.text.length > 2000 || typeof base.updated !== 'string' || base.updated.length > 40) return null;
     if (base.done !== undefined && typeof base.done !== 'boolean') return null;
-    if (['doneAt', 'created'].some((key) => base[key] !== undefined && base[key] !== null && (typeof base[key] !== 'string' || base[key].length > 40))) return null;
+    if (['doneAt', 'created', 'textUpdated'].some((key) => base[key] !== undefined && base[key] !== null && (typeof base[key] !== 'string' || base[key].length > 40))) return null;
   }
   return { op: 'update', id: body.id, done: body.done, ...(base ? { base } : {}) };
 }
@@ -109,7 +116,7 @@ function batteryView(data) {
 
 function relayView(data, now) {
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
-  const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
+  const text = (value, max) => typeof value === 'string' ? nameOnly(value.replace(/[\x00-\x1f\x7f]/g, ' ')).slice(0, max) : '';
   const id = (value) => typeof value === 'string' && SEAT_ID.test(value) ? value : '';
   const seats = (Array.isArray(data?.seats) ? data.seats : []).slice(0, 12).filter((seat) => seat && id(seat.id)).map((seat) => {
     const reason = RELAY_REASONS.includes(seat.reason) ? seat.reason : 'unknown';
@@ -251,6 +258,8 @@ class MobileWebServer {
     this.pending = Promise.resolve();
     this.storage = Promise.resolve();
     this.now = now;
+    // Keys of messages already handed to the Captain, oldest first (see sendOnce).
+    this.sentKeys = new Map();
     this.csrfSecret = crypto.randomBytes(32);
     this.failures = new Map();
     this.globalFailures = { count: 0, since: 0, bannedUntil: 0 };
@@ -335,6 +344,21 @@ class MobileWebServer {
     const server = this.server;
     this.server = null;
     if (server) await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
+  }
+  // A retry of a message the Captain already got (same phone, same key) gets the
+  // first answer back and is never typed in again; one still being queued is
+  // waited for. A key whose send failed is forgotten, so its retry goes through.
+  // Kept in memory for a day: a restart of the app forgets them.
+  sendOnce(id, words, send) {
+    const now = this.now();
+    for (const [old, entry] of this.sentKeys) { if (now - entry.at <= SEND_KEYS.keepMs) break; this.sentKeys.delete(old); }
+    const seen = this.sentKeys.get(id);
+    if (seen) return seen.words === words ? seen.done : Promise.resolve(null);
+    const done = Promise.resolve().then(send).then(() => ({ queued: true }));
+    this.sentKeys.set(id, { at: now, words, done });
+    if (this.sentKeys.size > SEND_KEYS.max) this.sentKeys.delete(this.sentKeys.keys().next().value);
+    done.catch(() => { if (this.sentKeys.get(id)?.done === done) this.sentKeys.delete(id); });
+    return done;
   }
   json(res, code, body) {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -523,7 +547,7 @@ class MobileWebServer {
     // Fixed, non-sensitive fields only; no hostname, exact app version, token,
     // device or app data.
     if (req.method === 'GET' && route === '/api/info') {
-      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : []), ...(this.sources.getBattery && this.sources.setBattery ? ['battery'] : []), ...(this.sources.getProgress ? ['progress'] : [])],
+      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', 'send-dedupe', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : []), ...(this.sources.getBattery && this.sources.setBattery ? ['battery'] : []), ...(this.sources.getProgress ? ['progress'] : [])],
         machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform } });
     }
     if (route === '/login' && req.method === 'POST') {
@@ -608,14 +632,18 @@ class MobileWebServer {
       try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
       const images = body.images === undefined ? [] : body.images;
       if (!Array.isArray(images) || images.length > IMAGE_LIMITS.perMessage || new Set(images).size !== images.length || images.some((id) => typeof id !== 'string' || !IMAGE_ID.test(id))) return this.json(res, 400, { error: `Images must be at most ${IMAGE_LIMITS.perMessage} uploaded image ids.` });
-      if (Object.keys(body).some((key) => key !== 'message' && key !== 'images') || typeof body.message !== 'string' || !(body.message.trim() || images.length) || body.message.length > 8000 || /\x00/.test(body.message)) return this.json(res, 400, { error: 'Message required (maximum 8000 characters).' });
+      if (Object.keys(body).some((key) => !['message', 'images', 'deduplicationKey'].includes(key)) || typeof body.message !== 'string' || !(body.message.trim() || images.length) || body.message.length > 8000 || /\x00/.test(body.message)) return this.json(res, 400, { error: 'Message required (maximum 8000 characters).' });
+      const key = body.deduplicationKey;
+      if (key !== undefined && (typeof key !== 'string' || !SEND_KEY.test(key))) return this.json(res, 400, { error: 'Invalid deduplicationKey.' });
       const files = await Promise.all(images.map((id) => this.imageFile(id)));
       if (files.includes(null)) return this.json(res, 400, { error: 'Image not found. Upload it again.' });
       // Body uploads can outlive desktop revocation. Resolve the current device
       // and CSRF secret again immediately before queuing a command.
-      if (!this.writeCredential(req, res, prefixed)) return;
-      await this.sources.sendCaptain(body.message, files);
-      return this.json(res, 200, { queued: true });
+      const current = this.writeCredential(req, res, prefixed);
+      if (!current) return;
+      if (key === undefined) { await this.sources.sendCaptain(body.message, files); return this.json(res, 200, { queued: true }); }
+      const result = await this.sendOnce(current.hash + ':' + key, hash(JSON.stringify([body.message, images])), () => this.sources.sendCaptain(body.message, files));
+      return result ? this.json(res, 200, result) : this.json(res, 409, { error: 'This deduplicationKey was used for a different message.' });
     }
     // 待我处理: the same login, Origin, Fetch Metadata and CSRF checks as a
     // message to the Captain, re-checked after the body is read. A reply goes
@@ -670,7 +698,7 @@ class MobileWebServer {
     // message to the Captain, re-checked after the body is read.
     if (req.method === 'GET' && route === '/api/todos' && this.sources.getTodos) {
       const data = await this.sources.getTodos();
-      return this.json(res, 200, { items: Array.isArray(data?.items) ? data.items : [] });
+      return this.json(res, 200, { items: Array.isArray(data?.items) ? data.items : [], baseKeys: TODO_BASE_KEYS });
     }
     if (req.method === 'POST' && route === '/api/todos' && this.sources.writeTodos) {
       let body;
@@ -725,4 +753,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, batteryView, relayView, attentionView, attentionRequest, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };
+module.exports = { MobileWebServer, batteryView, quotaView, relayView, attentionView, attentionRequest, todoRequest, TODO_BASE_KEYS, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };

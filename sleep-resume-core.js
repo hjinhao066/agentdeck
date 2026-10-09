@@ -51,6 +51,11 @@
   const EVENT_WINDOW = 10 * 60_000; // a turn that ends this soon after waking counts as cut short
   const RECOVER_MS = 60_000;       // working again this long after a nudge closes the episode
   const IMPLICIT_WAKE_GAP = 3 * 60_000; // no tick for this long also means the machine slept
+  // "Not logged in" on a seat whose login checks out (evidence 'login'): a credential blip that
+  // passes within a minute or so. One nudge after a minute; a second report is a failure.
+  const LOGIN_SETTLE_MS = 60_000;
+  const MAX_LOGIN = 1;
+  const LOGIN_MARK = '接着做（登录已恢复）';
 
   // Whether the machine is awake, and when it last woke. Fed by suspend/resume
   // events, and by a long silence between ticks in case an event is missed.
@@ -107,24 +112,26 @@
     const clock = ctx.clock || {};
     if (clock.asleep || ctx.online === false) return { action: 'wait', why: clock.asleep ? 'asleep' : 'offline' };
     if (clock.wokeAt && ctx.now - clock.wokeAt < WAKE_MS) return { action: 'wait', why: 'waking' };
-    if (ctx.now - sr.firstSeenAt < SETTLE_MS) return { action: 'wait', why: 'settling' };
+    if (ctx.now - sr.firstSeenAt < (sr.evidence === 'login' ? LOGIN_SETTLE_MS : SETTLE_MS)) return { action: 'wait', why: 'settling' };
     const gap = GAPS[Math.min(sr.attempts, GAPS.length - 1)];
     if (sr.lastAt && ctx.now - sr.lastAt < gap) return { action: 'wait', why: 'gap' };
-    const max = sr.evidence === 'screen' ? MAX_SCREEN : MAX_EVENT;
+    const max = sr.evidence === 'screen' ? MAX_SCREEN : sr.evidence === 'login' ? MAX_LOGIN : MAX_EVENT;
     if (sr.attempts >= max) return { action: 'giveup', why: 'attempts' };
     if ((ctx.lifetime || 0) >= LIFETIME) return { action: 'giveup', why: 'lifetime' };
     return { action: 'send', attempt: sr.attempts + 1 };
   }
 
-  function message() {
+  function message(kind) {
+    if (kind === 'login') return LOGIN_MARK + '。刚才登录凭据短暂失效打断了你（这个席位核实是登录的），从停下的地方继续。如果任务其实已经做完，用 complete 提交回执。';
     return '接着做。刚才电脑睡眠或网络中断打断了你，从停下的地方继续。如果任务其实已经做完，用 complete 提交回执。';
   }
   function failure(sr) {
+    if (sr.evidence === 'login') return '席位核实是登录状态，会话却报「Not logged in」；约一分钟后自动发过一次「接着做」，又报了一次。请检查该会话或改派到别的席位。';
     return '被睡眠或断网打断，已自动发「接着做」' + sr.attempts + ' 次，会话仍没恢复。请检查该会话。';
   }
 
   return {
-    TAIL_ROWS, SETTLE_MS, WAKE_MS, GAPS, MAX_SCREEN, MAX_EVENT, LIFETIME, EVENT_WINDOW, RECOVER_MS, IMPLICIT_WAKE_GAP,
+    TAIL_ROWS, SETTLE_MS, WAKE_MS, GAPS, MAX_SCREEN, MAX_EVENT, LIFETIME, EVENT_WINDOW, RECOVER_MS, IMPLICIT_WAKE_GAP, LOGIN_SETTLE_MS, MAX_LOGIN, LOGIN_MARK,
     interruption, createClock, online, evidence, decide, message, failure,
     // The page's one clock, fed by main-session's onPower and ticks.
     clock: createClock(),

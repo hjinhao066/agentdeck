@@ -155,11 +155,14 @@
       const label = String(raw.label || '').trim() || '未识别';
       const metadata = configured.find((s) => s.id === raw.seat);
       const seat = metadata?.id || '';
+      // The group is named by the account signed in behind the seat (seats carry `info`).
+      const shown = metadata ? S.seatDisplay(metadata, (Array.isArray(seats) ? seats : []).find((s) => s && s.id === seat)?.info) : null;
       const key = label + '\u001f' + seat;
       let group = map.get(key);
       if (!group) {
         group = {
           key, label, seat, seatName: metadata?.name || '', flag: metadata?.icon || '',
+          account: shown?.label || '', accountTitle: shown?.title || '',
           iconProvider: raw.iconProvider || '',
           working: 0, lastActive: 0, members: [],
         };
@@ -197,6 +200,15 @@
     return out;
   }
 
+  // The crew list starts open. A fold the user makes lasts for this run and the rest of
+  // that day; the first time the window is used on a later day it opens again.
+  function localDay(when) {
+    const d = new Date(when);
+    if (Number.isNaN(d.getTime())) return '';
+    const two = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+  }
+
   function normalizeArchived(raw) {
     const out = [];
     const seen = new Set();
@@ -211,6 +223,6 @@
 
   return {
     MAX_FOLDERS, FONT_DEFAULT, HERMES_HUB_URL, normalizeFontSize, validId, activityLine, newFolderId, normalizeFolders, folderOf, groupSessions,
-    orderedColumns, captainOf, moveColumn, nextFolderName, removeFolder, crewModelGroups, normalizeCollapsedModels, normalizeArchived,
+    orderedColumns, captainOf, moveColumn, nextFolderName, removeFolder, crewModelGroups, normalizeCollapsedModels, localDay, normalizeArchived,
   };
 });

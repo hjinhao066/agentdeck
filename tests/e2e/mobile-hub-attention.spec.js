@@ -176,6 +176,47 @@ test('a report said in the 队长 reply the phone shows is read there; it never 
   await expect(page.locator('#attention-lists .at-cols').getByText('手机总台在做界面')).toHaveCount(0);
 });
 
+const reads = () => hub.machines.mac.attentionWrites.filter((w) => w.op === 'read');
+
+test('a result is read only while the phone page is in front: blur or hidden leaves it unread, coming back starts the count again', async ({ browser }) => {
+  await open(browser);
+  // Leave before the first look can count: the window loses focus right as the page opens.
+  await page.evaluate(() => dispatchEvent(new Event('blur')));
+  await tab().click();
+  const report = item('小福助手排查报告');
+  await report.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(3500);
+  expect(reads()).toEqual([]);
+  await expect(report).toHaveClass(/unread/);
+  // Shown but hidden (another tab, locked screen) does not count either, even with focus.
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    dispatchEvent(new Event('focus'));
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(3500);
+  expect(reads()).toEqual([]);
+  // Back in front: it starts from 0, so it is not read at once.
+  const back = Date.now();
+  await page.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); });
+  await page.waitForTimeout(700);
+  expect(reads()).toEqual([]);
+  await expect.poll(() => reads().flatMap((w) => w.ids), { timeout: 10000 }).toContain('at-m3-report');
+  expect(Date.now() - back).toBeGreaterThanOrEqual(1400);
+});
+
+test('a result said in the 队长 reply is not read while the phone page is out of front, and is read once it is back', async ({ browser }) => {
+  await open(browser);
+  await page.getByRole('navigation', { name: '主导航' }).locator('[data-view="captain"]').click();
+  const round = page.locator('#captain-turns .turn[data-machine="mac"]', { hasText: 'Mac 队长测试回复' });
+  await round.locator('.reply').scrollIntoViewIfNeeded();
+  await page.evaluate(() => dispatchEvent(new Event('blur')));
+  await page.waitForTimeout(3500);
+  expect(reads()).toEqual([]);
+  await page.evaluate(() => dispatchEvent(new Event('focus')));
+  await expect.poll(reads, { timeout: 15000 }).toEqual([{ op: 'read', ids: ['at-m5-chat'], via: 'chat' }]);
+});
+
 test('a tablet shows 要你处理 and 做完了你还没看 side by side', async ({ browser }) => {
   for (const viewport of [{ width: 1024, height: 1366 }, { width: 1366, height: 1024 }]) {
     await open(browser, 'dark', viewport);

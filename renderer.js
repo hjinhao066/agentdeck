@@ -64,6 +64,7 @@ const ICONS = {
   file: S('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>'),
   eraser: S('<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>'),
   crown: S('<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>'),
+  gem: S('<path d="M6 3h12l4 6-10 13L2 9z"/>'),
   ban: S('<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>'),
   share: S('<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>'),
   diff: S('<rect x="4" y="3" width="16" height="18" rx="2"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/><line x1="9" y1="17" x2="15" y2="17"/>'),
@@ -112,7 +113,7 @@ function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AU
 let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
-  boardResponses: {}, boardPositions: {}, globalViewMode: 'term',
+  boardResponses: {}, boardPositions: {}, todoDeliveries: {}, todoInbox: {}, globalViewMode: 'term',
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
@@ -122,13 +123,14 @@ let config = {
   quotaWarmup: QuotaWarmupCore.normalizeSettings(),
 
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
-  folders: [], archived: [], schedules: [], navArchivedOpen: false, crewModelsCollapsed: [], artifactsCollapsed: [],
+  folders: [], archived: [], schedules: [], navArchivedOpen: false, crewOpen: true, crewModelsCollapsed: [], artifactsCollapsed: [],
   captainTokenSaver: MainCore.tokenSaverSettings(),
   concurrencyCap: MainCore.concurrencyCap(), captainHandoffOverview: MainCore.handoffBudget(),
   batteryMode: BatteryCore.MODE_DEFAULT, batteryConcurrency: BatteryCore.CAP_DEFAULT,
 };
 const saved = window.deck.loadConfig();
 config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
+config.todoShortcut = TodoShortcutCore.normalize(saved?.todoShortcut);
 // Persist only parsed observations, never terminal text or credentials.
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {
@@ -167,12 +169,16 @@ if (saved) {
   }));
   if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
   config.navArchivedOpen = !!saved.navArchivedOpen;
-  config.crewModelsCollapsed = SidebarCore.normalizeCollapsedModels(saved.crewModelsCollapsed);
+  // crewOpen and crewModelsCollapsed are not restored: the crew list opens fully at every launch.
   config.resumeOnRestart = window.RestartResume.resumeEnabled(saved);
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   // 待我处理 (attention-ui.js normalizes and migrates it); without this every restart emptied the page.
   if (saved.attention && typeof saved.attention === 'object') config.attention = saved.attention;
+  if (saved.todoDeliveries && typeof saved.todoDeliveries === 'object' && !Array.isArray(saved.todoDeliveries)) {
+    config.todoDeliveries = Object.fromEntries(Object.entries(saved.todoDeliveries).filter(([id, accepted]) => /^todo-(?:error-)?[a-f0-9]{64}$/.test(id) && accepted === true));
+  }
+  if (saved.todoInbox && typeof saved.todoInbox === 'object' && !Array.isArray(saved.todoInbox)) config.todoInbox = saved.todoInbox;
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
   config.batteryMode = BatteryCore.normalizeMode(saved.batteryMode);
@@ -192,8 +198,13 @@ if (saved) {
       completedOpen: v.completedOpen === true,
     };
   }
+  if (saved.tokenUsageView?.days === 30) config.tokenUsageView = { days: 30 };
   // Artifacts: the projects the user folded away
   config.artifactsCollapsed = (Array.isArray(saved.artifactsCollapsed) ? saved.artifactsCollapsed : []).filter((k) => typeof k === 'string' && k.length <= 120).slice(0, 500);
+  // 队长's 交付文件 panel: folded away or not, its two lists if changed, and the index of what it found (DeliverablesCore)
+  if (saved.chatDeliverablesOpen === false) config.chatDeliverablesOpen = false;
+  if (saved.deliverableRules && typeof saved.deliverableRules === 'object') config.deliverableRules = DeliverablesCore.normalizeRules(saved.deliverableRules);
+  if (saved.chatDeliverables && typeof saved.chatDeliverables === 'object') config.chatDeliverables = DeliverablesCore.normalizeIndex(saved.chatDeliverables, DeliverablesCore.normalizeRules(config.deliverableRules));
   if (saved.activeView === 'board') config.activeView = 'board';
   if (saved.side && typeof saved.side === 'object') config.side = saved.side;
   config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
@@ -243,6 +254,10 @@ if (saved) {
       folderId: typeof c.folderId === 'string' ? c.folderId : null,
       isMain: !!c.isMain,
       captainCrew: !!c.captainCrew,
+      // 小队长: the sub-captain itself, the sub-captain a child reports to, its folded child list
+      ...(c.subCaptain === true ? { subCaptain: true } : {}),
+      ...(typeof c.subCaptainId === 'string' && c.subCaptainId ? { subCaptainId: c.subCaptainId } : {}),
+      ...(c.subCrewCollapsed === true ? { subCrewCollapsed: true } : {}),
       project: typeof c.project === 'string' ? c.project : '',
       boardId: typeof c.boardId === 'string' ? c.boardId : '',
       boardAttempt: typeof c.boardAttempt === 'string' ? c.boardAttempt : '',
@@ -549,7 +564,7 @@ function terminalIdle(col, entry) {
     return live === 'idle' || (live !== 'working' && !MainCore.cursorBusy(entry.lastScreen) && AGENT_IDLE_RE.test(entry.lastScreen || ''));
   }
   const screen = MainCore.codexStatusScreen(entry.lastScreen, col.cmd);
-  return !WORKING_RE.test(screen) && AGENT_IDLE_RE.test(screen);
+  return !WORKING_RE.test(MainCore.claudeStatusRowsBlanked(screen, col.cmd)) && AGENT_IDLE_RE.test(screen);
 }
 const WEB_QUEUED_TIP = '排队中：前面还有网页调研在跑';
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
@@ -569,7 +584,7 @@ function classify(text, entry, cmd, isCaptain = false, withoutBackground = false
     if (entry?.state === 'working' && Date.now() - (entry.lastOutputAt || 0) < 10_000) return 'working';
     return entry?.hasWorked ? 'done' : 'plain';
   }
-  if (WORKING_RE.test(text) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
+  if (WORKING_RE.test(MainCore.claudeStatusRowsBlanked(text, cmd)) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
   if (!isCaptain && !withoutBackground && MainCore.claudeBackgroundTasks(text, cmd)) return 'working';
   // After submission, an unrecognised/empty Cursor screen is initialization
@@ -2220,11 +2235,12 @@ function buildColumn(col, isFresh) {
             term.write(replayMsg, () => finishReplay());
           });
         } else finishReplay();
-        // 队长 gets a control token too; the columns it drives never do.
+        // 队长 gets a control token too; the columns it drives never do, except a 小队长
+        // (new --sub-captain), whose token MainSession accepts only for its own children.
         const boundSeat = col.executor === 'chatgpt-web' ? {} : ClaudeSeatsCore.bindColumn(col, config);
         flushConfig();
 
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir, !!col.captainCrew && !col.isMain);
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain || col.subCaptain === true, boundSeat.id, boundSeat.configDir, !!col.captainCrew && !col.isMain);
         if (col.executor === 'chatgpt-web') terms.get(col.id).webExecutorReady = true;
 
         if (launch && col.executor !== 'chatgpt-web') {
@@ -2237,6 +2253,17 @@ function buildColumn(col, isFresh) {
             const entry = terms.get(spawnId);
             if (!entry || !entry.alive || col.id !== spawnId) return;
             if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
+            // Claude starts only on the seat this column is bound to. A seat that is gone or
+            // signed out starts nothing, and no other seat stands in for it.
+            const blocked = ClaudeSeatsCore.claudeLaunch(col.cmd) && ClaudeSeatsCore.launchBlock(col, config, await window.deck.claudeSeats().catch(() => []));
+            if (col.id !== spawnId || terms.get(spawnId) !== entry || !entry.alive) return;
+            if (blocked) {
+              entry.seatBlock = blocked;
+              entry.launchPending = false;
+              entry.term.write(`\r\n\x1b[33m[AgentDeck] ${blocked}，没有启动 Claude，也不会换到别的席位。登录这个席位后（设置 → 席位设置里有复制登录命令的图标），归档再恢复这一列就能接着原对话。\x1b[0m\r\n`);
+              MainSession.launchBlocked(col, `${blocked}：会话没有启动，任务没有送达，也没有换到别的席位。请用户先登录这个席位（席位设置里有复制登录命令的图标），再归档、用 tell 恢复它；急的话用 new --task-id … --seat 另一个已登录席位 改派。`);
+              return;
+            }
             const prepared = await window.deck.prepareLaunch(spawnId, launch).catch(() => null);
             if (col.id !== spawnId || terms.get(spawnId) !== entry || !entry.alive) return;
             if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
@@ -2259,7 +2286,7 @@ function buildColumn(col, isFresh) {
           saveConfig();
         }
         queueInitialPrompt(col, col.cmd ? 700 : 0);
-        MainSession.noteColdColumn(col, isFresh);
+        MainSession.noteColdColumn(col, isFresh, resumedAgent);
       }
     };
     reconnect();
@@ -2429,6 +2456,54 @@ function trimTrail(text, s, e) {
   while (e > s && /[\s.,;:!?)\]}>'"]/.test(text[e - 1])) e--;
   return e;
 }
+// The relative file references in one run of [\w.+@%:/-], i.e. the matches of
+//   /(?:\.{1,2}\/)?(?:[\w.+@%-]+\/)+[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?
+//    |[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}:\d+(?::\d+)?/g
+// ("dir/…/name.ext[:line[:col]]" or "name.ext:line[:col]"), found in one pass.
+// That pattern backtracked across the rest of the run from every position: a
+// 20,000-character token with a dot in it (a JWT, a dotted version list) took
+// seconds to half a minute.
+function relativeLinks(run) {
+  const n = run.length, out = [];
+  const isDigit = (i) => { const c = run.charCodeAt(i); return c >= 48 && c <= 57; };   // NaN past the end
+  const isAlnum = (i) => { const c = run.charCodeAt(i) | 32; return isDigit(i) || (c >= 97 && c <= 122); };
+  const isW = (i) => isAlnum(i) || '_.+@%-'.includes(run[i] || ' ');   // [\w.+@%-]
+  // From the right: wEnd, the end of the [\w.+@%-] stretch at i; aEnd, the end of
+  // the letters and digits at i; dot, the stretch's last "." before a letter or
+  // digit, at i or later; name, where the last usable "name.ext" starts among the
+  // stretches reachable from i through "stretch/" steps (the regex's greedy
+  // directory part settles on the last one).
+  const wEnd = new Int32Array(n + 1), aEnd = new Int32Array(n + 1), dot = new Int32Array(n + 1).fill(-1), name = new Int32Array(n + 1).fill(-1);
+  wEnd[n] = n; aEnd[n] = n;
+  for (let i = n - 1; i >= 0; i--) {
+    aEnd[i] = isAlnum(i) ? aEnd[i + 1] : i;
+    if (!isW(i)) { wEnd[i] = i; continue; }
+    wEnd[i] = wEnd[i + 1];
+    dot[i] = dot[i + 1] >= 0 ? dot[i + 1] : run[i] === '.' && isAlnum(i + 1) ? i : -1;
+    const next = run[wEnd[i]] === '/' ? name[wEnd[i] + 1] : -1;
+    name[i] = next >= 0 ? next : run[i] !== '.' && dot[i] >= 0 ? i : -1;
+  }
+  const lineSuffix = (p) => {   // (?::\d+(?::\d+)?)?
+    if (run[p] !== ':' || !isDigit(p + 1)) return p;
+    let e = p + 1;
+    while (isDigit(e)) e++;
+    if (run[e] === ':' && isDigit(e + 1)) { e++; while (isDigit(e)) e++; }
+    return e;
+  };
+  for (let s = 0; s < n;) {
+    let e = -1;
+    const q = isW(s) && run[wEnd[s]] === '/' ? name[wEnd[s] + 1] : -1;
+    // "dir/…/name.ext": up to 8 letters or digits after the dot, then an optional :line[:col]
+    if (q >= 0) e = lineSuffix(dot[q] + 1 + Math.min(aEnd[dot[q] + 1] - dot[q] - 1, 8));
+    // "name.ext:line": the extension is all of the stretch after its last dot
+    else if (isW(s) && run[s] !== '.' && dot[s] >= 0 && aEnd[dot[s] + 1] === wEnd[s] && wEnd[s] - dot[s] - 1 <= 8 &&
+      run[wEnd[s]] === ':' && isDigit(wEnd[s] + 1)) e = lineSuffix(wEnd[s]);
+    if (e < 0) { s++; continue; }
+    out.push({ index: s, text: run.slice(s, e) });
+    s = e;
+  }
+  return out;
+}
 function findLinks(text) {
   const out = [];
   let m;
@@ -2469,14 +2544,22 @@ function findLinks(text) {
   // Relative references the agents print constantly: "src/renderer.js:406",
   // "main.js:128". To stay quiet on ordinary prose ("and/or", "Node.js"), a
   // candidate needs either a slash-path ending in a dotted filename, or a bare
-  // filename with a :line suffix. The main process anchors these to the
-  // column's live shell cwd before resolving.
-  const relRe = /(?:\.{1,2}\/)?(?:[\w.+@%-]+\/)+[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?|[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}:\d+(?::\d+)?/g;
-  while ((m = relRe.exec(text))) {
-    const s = m.index, e = trimTrail(text, s, s + m[0].length);
-    if (s > 0 && /[\w/~.\\-]/.test(text[s - 1])) continue; // mid-token or tail of an absolute path
-    if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL or absolute path
-    out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
+  // filename with a :line suffix (relativeLinks has the exact rules). The main
+  // process anchors these to the column's live shell cwd before resolving.
+  // A match lies inside one run of the characters it can contain and holds a
+  // ".ext": search each such run on its own and skip runs without one, or runs
+  // a URL or absolute path already covers (every match there would overlap it).
+  const runRe = /[\w.+@%:/-]+/g;
+  let run;
+  while ((run = runRe.exec(text))) {
+    if (!/\.[A-Za-z0-9]/.test(run[0])) continue;
+    if (out.some((o) => run.index >= o.start && run.index + run[0].length <= o.end)) continue;
+    for (const rel of relativeLinks(run[0])) {
+      const s = run.index + rel.index, e = trimTrail(text, s, s + rel.text.length);
+      if (s > 0 && /[\w/~.\\-]/.test(text[s - 1])) continue; // mid-token or tail of an absolute path
+      if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL or absolute path
+      out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
+    }
   }
   return out;
 }
@@ -2610,6 +2693,8 @@ function removeCol(col) {
   ChatUI.onColumnRemoved(col.id);
   if (col.isMain) config.mainSession = null;
   detachColumn(col, false);
+  // A 小队长's children keep running and go back to the 队长.
+  if (col.subCaptain) window.MainSession?.releaseSubCrew?.(col, '关掉');
   saveConfig();
   renderColNav();
   renderBoardGraph();
@@ -2619,6 +2704,8 @@ function removeCol(col) {
 function detachColumn(col, keepReplay) {
   const t = terms.get(col.id);
   const idx = columns.indexOf(col);
+  // Its place in the deck the user sees: 队长's background sessions are in `columns` but not there.
+  const deckIdx = deckColumns().indexOf(col);
   if (selectedBoardId === col.id) {
     restoreBoardTerminal();
     selectedBoardId = null;
@@ -2638,7 +2725,7 @@ function detachColumn(col, keepReplay) {
   // the user happens to click another column.
   if (focusedId === col.id) {
     focusedId = null;
-    if (columns.length) focusColumnByIndex(Math.min(Math.max(idx, 0), columns.length - 1));
+    if (columns.length) focusColumnByIndex(deckIdx >= 0 ? deckIdx : Math.min(Math.max(idx, 0), columns.length - 1));
   }
   updateColumnStyles();
 }
@@ -2671,6 +2758,8 @@ function archiveColumn(col, opts) {
   detachColumn(col, true);
   const snapshot = { ...col, role: 'manual', relationship: 'Independent manual terminal', archivedAt: Date.now() };
   config.archived = [snapshot, ...(config.archived || []).filter((a) => a.id !== col.id)];
+  // A 小队长's children keep running and go back to the 队长.
+  if (col.subCaptain) window.MainSession?.releaseSubCrew?.(col, '归档');
   saveConfig();
   if (!(opts && opts.worktreeHandled)) {
     try { window.MainSession?.settleArchivedWorktree?.(snapshot); } catch (_) {}
@@ -2779,8 +2868,18 @@ function sendWhenReady(col, text, opts) {
       o.onGiveUp?.(entry.exitReason || '这个会话的终端已经退出');
       return;
     }
+    // Its Claude never started (its seat is gone or signed out): there is nothing to type into.
+    if (entry?.seatBlock) {
+      if (o.onGiveUp) o.onGiveUp(entry.seatBlock);
+      else showToast(`没发出去：「${columnLabel(col)}」${entry.seatBlock}`);
+      return;
+    }
     if (entry && entry.alive) {
-      const idle = !entry.sendingPrompt && entry.state !== 'input' && !MainCore.workingForSend(entry) && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd);
+      // overLoginError: MainSession's one 「接着做」 after a login blip on a signed-in seat. The error
+      // row it answers would otherwise hold the column as a resource wait; any other wait still does.
+      const loginRowOnly = !!o.overLoginError && MainCore.resourceKind(entry.lastScreen, col.cmd) === 'auth';
+      const idle = !entry.sendingPrompt && entry.state !== 'input' && !MainCore.workingForSend(entry) &&
+        (loginRowOnly || entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd));
       const quiet = Date.now() - (entry.lastOutputAt || 0);
       const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
       // Cursor CLI initializes its TUI asynchronously and enables bracketed paste mode (?2004h)
@@ -3098,16 +3197,18 @@ const cwdInput = document.getElementById('cwdInput');
 const cmdInput = document.getElementById('cmdInput');
 const dlgTitle = document.getElementById('dlgTitle');
 const cmdLockedHint = document.getElementById('cmdLockedHint');
-let editIndex = null;
+// The column itself, not its position: 队长 opens and archives sessions while the dialog is open.
+let editColumn = null;
 
 function openDialog(idx) {
-  editIndex = (typeof idx === 'number') ? idx : null;
-  dlgTitle.textContent = editIndex === null ? '添加列' : '编辑列';
-  titleInput.value = editIndex === null ? '' : columnLabel(columns[editIndex]);
-  cwdInput.value = editIndex === null ? '' : (columns[editIndex].cwd || '');
-  cmdInput.value = editIndex === null ? '' : (columns[editIndex].cmd || '');
+  if (typeof idx === 'number' && !columns[idx]) return;   // that column is already gone
+  editColumn = typeof idx === 'number' ? columns[idx] : null;
+  dlgTitle.textContent = editColumn === null ? '添加列' : '编辑列';
+  titleInput.value = editColumn === null ? '' : columnLabel(editColumn);
+  cwdInput.value = editColumn === null ? '' : (editColumn.cwd || '');
+  cmdInput.value = editColumn === null ? '' : (editColumn.cmd || '');
   // A 网页版 ChatGPT session has no launch command to change.
-  const web = editIndex !== null && columns[editIndex].executor === 'chatgpt-web';
+  const web = editColumn !== null && editColumn.executor === 'chatgpt-web';
   cmdInput.disabled = web;
   dlg.querySelectorAll('.preset').forEach((b) => { b.disabled = web; });
   cmdLockedHint.hidden = !web;
@@ -3124,12 +3225,17 @@ document.getElementById('dlgSave').onclick = () => {
   const title = titleInput.value.trim() || 'Agent';
   const cwd = cwdInput.value.trim();
   const cmd = cmdInput.value.trim();
-  if (editIndex === null) {
+  if (editColumn === null) {
     addColumn({ title, displayTitle: titleInput.value.trim() ? title : '', cwd, cmd, manualTitle: titleInput.value.trim() !== '' });
     dlg.close();
     return;
   }
-  const col = columns[editIndex];
+  const col = editColumn;
+  if (!columns.includes(col)) {
+    showToast(`「${columnLabel(col)}」已经关闭或归档，修改没有保存`);
+    dlg.close();
+    return;
+  }
   const needsRespawn = (col.cwd || '') !== cwd || (col.cmd || '') !== cmd;
   const titleChanged = title !== columnLabel(col);
   if ((col.cmd || '') !== cmd) {
@@ -3556,7 +3662,7 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
           done: !!turn.done, interrupted: !!turn.interrupted })) } : { turns: [], status: 'unavailable' };
     } else if (op === 'quota') {
       // The same store and summaries as the sidebar quota rows; nothing is sampled for the phone.
-      result = { version: env.version, rows: QuotaCore.mobile(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId(),
+      result = { version: env.version, rows: QuotaCore.mobile(config.quotas, Date.now(), ClaudeSeats.described(config.claudeSeats), claudeCaptainSeatId(),
         columns.find((c) => c.id === config.mainSession?.colId)?.agentProvider) };
     } else if (op === 'captain') {
       MainSession.sendMessage(input?.message, input?.images);
@@ -3585,7 +3691,8 @@ window.deck.onBoardCommand(async (message) => {
     return;
   }
   if (message.action === 'create-child' || message.action === 'spawn-child') {
-    const existingChild = columns.find((col) => col.createdByRequestId === message.id);
+    // A 小队长's child is a 队长 session: MainSession answers a repeated request for it.
+    const existingChild = columns.find((col) => col.createdByRequestId === message.id && !col.captainCrew);
     if (existingChild) {
       respondBoard(message.id, existingChild.taskCompleted
         ? { done: true, childId: existingChild.taskId, result: existingChild.result }
@@ -3610,8 +3717,16 @@ window.deck.onBoardCommand(async (message) => {
       if (message.action === 'session-exit') { respondBoard(message.id, { done: true }); return; }
     } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
   }
-  // 队长's commands: only its own column may use them.
-  if (String(message.action || '').startsWith('main-') || message.action === 'seat-auth-alert') {
+  if (message.action === 'main-todo-delivery' || message.action === 'main-todo-error') {
+    Promise.resolve().then(() => MainSession.handle(message, caller)).then(
+      (response) => window.deck.boardRespond({ requestId: message.id, ...response }),
+      (error) => window.deck.boardRespond({ requestId: message.id, done: true, error: error.message }));
+    return;
+  }
+  // 队长's commands: only its own column may use them. A 小队长 reaches a few of them, and
+  // create-child, on its own children (MainSession checks which).
+  if (String(message.action || '').startsWith('main-') || message.action === 'seat-auth-alert' ||
+      (message.action === 'create-child' && caller?.subCaptain === true && !caller.isMain && !message.submitOnly)) {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
@@ -3829,14 +3944,28 @@ const deckHost = {
   createSession, sendWhenReady,
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
-  createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen,
+  createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, ptyBackgroundWork,
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
-  quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
+  quotaText: () => QuotaCore.text(config.quotas, Date.now(), ClaudeSeats.described(config.claudeSeats), claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
+// The Captain's crew list opens fully at launch and again the first time the window is
+// used on a new day; a fold made in between holds until then.
+let crewFoldDay = SidebarCore.localDay(Date.now());
+function openCrewOnNewDay() {
+  const today = SidebarCore.localDay(Date.now());
+  if (today === crewFoldDay) return;
+  crewFoldDay = today;
+  if (config.crewOpen && !config.crewModelsCollapsed.length) return;
+  config.crewOpen = true;
+  config.crewModelsCollapsed = [];
+  Sidebar.render();
+}
+window.addEventListener('focus', openCrewOnNewDay);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) openCrewOnNewDay(); });
 AttentionUI.init(deckHost);
 MainSession.init(deckHost);
 window.deck.onParkForRestart(async (sessions) => {
@@ -3846,6 +3975,7 @@ window.deck.onParkForRestart(async (sessions) => {
 ClaudeSeats.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
+ChatDeliverables.init(deckHost);
 ReleaseNotesUI.init(deckHost);
 TodoUI.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
@@ -3936,6 +4066,24 @@ function statusScreen(term) {
   }
   return text.trimEnd();
 }
+// Background shell commands under a column's terminal, for the automatic archive
+// (pty-work.js in the main process). An answer is used for PTY_WORK_MS, a busy one
+// for PTY_WORK_BUSY_MS (on Windows each listing starts PowerShell, and a background
+// job can run for hours); until a fresh one arrives the column reads undefined
+// (unknown), null when the main process could not list processes.
+const PTY_WORK_MS = 10_000;
+const PTY_WORK_BUSY_MS = 60_000;
+const ptyWorkAnswers = new Map();
+function ptyBackgroundWork(col) {
+  const known = ptyWorkAnswers.get(col.id);
+  if (known && !known.pending && Date.now() - known.at < (known.busy === true ? PTY_WORK_BUSY_MS : PTY_WORK_MS)) return known.busy;
+  if (!known?.pending) {
+    ptyWorkAnswers.set(col.id, { pending: true });
+    const answer = (busy) => ptyWorkAnswers.set(col.id, { at: Date.now(), busy: typeof busy === 'boolean' ? busy : null });
+    Promise.resolve().then(() => window.deck.ptyBackgroundWork(col.id)).then(answer, () => answer(null));
+  }
+  return undefined;
+}
 // Format elapsed ms compactly: 42s → 3m 12s → 1h 05m.
 function fmtElapsed(ms) {
   const s = Math.floor(ms / 1000);
@@ -3968,7 +4116,7 @@ function updateAgentIdentityBadge(id, entry, screenText) {
   const info = window.AgentInfo.resolveAgentInfo(col, entry, screenText, footer, replies);
   if (entry.badgeEl) window.AgentInfo.renderBadge(entry.badgeEl, info, 'header');
   const nav = navItems.get(id);
-  if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar', config.claudeSeats);
+  if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar', ClaudeSeats.described(config.claudeSeats));
   if (info.provider && (col.agentProvider !== info.provider ||
       (info.rawModel && col.agentModel !== info.rawModel) ||
       (info.effort && col.agentEffort !== info.effort))) {
@@ -4056,7 +4204,8 @@ function claudeCaptainSeatId() {
 // Quota rows live at the bottom of the sidebar (#quotaBar) and, for the
 // collapsed sidebar, in the popover under the top-bar gauge (#quotaPopList).
 function renderQuotaBar() {
-  const items = QuotaCore.items(config.claudeSeats);
+  // Seat rows go by the account signed in behind each directory, not by the seat's fixed name.
+  const items = QuotaCore.items(ClaudeSeats.described(config.claudeSeats));
   const captainSeatId = claudeCaptainSeatId();
   const captainProvider = columns.find((c) => c.id === config.mainSession?.colId)?.agentProvider;
   const now = Date.now();
@@ -4090,7 +4239,8 @@ function renderQuotaBar() {
     // "5h / 7d" are named once, in a header row that shares the rows' columns.
     if (!bar.querySelector('.quota-cols')) {
       const cols = el('span', 'quota-cols'); cols.setAttribute('aria-hidden', 'true');
-      cols.append(el('span', ''), el('span', 'quota-col', '5h'), el('span', 'quota-col', '7d'));
+      // Named once for every row: the numbers below are what is left, not what is used.
+      cols.append(el('span', ''), el('span', 'quota-col', '5h 剩余'), el('span', 'quota-col', '7d 剩余'));
       bar.prepend(cols);
     }
     for (const item of [...bar.querySelectorAll('.quota-item')]) if (!items.some((q) => q.key === item.dataset.quotaKey)) item.remove();
@@ -4143,12 +4293,18 @@ function renderQuotaBar() {
         item.addEventListener('mouseenter', () => { clearTimeout(item.tipHoldTimer); item.classList.remove('tip-hold'); });
       }
       const q = summaries[index];
-      // Include the seat name: multiple subscriptions can share the same flag.
-      const seatLabel = seat ? seat.name : '';
       const captain = seat ? seat.id === captainSeatId : !!captainProvider && captainProvider === provider;
       const name = item.querySelector('.quota-name');
-      const crown = el('span', 'quota-captain'); crown.innerHTML = ICONS.crown;
-      fill(name, [seat ? seatLabel : NAMES[provider], ...(captain ? [crown] : [])]);
+      // The row 队长 is on leads with the crown instead of the provider mark, so the name keeps its width.
+      // The Max plan is a small gem on the corner of that icon: it follows the account, whichever
+      // directory it is signed in to, and takes no width from the name. The row's detail says 套餐.
+      const lead = item.querySelector('.quota-icon'), paid = !!(seat && q.planMark), leadKey = `${captain}:${paid}`;
+      if (lead.dataset.lead !== leadKey) {
+        lead.dataset.lead = leadKey;
+        lead.classList.toggle('quota-captain', captain);
+        lead.innerHTML = (captain ? ICONS.crown : AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider]) + (paid ? `<span class="quota-plan">${ICONS.gem}</span>` : '');
+      }
+      fill(name, seat ? [AgentInfo.accountLabel(q.accountLabel)] : [NAMES[provider]]);
       const state = q.authStatus === 'logged-out' ? 'danger' : q.out ? 'exhausted' : q.state;
       // Signed in to an account other than the one this seat is set to hold.
       const wrong = seat && ClaudeSeats.accountCheck(seat.id)?.state === 'mismatch' ? ClaudeSeats.accountCheck(seat.id).text : '';
@@ -4173,7 +4329,7 @@ function renderQuotaBar() {
       // reset times, source, sample time and confidence. Diagnostics stay in data-detail.
       const tip = item.querySelector('.quota-tooltip');
       const head = el('span', 'qt-head');
-      head.append(el('span', 'qt-name', seat ? `Claude ${seat.name}` : NAMES[provider]));
+      head.append(el('span', 'qt-name', seat ? q.accountLabel : NAMES[provider]));
       if (captain) { const who = el('span', 'qt-captain'); who.innerHTML = ICONS.crown; who.append('队长在用'); head.append(who); }
       const badge = el('span', 'qt-badge', q.statusText); badge.dataset.state = state; head.append(badge);
       const lines = q.cells.map((c) => {
@@ -4207,8 +4363,10 @@ function renderQuotaBar() {
       }
       const sampled = q.sampledAt ? `采样 ${Math.abs(q.sampledAt - now) > 86400000 ? `${pad(new Date(q.sampledAt).getMonth() + 1)}-${pad(new Date(q.sampledAt).getDate())} ` : ''}${hm(new Date(q.sampledAt))}${q.stale ? '（数据已旧）' : ''}` : '暂无采样';
       const meta = el('span', `qt-meta${q.stale ? ' stale' : ''}`);
-      for (const [k, v] of [['账号', q.account || '未识别'], seat && ['席位', `${seat.name}${captain ? '（队长在用）' : ''}`],
-        ['来源', [q.source || '暂无', sampled].join(' · ')], ['可信度', q.confidence || '未知']].filter(Boolean)) meta.append(el('span', 'qt-k', k), el('span', 'qt-v', v));
+      const planValue = el('span', 'qt-v', q.plan);
+      if (q.planMark) { const gem = el('span', 'qt-plan-mark'); gem.innerHTML = ICONS.gem; planValue.prepend(gem); }   // what the gem on the row means
+      for (const [k, v] of [['账号', q.account || '未识别'], q.plan && ['套餐', planValue], seat && ['席位', `${q.seatCode}${captain ? '（队长在用）' : ''}`],
+        seat && ['目录', seat.configDir], ['来源', [q.source || '暂无', sampled].join(' · ')], ['可信度', q.confidence || '未知']].filter(Boolean)) meta.append(el('span', 'qt-k', k), typeof v === 'string' ? el('span', 'qt-v', v) : v);
       const copyFocused = document.activeElement?.classList.contains('quota-login-copy') && tip.contains(document.activeElement);
       fill(tip, [head, ...lines, meta]);
       if (copyFocused) {
@@ -4224,8 +4382,8 @@ function renderQuotaBar() {
       item.dataset.account = wrong ? 'mismatch' : '';
       item.dataset.loginCommand = q.loginCommand || '';
       tip.dataset.loginCommand = q.loginCommand ? 'true' : '';
-      item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${wrong ? wrong + '，' : ''}${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
-      // Config dir, model and the full evidence line: kept for diagnosis, never shown on hover.
+      item.setAttribute('aria-label', `${seat ? q.accountLabel + (q.planMark ? ` ${q.plan}` : '') : NAMES[provider]}${captain ? '（队长）' : ''}：${wrong ? wrong + '，' : ''}${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
+      // Model and the full evidence line: kept for diagnosis, never shown on hover.
       item.dataset.detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + warm;
       if (bar.children[index + 1] !== item) bar.insertBefore(item, bar.children[index + 1] || null);
     }
@@ -4389,7 +4547,8 @@ document.addEventListener('keydown', (e) => {
     addAndFocusColumn();
   } else if (k === 'w' || k === 'W') {
     const idx = columns.findIndex((c) => c.id === focusedId);
-    if (idx >= 0) { removeCol(columns[idx]); focusColumnByIndex(idx); }
+    const deckIdx = deckColumns().findIndex((c) => c.id === focusedId);   // background sessions are not in the deck
+    if (idx >= 0) { removeCol(columns[idx]); focusColumnByIndex(deckIdx >= 0 ? deckIdx : idx); }
   } else if (k === 'f' || k === 'F') {
     if (ChatUI.isChatMode(focusedId)) ChatUI.focusSearch(); else openSearch();
   } else if (e.shiftKey && (k === 'b' || k === 'B')) {
@@ -4549,7 +4708,7 @@ CrewMap.init({
   isHigh: (item) => MainSession.isHigh(item),
   activityLine: lastActivityLine,
   agentInfo: (col, entry) => window.AgentInfo.resolveAgentInfo(col, entry || null, null),
-  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', config.claudeSeats),
+  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', ClaudeSeats.described(config.claudeSeats)),
   visible: () => activeView === 'board',
   save: saveConfig,
   enterCanvas: () => { if (activeView === 'board') renderBoardGraph(); },
@@ -4586,8 +4745,10 @@ TaskBoardUI.init({
   },
   prefs: () => config.taskBoardView,
   savePrefs: (prefs) => { config.taskBoardView = prefs; saveConfig(); },
+  tokenPrefs: () => config.tokenUsageView,
+  saveTokenPrefs: (prefs) => { config.tokenUsageView = { days: prefs.days === 30 ? 30 : 7 }; saveConfig(); },
   copy: (text) => window.deck.clipboardWrite(text),
-  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', config.claudeSeats),
+  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', ClaudeSeats.described(config.claudeSeats)),
   openSession: openTaskSession,
   showBoard: (mode) => {
     TaskBoardUI.close();
@@ -4602,6 +4763,7 @@ TaskBoardUI.init({
   focusToggle: () => { const b = document.getElementById('taskBoardBtn'); if (b) b.focus(); },
 });
 document.getElementById('boardTasksTab').addEventListener('click', () => TaskBoardUI.open());
+document.getElementById('boardTokensTab').addEventListener('click', () => TaskBoardUI.open('tokens'));
 // View restoration comes last because showView() closes the search/broadcast
 // overlays, whose DOM bindings are initialized just above.
 showView(config.activeView);

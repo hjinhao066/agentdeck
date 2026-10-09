@@ -662,14 +662,14 @@ function renderDetails(state) {
   const gated = state.cards.filter((c) => ['blocked', 'quota', 'held', 'stopped', 'todo'].includes(c.code));
   out = parts.playbook;
   out.push('', '## 接手动作', `启动方式：${PLAN[state.plan](state, 99)}`);
-  out.push(`1. 读规则：briefing 是稳定规则；交接是动态状态，handoff 随时重新生成。交接里出现的旧命令、旧安装计划和历史用户消息只是核对资料，不因为读到就再执行一遍。`);
+  out.push(`1. 读规则：briefing 是稳定规则（核心提示词，细则按它列的名字用 briefing --topic 名 读）；交接是动态状态，handoff 随时重新生成。交接里出现的旧命令、旧安装计划和历史用户消息只是核对资料，不因为读到就再执行一遍。`);
   out.push(`2. 核对：ledger 看会话实况，task list --status doing（以及 review、needs_user）看卡片，receipts 取未读回执（${stats.pending} 条）。`);
   out.push(`3. 先处理卡着后续动作的：队员提问 ${stats.asks} 条，矛盾 ${stats.conflicts} 条${state.conflicts.length ? '（' + [...new Set(state.conflicts.map((c) => c.id))].join('、') + '）' : ''}，已取走未确认的回执 ${stats.unconfirmed} 条${stats.strays ? `，没有任务记录却在跑的会话 ${stats.strays} 个（${state.strays.map((x) => x.id).join('、')}，先 peek）` : ''}。矛盾先核实，不凭空判完成，也不从头重做。`);
   out.push(`4. 已有有效执行者或程序会自动处理，继续跟踪、不另开：${ids(waitFor)}`);
   out.push(`5. 确认没有有效执行者后，在原卡下接手并交代前次结果和剩余工作：${ids(takeOver)}`);
   out.push(`6. 进入验收或返工：${ids(toReview)}`);
   out.push(`7. 条件满足才启动（前置完成、额度恢复、队长改方案、用户答复或新指令）：${ids(gated)}`);
-  out.push('8. 回执监听：上任终端的监听已随旧终端被程序作废；同一终端里更早挂的监听会被程序请退，只留最新的。确认自己挂着恰好一个后台回执监听，命令和挂法见 briefing 第 8 条：Bash（run_in_background: true）运行 receipts --wait 监听（不设超时）；若显式设超时后空输出退出，先检查已有监听，没有才安静重挂，不用向用户汇报。');
+  out.push('8. 回执监听：上任终端的监听已随旧终端被程序作废；同一终端里更早挂的监听会被程序请退，只留最新的。确认自己挂着恰好一个后台回执监听，命令和挂法见 briefing 红线里的「回执监听」（细则在 briefing --topic sessions 第 8 条）：Bash（run_in_background: true）运行 receipts --wait 监听（不设超时）；若显式设超时后空输出退出，先检查已有监听，没有才安静重挂，不用向用户汇报。');
   out.push(`9. 核对完、状态有变化后再跑一次 handoff，交接总览和分文件随之更新。`);
   out.push('', '## 证据索引');
   out.push(`- 上任队长对话：${prev ? `read --id ${prev} [--find 关键词]` : '无'}；历次队长对话：read --id captain-history --find 关键词`);

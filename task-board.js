@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const { resourceFailure } = require('./main-core');
 const AutoVerify = require('./auto-verify-core');
 const Worktree = require('./worktree-core');
@@ -53,6 +54,7 @@ function priorityLevel(value) {
   if (!PRIORITIES.includes(value)) throw new Error('priority must be high or normal.');
   return value;
 }
+const STALE_REWORK = '自动返工已经不用发了：卡片在这期间被移动过。';
 function touch(card) { card.updated = new Date(Math.max(Date.now(), (Date.parse(card.updated) || 0) + 1)).toISOString(); }
 function newCard(input, now = new Date().toISOString()) {
   const project = projectName(input.project);
@@ -162,10 +164,84 @@ class TaskStore {
       fs.renameSync(tmp, file);
     } finally { if (fd !== undefined) fs.closeSync(fd); if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
   }
+  // The lock is a directory: making it is atomic on every platform. Its owner
+  // record names the process, and writing that record exclusively ('wx') is what
+  // makes the lock ours, so a lock is never shared even if its directory is moved
+  // aside and made again while a writer is between the two steps.
+  lockBusy() { return new Error(`Task board is being written by another local process. Retry shortly; a lock whose process has exited is taken over automatically (${this.lock}).`); }
+  acquireLock() {
+    try { fs.mkdirSync(this.lock); } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      if (!this.reapLock()) throw this.lockBusy();
+      try { fs.mkdirSync(this.lock); } catch (again) { if (again.code === 'EEXIST') throw this.lockBusy(); throw again; }
+    }
+    try { fs.writeFileSync(path.join(this.lock, 'owner.json'), JSON.stringify({ pid: process.pid, host: os.hostname(), created: new Date().toISOString() }), { flag: 'wx' }); }
+    catch (err) {
+      // EEXIST: another process named itself first, the lock is theirs. Anything
+      // else (EMFILE, a full temp disk): the directory is ours and holds no record,
+      // so nothing could ever take it over; remove it and say what went wrong.
+      if (err.code === 'EEXIST') throw this.lockBusy();
+      fs.rmSync(this.lock, { recursive: true, force: true });
+      throw err;
+    }
+  }
+  // Takes over a lock only when its owner process has exited (a crash mid-write).
+  // A live writer keeps its lock however long it holds it; a lock whose owner
+  // cannot be read (being made right now, or damaged) is never touched.
+  reapLock() {
+    let raw, owner;
+    try { raw = fs.readFileSync(path.join(this.lock, 'owner.json'), 'utf8'); owner = JSON.parse(raw); } catch (_) { return false; }
+    if (!owner || !Number.isInteger(owner.pid) || owner.pid <= 0 || !Number.isFinite(Date.parse(owner.created)) || this.ownerAlive(owner)) return false;
+    // Moved aside under a name fixed by that owner record, never deleted in place:
+    // of two processes acting on the same dead owner only one can move it, and the
+    // name stays taken so a lock made meanwhile by a new writer is never moved.
+    const grave = this.lock + '.stale-' + crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16);
+    try { fs.renameSync(this.lock, grave); } catch (_) { return false; }
+    let moved = null;
+    try { moved = fs.readFileSync(path.join(grave, 'owner.json'), 'utf8'); } catch (_) { /* compared below */ }
+    if (moved !== raw) {
+      // Not the lock that was judged (its record was cleared away long ago): put it back.
+      try { fs.renameSync(grave, this.lock); } catch (_) { /* A new lock already took the place; leave both alone. */ }
+      return false;
+    }
+    const now = new Date();
+    fs.utimesSync(grave, now, now);
+    const prefix = path.basename(this.lock) + '.stale-';
+    for (const name of fs.readdirSync(path.dirname(this.lock))) {
+      const old = path.join(path.dirname(this.lock), name);
+      try { if (name.startsWith(prefix) && old !== grave && now - fs.statSync(old).mtimeMs > 3600_000) fs.rmSync(old, { recursive: true, force: true }); } catch (_) { /* Another process cleared it. */ }
+    }
+    return true;
+  }
+  ownerAlive(owner) {
+    // The lock lives in this computer's temp folder; a record naming another host is not ours to judge.
+    if (owner.host !== undefined && owner.host !== os.hostname()) return true;
+    // Signal 0 only asks: ESRCH is gone (Windows too); EPERM is someone else's live process.
+    try { process.kill(owner.pid, 0); } catch (err) { return err.code !== 'ESRCH'; }
+    // A recent lock is in use. An older one may name a reused pid: its owner was
+    // already running when it wrote the record, a process started later is not it.
+    const created = Date.parse(owner.created);
+    if (Date.now() - created < 10_000) return true;
+    return !(this.processStart(owner.pid) > created + 2000);
+  }
+  // When a process started (ms), NaN when it cannot be read.
+  processStart(pid) {
+    try {
+      if (process.platform === 'win32') {
+        const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`], { encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        return Date.parse(out.trim());
+      }
+      // Elapsed time [[dd-]hh:]mm:ss works on macOS and Linux alike.
+      const out = execFileSync('ps', ['-o', 'etime=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      const match = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/.exec(out);
+      if (!match) return NaN;
+      const [, days = 0, hours = 0, minutes, seconds] = match;
+      return Date.now() - (((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000;
+    } catch (_) { return NaN; }
+  }
   mutate(run) {
     fs.mkdirSync(this.dir, { recursive: true });
-    try { fs.mkdirSync(this.lock); } catch (err) { if (err.code === 'EEXIST') throw new Error('Task board is being written by another local process. Retry shortly; stale locks can be removed only after that process exits.'); throw err; }
-    fs.writeFileSync(path.join(this.lock, 'owner.json'), JSON.stringify({ pid: process.pid, created: new Date().toISOString() }));
+    this.acquireLock();
     try {
       for (let retry = 0; retry < 3; retry++) {
         const docs = this.read();
@@ -239,6 +315,22 @@ class TaskStore {
       cards.push(card); return { card, notices: [] };
     });
   }
+  // Internal Todo backend only; not an additional renderer operation.
+  todoStatus({ id, status, message }) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, id);
+      if (card.project !== 'todo' || !card.id.startsWith('todo-')) throw new Error('Not a Todo task.');
+      const previous = card.status;
+      card.status = { working: 'doing', needs_user: 'needs_user', done: 'done', failed: 'needs_user' }[status];
+      if (!card.status) throw new Error('Invalid Todo status.');
+      card.flag = status === 'failed' ? 'failed' : null;
+      card.latest_receipt = text(message, 'message');
+      finishStatus(card, previous);
+      if (status === 'needs_user' || status === 'failed') card.user_question = message;
+      if (status === 'working') card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: true, created: card.updated };
+      return { card, notices: [] };
+    });
+  }
   sessionOpen(id, attemptClosed = false, sessions = this.sessions(), host, reservedAt = 0) {
     if (!id) return false;
     const session = sessions.find((s) => s.id === id);
@@ -250,13 +342,14 @@ class TaskStore {
     return this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at) || this.sessionOpen(card.dispatch_session_id, false, sessions, card.dispatch_host, card.dispatch_bound_at) ||
       sessions.some((s) => !s.archived && (s.boardId === card.id || s.dispatcherCardId === card.id));
   }
-  activeAttempt(card) {
+  // self: the session being bound is not "another" session on the card.
+  activeAttempt(card, self = '') {
     const sessions = this.sessions();
     const session = sessions.find((s) => s.id === card.session_id);
     return (card.session_id && this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at) && !card.attempt_closed &&
       !session?.failed && !(session?.lastReceipt?.failed && !session.active) &&
       !['failed', 'quota', 'held'].includes(card.flag) && !/:failed:/.test(card.last_event || '')) ||
-      sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id);
+      sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id && s.id !== self && AutoVerify.reviewAttemptRound(card.id, s.boardAttempt) >= (card.review_round || 0));
   }
   failure(card, attempt, reason, rework, source = '') {
     const duplicate = card.last_failure_attempt === attempt;
@@ -276,36 +369,40 @@ class TaskStore {
   }
   move(input) {
     if (!STATUSES.includes(input.status)) throw new Error('Invalid status.');
-    return this.mutate((docs) => {
-      const card = this.find(docs, input.id);
-      if (input.updated !== undefined && input.updated !== card.updated) throw new Error('Card changed since it was read. Reload before editing.');
-      const wasReview = card.status === 'review';
-      const wasHeld = card.flag === 'held';
-      if (input.status === 'doing') {
-        if (card.depends_on.some((id) => this.find(docs, id).status !== 'done')) throw new Error('Predecessor cards are not all done.');
-        if (wasReview) this.failure(card, card.review_round && card.exec_receipt ? AutoVerify.reviewAttemptId(card.id, card.review_round) : 'reject-' + (card.attempt_id || card.updated), '验收不通过，已打回返工', true);
-        else { card.flag = null; if (wasHeld) card.consecutive_failures = 0; }
-      } else card.flag = null;
-      card.status = input.status;
-      if (wasHeld && input.status === 'todo') card.consecutive_failures = 0;
-      if (input.status === 'done') card.consecutive_failures = 0;
-      // Keep unarchived sessions as an occupancy fence, including a finished
-      // worker which the Captain may tell to rework. A reviewer rejection ends
-      // its old attempt, so late receipts cannot undo the rejection.
-      const sessions = this.sessions();
-      if (input.status !== 'doing' || !this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at)) { card.session_id = null; card.attempt_id = null; card.session_host = null; card.session_bound_at = null; }
-      if (input.status !== 'doing' || !this.sessionOpen(card.dispatch_session_id, false, sessions, card.dispatch_host, card.dispatch_bound_at)) { card.dispatch_session_id = null; card.dispatch_host = null; card.dispatch_bound_at = null; }
-      if (wasReview && input.status === 'doing') { card.attempt_id = null; card.attempt_closed = true; }
-      card.archived = false; card.resource_failure = null; card.dispatch_wait = null;
-      if (input.status !== 'doing') card.dispatch_claim = null;
-      // A move is a Captain/user decision: it replaces any pending automatic rework or block.
-      if (card.review_block) card.review_block = null;
-      if (card.review_reject) card.review_reject.delivered = true;
-      // CLI moves are Captain decisions, not requests for an automatic model.
-      if (input.suppressDispatch && input.status === 'doing') card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: true, created: new Date().toISOString() };
-      finishStatus(card);
-      return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
-    });
+    return this.mutate((docs) => this.moveCard(docs, this.find(docs, input.id), input));
+  }
+  // The body of move, inside a write that is already open. tellFrom (bind only): a
+  // Captain tell took this done, archived or held card back to doing; the failure
+  // count stays, so the hold still counts.
+  moveCard(docs, card, input, tellFrom = '') {
+    if (input.updated !== undefined && input.updated !== card.updated) throw new Error('Card changed since it was read. Reload before editing.');
+    const wasReview = card.status === 'review';
+    const wasHeld = card.flag === 'held';
+    if (input.status === 'doing') {
+      if (card.depends_on.some((id) => this.find(docs, id).status !== 'done')) throw new Error('Predecessor cards are not all done.');
+      if (wasReview) this.failure(card, card.review_round && card.exec_receipt ? AutoVerify.reviewAttemptId(card.id, card.review_round) : 'reject-' + (card.attempt_id || card.updated), '验收不通过，已打回返工', true);
+      else { card.flag = null; if (wasHeld && !tellFrom) card.consecutive_failures = 0; }
+    } else card.flag = null;
+    card.status = input.status;
+    if (tellFrom) { card.last_auto_recovered_at = new Date().toISOString(); card.last_auto_recovered_from = tellFrom; }
+    if (wasHeld && input.status === 'todo') card.consecutive_failures = 0;
+    if (input.status === 'done') card.consecutive_failures = 0;
+    // Keep unarchived sessions as an occupancy fence, including a finished
+    // worker which the Captain may tell to rework. A reviewer rejection ends
+    // its old attempt, so late receipts cannot undo the rejection.
+    const sessions = this.sessions();
+    if (input.status !== 'doing' || !this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at)) { card.session_id = null; card.attempt_id = null; card.session_host = null; card.session_bound_at = null; }
+    if (input.status !== 'doing' || !this.sessionOpen(card.dispatch_session_id, false, sessions, card.dispatch_host, card.dispatch_bound_at)) { card.dispatch_session_id = null; card.dispatch_host = null; card.dispatch_bound_at = null; }
+    if (wasReview && input.status === 'doing') { card.attempt_id = null; card.attempt_closed = true; }
+    card.archived = false; card.resource_failure = null; card.dispatch_wait = null;
+    if (input.status !== 'doing') card.dispatch_claim = null;
+    // A move is a Captain/user decision: it replaces any pending automatic rework or block.
+    if (card.review_block) card.review_block = null;
+    if (card.review_reject) card.review_reject.delivered = true;
+    // CLI moves are Captain decisions, not requests for an automatic model.
+    if (input.suppressDispatch && input.status === 'doing') card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: true, created: new Date().toISOString() };
+    finishStatus(card);
+    return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
   }
   noteWorktree(input) {
     return this.mutate((docs) => {
@@ -374,21 +471,41 @@ class TaskStore {
       return { card, notices: [] };
     });
   }
+  // tell: the Captain told this session to carry on (main-tell, automatic rework). That
+  // is an explicit decision to work on: a done, archived or held card goes back to doing
+  // first (in the same write: a bind that fails leaves the card as it was), a card
+  // waiting for review goes back to execution instead of making its own worker the
+  // reviewer, and a reviewer still bound to the card is replaced. The result names that
+  // reviewer (replaced_session) so the caller ends its terminal.
   bind(input) {
     idValue(input.session_id); idValue(input.attempt_id);
     return this.mutate((docs) => {
-      const card = this.find(docs, input.id); this.ready(docs, card);
+      const card = this.find(docs, input.id);
+      // An automatic rework names the rejection it delivers: once the card was moved
+      // (by the user or the Captain) that rejection is no longer waiting.
+      if (input.rework_key !== undefined && (card.review_reject?.key !== input.rework_key || card.review_reject.delivered)) throw new Error(STALE_REWORK);
+      if (input.tell === true && (card.archived || card.flag === 'held' || card.status === 'done')) {
+        this.moveCard(docs, card, { status: 'doing', suppressDispatch: true }, card.archived ? 'archived' : card.flag === 'held' ? 'held' : 'done');
+      }
+      this.ready(docs, card);
       if (input.project && !sameProject(input.project, card.project)) throw new Error('--project differs from the card project.');
       if (card.attempt_id === input.attempt_id) {
         if (input.worktree) { card.worktree = Worktree.normalizeRecord(input.worktree); touch(card); }
         return { card, notices: [] };
       }
-      if (this.activeAttempt(card)) throw new Error('Card already has an active execution or verification session.');
-      if (input.assignee === null || typeof input.assignee !== 'object' || typeof input.assignee.agent !== 'string' || typeof input.assignee.model !== 'string') throw new Error('assignee requires agent and model.');
       const explicitReview = Array.isArray(input.reviews) && input.reviews.length > 0;
+      const takeBack = input.tell === true && !explicitReview && !(card.review_session === true && card.session_id === input.session_id);
+      const replaced = takeBack && card.review_session === true && card.session_id ? card.session_id : null;
+      if (this.activeAttempt(replaced ? { ...card, attempt_closed: true } : card, input.session_id)) throw new Error('Card already has an active execution or verification session.');
+      if (input.assignee === null || typeof input.assignee !== 'object' || typeof input.assignee.agent !== 'string' || typeof input.assignee.model !== 'string') throw new Error('assignee requires agent and model.');
       if (explicitReview && input.review_round !== (card.review_round || 0)) throw new Error('这张卡片已经不在这一轮待验收了，审查会话没有开。');
       if (explicitReview && card.exec_receipt && !input.reviews.includes(card.exec_receipt.session_id)) throw new Error('--reviews must include the original execution session.');
-      const review = explicitReview || card.status === 'review';
+      // The executor told to do more while its receipt waits for (or is with) a reviewer:
+      // that round is void, and the executor is working on the card again, not reviewing it.
+      // Any other tell takes a card in review back to execution too (takeBack).
+      const execResume = !explicitReview && card.status === 'review' && card.verify === true && card.exec_receipt?.session_id === input.session_id;
+      if ((execResume || takeBack) && card.status === 'review') card.status = 'doing';
+      const review = !execResume && (explicitReview || card.status === 'review');
       if (explicitReview) {
         if (!card.exec_receipt) {
           if (!input.exec_receipt || !input.reviews.includes(input.exec_receipt.session_id)) throw new Error('Review requires the original execution receipt.');
@@ -404,17 +521,25 @@ class TaskStore {
         review_session: review, review_verdict: explicitReview, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
       card.flag = null;
       if (card.dispatch_claim) card.dispatch_claim.delivered = true;
-      if (review && card.review_claim) card.review_claim.delivered = true;
+      if ((review || execResume) && card.review_claim) card.review_claim.delivered = true;
       // Someone (the Captain, or the automatic rework itself) took the card on.
       if (card.review_block) card.review_block = null;
       if (card.review_reject) card.review_reject.delivered = true;
       touch(card);
-      return { card, notices: [] };
+      return { card, notices: [], ...(replaced ? { replaced_session: replaced } : {}) };
     });
   }
   event(input) {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id);
+      if (this.supersedesReview(card, input)) {
+        // The executor was told more and handed in a new receipt while a reviewer holds
+        // the card: the review of the old receipt is void. The executor takes the card
+        // back (the old reviewer's later words are then ignored) and the receipt below
+        // starts the next round, which is due its own reviewer.
+        Object.assign(card, { session_id: input.session_id, attempt_id: input.attempt_id, session_host: os.hostname(), session_bound_at: Date.now(), assignee: card.exec_receipt.assignee || card.assignee,
+          review_session: false, review_verdict: false, attempt_closed: false, last_event: null, flag: null, resource_failure: null });
+      }
       if (card.session_id !== input.session_id || card.attempt_id !== input.attempt_id) return { card, ignored: true, notices: [] };
       if (!['started', 'ask', 'complete', 'failed', 'fallback'].includes(input.type)) throw new Error('Invalid task event.');
       // A resource stop is already final for runtime failures from this attempt.
@@ -578,6 +703,13 @@ class TaskStore {
     });
   }
   // ---- automatic verification ----
+  // A written receipt from the original executor that differs from the one under
+  // review, while a reviewer (automatic or manual) holds the card in review.
+  supersedesReview(card, input) {
+    const exec = card.exec_receipt;
+    return input.type === 'complete' && input.source === 'command' && card.verify === true && card.status === 'review' && card.review_session === true && !card.archived && !card.flag &&
+      !!exec && exec.session_id === input.session_id && card.session_id !== input.session_id && !(exec.attempt_id === input.attempt_id && exec.text === input.message);
+  }
   // A card is due a reviewer once per round: verify card, in review through the
   // execution's own complete (it has a round number and receipt), nobody has
   // taken the review, and this round has no claim or block yet.
@@ -642,20 +774,26 @@ class TaskStore {
   }
   // One card from the fleet server. Other projects stay put.
   upsertSynced(card) {
-    const next = syncedCard(card);
+    return { card: this.upsertSyncedMany([card]).cards[0] };
+  }
+  // Several cards from the fleet server in one locked read and write.
+  upsertSyncedMany(cards) {
+    const list = cards.map(syncedCard);
     return this.mutate((docs) => {
-      for (const [project, { doc }] of [...docs.entries()]) {
-        const index = doc.cards.findIndex((item) => item.id === next.id);
-        if (index < 0) continue;
-        if (project === next.project) doc.cards[index] = next;
-        else doc.cards.splice(index, 1);
-      }
-      if (![...docs.values()].some(({ doc }) => doc.cards.some((item) => item.id === next.id))) {
-        if (!docs.has(next.project)) docs.set(next.project, { raw: null, doc: { version: 1, project: next.project, cards: [] } });
-        docs.get(next.project).doc.cards.push(next);
+      for (const next of list) {
+        for (const [project, { doc }] of [...docs.entries()]) {
+          const index = doc.cards.findIndex((item) => item.id === next.id);
+          if (index < 0) continue;
+          if (project === next.project) doc.cards[index] = next;
+          else doc.cards.splice(index, 1);
+        }
+        if (![...docs.values()].some(({ doc }) => doc.cards.some((item) => item.id === next.id))) {
+          if (!docs.has(next.project)) docs.set(next.project, { raw: null, doc: { version: 1, project: next.project, cards: [] } });
+          docs.get(next.project).doc.cards.push(next);
+        }
       }
       for (const [, { doc }] of docs) if (!doc.cards.length) doc._drop = true;
-      return { card: next };
+      return { cards: list };
     });
   }
   // Full server snapshot. keepIds are local edits still waiting to upload;

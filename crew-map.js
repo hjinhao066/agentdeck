@@ -135,10 +135,11 @@
     if (col) {
       const inner = el('span');
       host.renderBadge(inner, col);
-      // the account as a small text tag (CSS .cm-agent .agent-seat-label): a seat's flag stays in the
-      // sidebar; its name and its hover text (the whole account) come here as they are
-      const seat = inner.querySelector('.agent-seat-label');
-      if (seat) seat.childNodes.forEach((t) => { if (t.nodeType === 3) t.nodeValue = t.nodeValue.replace(/^[^\p{L}\p{N}]+/u, ''); });
+      // the account as a small text tag beside the model (CSS .cm-agent .agent-seat-label): the account signed in
+      // behind the seat as renderBadge names it (the part of its address before the @, cut from the left when long),
+      // the whole address in its hover text; the capsule's hover text names it too
+      const seat = inner.querySelector?.('.agent-seat-label');
+      if (seat) inner.title = [inner.title, seat.title].filter(Boolean).join('\n');
       if (!inner.hidden && inner.childNodes.length) { b.appendChild(inner); return b; }
     }
     b.textContent = [node.provider, node.model].filter(Boolean).join(' · ');
