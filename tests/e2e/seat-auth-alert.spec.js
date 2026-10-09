@@ -54,7 +54,9 @@ test.beforeEach(() => {
 });
 test.afterEach(async () => {
   if (application) { await closeElectron(application); application = null; }
-  if (profile) fs.rmSync(profile, { recursive: true, force: true });
+  // A closed Electron's helpers can still hold files in the profile for a few seconds (EPERM on Windows):
+  // a temporary folder left behind is reported, it does not fail a test that passed.
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
 });
 test('confirmed logout sends one critical Bark, red 未登录 and a Captain question; recovery silently rearms', async () => {
   await launch();
