@@ -213,7 +213,7 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     await expect(doneRow).not.toHaveClass(/is-done/); // AI finishing never ticks the user's own 待办
     await shot(page, 'desktop-todo-ai-done');
     await page.locator('#attentionBtn').click();
-    const report = page.locator('.at-item', { hasText: 'AI 办完了' });
+    const report = page.locator('.at-card', { hasText: 'AI 办完了' });
     await expect(report.locator('.at-from')).toHaveText('来自待办');
     await shot(page, 'desktop-attention-ai-done');
 
@@ -247,7 +247,7 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     ]);
     expect(await page.evaluate(() => config.attention.items.filter((i) => /没办成或出错/.test(i.title)).length)).toBe(0);
     await page.locator('#attentionBtn').click();
-    const failed = page.locator('.at-item', { hasText: 'AI 没办成' });
+    const failed = page.locator('.at-card', { hasText: 'AI 没办成' });
     await expect(failed.locator('.at-quick button')).toHaveText(['重试', '先放着']);
     await shot(page, 'desktop-attention-ai-failed');
     await page.locator('#todoBtn').click();
@@ -299,7 +299,8 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     for (const child of children) if (child.exitCode === null) child.kill();
     if (application) {
       const proc = application.process();
-      await Promise.race([application.close(), new Promise((resolve) => setTimeout(resolve, 3000))]);
+      // A quit with a Captain takes a few seconds; killing it mid-close leaves the worker hanging.
+      await Promise.race([application.close(), new Promise((resolve) => setTimeout(resolve, 20000))]);
       if (proc.exitCode === null) try { process.kill(proc.pid, 'SIGKILL'); } catch (_) {}
     }
     fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); // the app may still be writing as it quits
