@@ -319,6 +319,27 @@
     const rows = String(screen || '').split('\n').map((row) => row.trim()).filter(Boolean);
     return /^Pasting(?:…|\.{3})$/.test(rows.at(-1) || '');
   }
+  // Is an instruction just typed still in the agent's input box, its Enter lost while the TUI was
+  // busy? Only a positive sighting counts: the rows above the last rule on screen, back to the rule
+  // before it (or the top of the screen when the box is taller than that), end with the end of the
+  // text we typed. A menu, an empty box or anyone else's text is no.
+  const BOX_RULE = /^[\s╭╰]*[─━═]{8,}[\s╮╯]*$/;
+  function promptLeftInBox(screen, sent) {
+    const rows = String(screen || '').split('\n');
+    const bottom = rows.findLastIndex((row) => BOX_RULE.test(row));
+    if (bottom < 1) return false;
+    let top = bottom - 1;
+    while (top >= 0 && !BOX_RULE.test(rows[top])) top--;
+    const box = rows.slice(top + 1, bottom);
+    if (top >= 0 && !/^[\s│┃]*[>❯›]\s/.test(box[0] || '')) return false;
+    if (box.some((row) => /^[\s│┃]*[>❯›][\t \u00a0]*\d+\./.test(row))) return false;
+    const flat = (text) => String(text || '').replace(/[\s│┃]+/g, '');
+    const inBox = flat(box.join('\n').replace(/^[\s│┃]*[>❯›]/, ''));
+    // A long paste is shown collapsed: "[Pasted text #1 +32 lines]".
+    if (/^(?:\[Pastedtext#\d+(?:\+\d+lines?)?\])+$/i.test(inBox)) return /\n/.test(sent) || String(sent).length > 800;
+    const tail = flat(sent).slice(-40);
+    return tail.length >= 8 && inBox.endsWith(tail);
+  }
 
   // A terminal that has not asked for bracketed paste reads typed text a line at a time, and the
   // tty drops everything past its line limit (1024 bytes on macOS). Stay well under it.
@@ -578,7 +599,7 @@
   }
 
   return {
-    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, promptLeftInBox, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
     // the reply as the chat view shows it
