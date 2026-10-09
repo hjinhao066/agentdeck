@@ -386,10 +386,14 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir, crew) {
     try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
     catch (e) { if (e.code !== 'ENOENT') throw e; }
     selectedSeat = configDir ? { id: seatId, configDir } : ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === (seatId || cfg.activeClaudeSeatId || 'cn'));
-    if (!selectedSeat) throw new Error('席位不存在');
+    if (!selectedSeat) {
+      const requestedSeat = seatId || (cfg && cfg.activeClaudeSeatId) || 'cn';
+      throw new Error(`席位 ${requestedSeat} 不存在，请检查席位设置`);
+    }
     binding = credentialLocation(selectedSeat, seatHome).keychainService;
-  } catch (_) {
-    send('pty:data', { id, data: '\r\n[AgentDeck] 席位配置无效，请检查席位设置。\r\n' });
+  } catch (err) {
+    const message = err?.message || '席位配置无效';
+    send('pty:data', { id, data: `\r\n[AgentDeck] ${message}。请在设置中检查 Claude 席位配置。\r\n` });
     send('pty:exit', { id }); return;
   }
   if (ptys.has(id)) {
