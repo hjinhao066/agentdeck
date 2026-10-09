@@ -40,6 +40,7 @@ const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
+const { createPtyWork } = require('./pty-work');
 const Battery = require('./battery-core');
 const RestartResume = require('./restart-resume');
 const AgentSessions = require('./agent-sessions');
@@ -167,6 +168,13 @@ function handleMain(channel, handler) {
 }
 const memoryPressure = createMemoryPressure({ platform: process.platform, execFile });
 handleMain('memory-pressure', () => memoryPressure.read());
+// Shell commands Claude started that still run under a terminal: the automatic
+// archive's last check (pty-work.js; one cached process listing for all terminals).
+const ptyWork = createPtyWork({ platform: process.platform, execFile });
+handleMain('pty:background-work', (_e, { id }) => {
+  const p = validId(id) && ptys.get(id);
+  return p && p.pid ? ptyWork.busy(p.pid) : false;
+});
 
 // Battery mode: the page decides what to limit; main only needs the power source and the
 // setting to pace its own timers (`power.every`) and to tell the page when the source changes.
@@ -730,42 +738,6 @@ function ptyCwd(id) {
     const m = out.match(/^n(\/.*)$/m);
     return m ? m[1] : null;
   } catch (_) { return null; }
-}
-
-// Check if a PTY has real child processes (commands spawned by Claude, not just the shell).
-// Filters out permanent Claude infrastructure (MCP, etc) to avoid false positives.
-function ptyHasChildWork(id) {
-  const p = id && ptys.get(id);
-  if (!p || !p.pid) return false;
-  try {
-    if (isWin) {
-      // Windows: Get-CimInstance Win32_Process | where {$_.ParentProcessId -eq <pid>}
-      const cmd = `Get-CimInstance Win32_Process | Where-Object {$_.ParentProcessId -eq ${p.pid}} | Select-Object -ExpandProperty Name`;
-      const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd], { encoding: 'utf-8', timeout: 2000, maxBuffer: 65536 });
-      const lines = out.trim().split('\n').filter(l => l.trim());
-      // Filter out Claude's permanent infrastructure
-      return lines.some(name => !/(node|claude|conhost|powershell)/i.test(name));
-    } else {
-      // macOS/Linux: ps -o ppid,pid,command to find children of the pty shell
-      // Only consider processes spawned by shell commands (zsh -c, bash -c, etc)
-      const out = execFileSync('ps', ['-A', '-o', 'ppid=,pid=,command='], { encoding: 'utf-8', timeout: 2000, maxBuffer: 65536 });
-      const lines = out.trim().split('\n');
-      const shellPid = p.pid;
-      // Find direct children of the shell
-      const children = lines.filter(line => {
-        const parts = line.trim().split(/\s+/);
-        return parts[0] === String(shellPid);
-      });
-      // Look for shell command indicators (zsh -c, bash -c, node, npm, etc)
-      return children.some(line => {
-        // Skip just the shell, idle processes
-        return !/^\s*(zsh|bash|sh|ksh|fish)\s*$/.test(line) &&
-               !/(node|claude|MCP|systemd)/i.test(line);
-      });
-    }
-  } catch (_) {
-    return false;
-  }
 }
 
 // Resolve the longest path that actually exists on disk from a best-effort
@@ -1505,10 +1477,6 @@ app.whenReady().then(async () => {
     if (p && cols > 0 && rows > 0) { try { p.resize(cols, rows); } catch (_) {} }
   });
   onMain('pty:kill', (_e, { id, keepReplay }) => killPty(id, !!keepReplay));
-
-  ipcMain.handle('pty:has-child-work', async (_e, { id }) => {
-    return ptyHasChildWork(id);
-  });
 
   onMain('board:response', async (_e, { requestId, done, result, error, childId, snapshot, visible, turnId }) => {
     const pending = pendingBoardCommands.get(requestId);

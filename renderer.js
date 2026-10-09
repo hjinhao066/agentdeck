@@ -3829,7 +3829,7 @@ const deckHost = {
   createSession, sendWhenReady,
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
-  createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, hasChildProcesses,
+  createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, ptyBackgroundWork,
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
@@ -3921,20 +3921,21 @@ function statusScreen(term) {
   }
   return text.trimEnd();
 }
-// Check if the PTY has real child processes (not just the shell itself).
-// Uses a cache to provide synchronous results (updated asynchronously from main.js).
-const childProcessCache = new Map(); // termId -> hasChildren boolean
-function hasChildProcesses(term) {
-  if (!term || !term.id) return false;
-  // Return cached result if available (might be slightly stale, but safe)
-  if (childProcessCache.has(term.id)) return childProcessCache.get(term.id);
-  // Update cache in background (fire and forget)
-  window.deck.ptyHasChildWork(term.id).then(
-    (result) => { childProcessCache.set(term.id, result); },
-    (err) => { childProcessCache.set(term.id, false); }  // On error, assume no children
-  ).catch(() => {});
-  // Return false initially (conservative: allows archiving if unsure)
-  return false;
+// Background shell commands under a column's terminal, for the automatic archive
+// (pty-work.js in the main process). An answer is used for PTY_WORK_MS; until a
+// fresh one arrives the column reads undefined (unknown), null when the main
+// process could not list processes.
+const PTY_WORK_MS = 10_000;
+const ptyWorkAnswers = new Map();
+function ptyBackgroundWork(col) {
+  const known = ptyWorkAnswers.get(col.id);
+  if (known && !known.pending && Date.now() - known.at < PTY_WORK_MS) return known.busy;
+  if (!known?.pending) {
+    ptyWorkAnswers.set(col.id, { pending: true });
+    const answer = (busy) => ptyWorkAnswers.set(col.id, { at: Date.now(), busy: typeof busy === 'boolean' ? busy : null });
+    Promise.resolve().then(() => window.deck.ptyBackgroundWork(col.id)).then(answer, () => answer(null));
+  }
+  return undefined;
 }
 // Format elapsed ms compactly: 42s → 3m 12s → 1h 05m.
 function fmtElapsed(ms) {

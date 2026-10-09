@@ -1432,13 +1432,20 @@
       const live = host.dumpScreen(entry.term, 40);
       if (M.terminalActivity(live, col?.cmd) || M.claudeBackgroundTasks(live, col?.cmd)) return;
       if (host.screenState && !['done', 'plain'].includes(host.screenState(live, entry, col?.cmd))) return;
-      // Check if the PTY has real child processes (not just the shell itself)
-      if (host.hasChildProcesses && host.hasChildProcesses(entry.term)) return;
     }
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
     if (M.needsCardCheck(s, col.id)) refreshCards();
-    if (M.archivable(s, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER, cardCache)) host.archiveColumn(col, { quiet: true });
+    if (!M.archivable(s, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER, cardCache)) return;
+    // The screen can miss a background command (a cut footer, a status row scrolled
+    // away): a shell command Claude started still running in the terminal's process
+    // tree keeps it. No answer yet is not idle; a listing that failed (null) leaves
+    // the decision to the screen.
+    if (entry && entry.alive && host.ptyBackgroundWork) {
+      const work = host.ptyBackgroundWork(col);
+      if (work === true || work === undefined) return;
+    }
+    host.archiveColumn(col, { quiet: true });
   }
   // `tell` to a background session that was archived brings it back first.
   function archivedCrew(ref) {
