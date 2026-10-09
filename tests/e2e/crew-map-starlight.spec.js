@@ -57,9 +57,10 @@ async function launch(crew) {
   }));
   const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
+  // a 2x screen, as on the MacBook these layouts were made on (the least a map shows at depends on it; crew-map-readable covers 1x)
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
-    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`, '--force-device-scale-factor=2'], env,
   });
   page = await application.firstWindow(); errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
@@ -420,7 +421,7 @@ test('智能一页: one click hands arrangement and zoom back to the window, fil
   expect(g.pageFits).toBe(false);
   expect(g.view.scale).toBeCloseTo(0.7, 5);
   await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');
-  expect(g.hint).toBe('一页放不下：保持 100% 大小，其余部分向下滚动查看');
+  expect(g.hint).toBe(`一页放不下：保持 ${Math.round(g.view.scale / 0.7 * 100)}% 大小，其余部分向下滚动查看`);
   await expect(page.locator('.cm-hint')).toHaveAttribute('role', 'status');
   expect(g.cards.find((c) => c.id === 'cap').y).toBeGreaterThanOrEqual(g.vp.y + 8 - 0.5);
   expect(g.canUndo).toBe(true);
@@ -450,15 +451,19 @@ test('智能一页: one click hands arrangement and zoom back to the window, fil
   expect(g.hint).toBe('');
   await shot('map-smartpage-after-1920-dark');
   // from then on the map follows the window again: 智能一页 arranges it for this page (still one page, shown a little smaller)
-  await size(1440, 900); await settled();
+  // (the new size reaches the map on its next frame, which a busy machine draws late: wait for it, then for it to rest)
+  await size(1440, 900);
+  await expect.poll(async () => (await read()).view.scale, { timeout: 15000 }).toBeLessThan(auto.view.scale);
+  await settled();
   g = await read();
   expect(g.plan.page).toBe(true);
   expect(g.view.scale).toBeLessThan(auto.view.scale);
   assertNeat(g); assertWhole(g);
-  await size(1920, 1080, 'light'); await settled();
+  await size(1920, 1080, 'light');
+  await expect.poll(async () => (await read()).plan, { timeout: 15000, message: 'back at the first width, the first arrangement' }).toEqual(auto.plan);
+  await settled();
   g = await read();
   assertWhole(g);
-  expect(g.plan, 'back at the first width, the first arrangement').toEqual(auto.plan);
   await shot('map-smartpage-after-1920-light');
   // nothing hand-placed and the view untouched: nothing to undo
   await page.locator('[data-cm="fit"]').click();

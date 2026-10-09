@@ -17,9 +17,10 @@ async function launch() {
   // Stand-in agents must not run the user's interactive zsh startup hooks.
   if (process.platform !== 'win32') env.ZDOTDIR = profile;
   delete env.ELECTRON_RUN_AS_NODE;
+  // a 2x screen, as on the MacBook these layouts were made on (the least a map shows at depends on it; crew-map-readable covers 1x)
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
-    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`, '--force-device-scale-factor=2'], env,
   });
   page = await application.firstWindow();
   await expect.poll(() => fs.existsSync(path.join(profile, 'control.json')), { timeout: 30000 }).toBe(true);
