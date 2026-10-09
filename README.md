@@ -296,7 +296,7 @@ skipped.
 已用尽的任务排队到额度恢复，显示「额度用尽，稍后自动开」。
 会话恢复干活时，自动生成的「已结束，未提交回执」提示会从回执栏及任务卡清除；真实命令回执保留。
 Codex 的状态行写着「Waiting for background terminal」（队员在 `sleep 300` 里等长任务）、「Waiting for agents」或「Compacting context」，或底栏有「N background terminal running」时，同样算还在干活：不发「已结束，未提交回执」，也不把会话标成已完成。队员真的干完、闲着超过三分钟没交回执，仍照常提醒。
-Claude 队员回合结束后还有后台 shell / Monitor 在跑时，输入框上方的状态行会写「✻ Baked for 1m · done 8:27 AM · 1 shell, 1 monitor still running」（窄列会折成两行，中间可夹「Update available!」），输入框下方的自定义状态栏不带数字；这一行紧贴输入框时同样算还在干活（底栏的「N shell … still running」照旧认），不发「已结束，未提交回执」、不计自动归档。任务结束、状态行不再带数字后重新计三分钟，仍不交回执照常提醒。
+Claude 队员回合结束后还有后台 shell / Monitor 在跑时，输入框上方的状态行会写「✻ Baked for 1m · done 8:27 AM · 1 shell, 1 monitor still running」（窄列会折成两到五行，例如「✻ Churned for 3m 55s · done」「9:16 PM · 1 shell still」「running」，中间可夹「Update available!」），后台子 agent 在跑时这一行写「✻ Waiting for 1 background agent to finish」，输入框下方的自定义状态栏不带数字；这一行紧贴输入框时同样算还在干活（底栏的「· 1 shell ·」「N shell … still running」照旧认，窄列把底栏截成「· 1 she」这种半个词也认，至少要两个字母），不发「已结束，未提交回执」、不计自动归档。状态行折出来单独一行的「running」不是转圈，不会让会话一直显示在干活。任务结束、状态行不再带数字后重新计三分钟，仍不交回执照常提醒。
 这种「回合已结束、只剩后台 shell / Monitor」的队员，圆点照旧黄色、回执计时照旧等，但输入框是空闲的：队长的 `tell` 立即送达，不再排「待补充」干等（真正在干活、停在确认提示、额度等待时仍然等）。Claude Code 输入框里灰色的「下一步建议」是 dim 文字，不算草稿；用户自己手打的字（默认颜色）仍算草稿，`tell` 不会盖上去。队长开的 Claude 会话启动时带 `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0`（Claude Code 自带开关，对应设置项 `promptSuggestionEnabled`），不再显示这行建议；用户手开的终端和自己的 Claude 设置不动。
 睡眠或断网打断：会话停在提示符、屏幕写着「Your computer went to sleep mid-response」「Connection lost mid-response」「Can't reach the API server」（Claude），或「There was a network issue connecting to the server」「write: broken pipe」（agy）时，不算「已结束，未提交回执」，也不算已完成。程序等电脑醒来（系统睡眠/唤醒事件，或页面长时间没有轮询）并且网络在线后，再静置 15 秒，给它发一句简短的「接着做」（要求任务其实已做完就 complete）；之后每次间隔 30 秒、1 分钟、2 分钟、4 分钟，最多 4 次，睡眠期间和断网时一次都不发。会话重新干活并持续 1 分钟后这一轮清零，下一次睡眠重新计；每个任务累计最多 20 次。连续 4 次仍没恢复，向队长交一条「被睡眠或断网打断」异常回执（来源 sleep，不算验收不通过）。只有睡眠事件、屏幕上没有这些字样时（任务干到一半睡眠，醒来 10 分钟内回合结束且没回执），只发 1 次，仍无效就回到原来的三分钟规则。队长 stop、你自己按 Esc 中断、已经交过回执或已关闭的任务不会被续接；屏幕上引号、代码、diff 里引用这些英文不算。规则在 `sleep-resume-core.js`，会话侧在 `main-session.js` 的 `sleepResumeStep`。
 Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；运行中的回合需静默至少 10 秒才判空闲。
@@ -354,6 +354,7 @@ token_usage_record、没写 token_count，ccusage 只读后者所以漏掉了它
 卡片标题最多两行，「···」或失败卡片的「查看」打开详情浮层（完整回执、文件、实时活动、打开终端；Esc 关闭）。
 架构图只留当前的活：做完的队长会话没有新指令 10 分钟后自动归档（AgentDeck 重启后也照此处理，重启时已超时的在终端安静约 1 分钟后归档）；
 失败或停下的会话要等它的看板卡片已完成、或同一张卡已由另一个会话接手才自动归档，没人接手的失败留在图上等队长处理。
+自动归档前最后再查一次这个终端的进程树（`pty-work.js`，Mac 用 `ps`，Windows 用 `Get-CimInstance Win32_Process`，一次列表所有终端共用 5 秒）：Claude 的工具起的命令（前台或后台）和它们下面的进程还在跑，就不归档。认法：Bash 工具（Mac 的 zsh、Windows 的 Git Bash）的命令都带 Claude 的 shell-snapshots；Windows 的 PowerShell 工具经 Claude 的启动器跑，形如 `cmd /d /s /c "chcp 65001 & pwsh … -Command …CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT…"`，启动器关掉时是 `pwsh -NonInteractive … -EncodedCommand …`。MCP 服务（Windows 上是 `cmd /c npx …`）、状态栏命令、caffeinate 不算。还没拿到答案时这次先不归档，列不出进程时照屏幕判断；答「忙」的结果留 1 分钟再重查（Windows 每查一次要起 PowerShell，约 1.2–1.7 秒），所以后台命令结束后最多晚 1 分钟归档。
 项目框标题的数字只统计图上还在的会话（不含已归档历史），和队长框一致。
 项目名不分大小写（AgentDeck 和 agentdeck 是同一个项目框，显示最早那个会话写的写法，已存数据不改）；
 项目里没有任何干活、待补充、排队、失败、停下、空闲的会话（全部已完成或已归档）时，项目框从图上消失，有新会话再出现；「显示已归档」时仍列出全部项目。
@@ -599,7 +600,12 @@ again with the current provider, model and effort instructions.
   Claude workers whose live footer still reports background shells/monitors/tasks
   running remain busy even after the model's reply. They produce no missing-command
   receipt and cannot auto-archive; the three-minute grace starts after their
-  background work ends. Old quoted counters and zero/completed counts are ignored.
+  background work ends. Before an automatic archive the terminal's process tree is
+  checked too: a command Claude's Bash tool (it sources Claude's shell snapshot) or
+  Windows PowerShell tool (Claude's CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT launcher, or
+  pwsh -NonInteractive -EncodedCommand) started that is still running keeps the
+  session; MCP servers and the status line do not. A busy answer is reused for a
+  minute. Old quoted counters and zero/completed counts are ignored.
   The Captain's own permanent receipt listener does not keep its foreground busy.
   Screen 【回执】/【提问】 blocks, examples, contract echoes and Doing… never count
   as submissions. A late command replaces the fallback notice. Prompt submission

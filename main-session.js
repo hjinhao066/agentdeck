@@ -524,7 +524,14 @@
       return { card, stranded: true };
     }
     const AV = window.AutoVerifyCore;
-    await tellSession({ to: execId, message: AV.reworkMessage({ card, findings: reject.findings }), id: AV.reworkAttemptId(id, reject.round) });
+    try {
+      await tellSession({ to: execId, message: AV.reworkMessage({ card, findings: reject.findings }), id: AV.reworkAttemptId(id, reject.round), reworkKey: reject.key });
+    } catch (error) {
+      // The card was moved after the check above: the rework is no longer wanted.
+      if (!/^自动返工已经不用发了/.test(error.message)) throw error;
+      await boardRequest('reworkDispatched', { id, key: input.key });
+      return { card, ignored: true };
+    }
     host.flushConfig?.();
     await boardRequest('reworkDispatched', { id, key: input.key });
     return { card, reworked: execId };
@@ -1389,6 +1396,8 @@
         reviews: metadata.reviews, review_round: metadata.reviewRound ?? metadata.autoReviewRound, exec_receipt: metadata.reviewReceipt,
         ...(metadata.worktree ? { worktree: metadata.worktree } : {}),
         assignee: { agent: window.BoardCore.inferAgentType(cmd), model: cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
+      // A tell took the card back to execution while this bind was on its way (tellSession).
+      if (retiredSessions.delete(id)) throw new Error('卡片已回到执行，这个审查会话不再开。');
     }
     col = host.createSession({ ...metadata, taskPrompt: text, captainTaskPrompt: text, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
     if (waiting) { waiting.boardId = metadata.boardId || ''; waiting.boardAttempt = requestId; }
@@ -1538,7 +1547,16 @@
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
     if (M.needsCardCheck(s, col.id)) refreshCards();
-    if (M.archivable({ ...s, pending: allPending(s) }, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER, cardCache)) host.archiveColumn(col, { quiet: true });
+    if (!M.archivable({ ...s, pending: allPending(s) }, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER, cardCache)) return;
+    // The screen can miss a background command (a cut footer, a status row scrolled
+    // away): a shell command Claude started still running in the terminal's process
+    // tree keeps it. No answer yet is not idle; a listing that failed (null) leaves
+    // the decision to the screen.
+    if (entry && entry.alive && host.ptyBackgroundWork) {
+      const work = host.ptyBackgroundWork(col);
+      if (work === true || work === undefined) return;
+    }
+    host.archiveColumn(col, { quiet: true });
   }
   // `tell` to a background session that was archived brings it back first.
   function archivedCrew(ref) {
@@ -2605,17 +2623,35 @@
         throw new Error(`「${host.columnLabel(col)}」里只有 shell，没有在运行的 agent，不能把活发进去。请用 new 开一个新会话来做。`);
       }
     }
+    let replaced = null;
     if (col.boardId) {
       const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === col.boardId);
-      if (card && (card.attempt_closed || !card.session_id) && (!restored || card.status === 'doing' && card.flag !== 'held')) {
-        await boardRequest('bind', { id: card.id, project: card.project, session_id: col.id, attempt_id: message.id,
+      // A tell is the Captain saying "carry on" (队长决定): the card goes back to execution on
+      // this session. A done, archived or held card is moved back to doing, a card waiting for
+      // review is not turned into a review by its own worker, and a reviewer still bound to it
+      // is ended (bind names it). A tell to a reviewer is only more words for its review.
+      const reviewer = !!(col.reviews && col.reviews.length) || (card?.review_session === true && card.session_id === col.id);
+      const takeBack = !!card && !reviewer && (card.status === 'done' || card.archived || card.flag === 'held' || card.status === 'review' || card.review_session === true);
+      if (card && (takeBack || (card.attempt_closed || !card.session_id) && (!restored || card.status === 'doing' && card.flag !== 'held'))) {
+        const bound = await boardRequest('bind', { id: card.id, project: card.project, session_id: col.id, attempt_id: message.id, ...(reviewer ? {} : { tell: true }),
+          ...(message.reworkKey ? { rework_key: message.reworkKey } : {}),
           assignee: { agent: window.BoardCore.inferAgentType(col.cmd), model: col.cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
         col.boardAttempt = message.id;
+        // The card is already this session's: the instruction still goes in if ending fails.
+        // A reviewer bound a moment ago may have no terminal yet: openSession then never makes one.
+        if (bound?.replaced_session) {
+          try { replaced = await endSession(bound.replaced_session, { archive: true, summary: '卡片回到执行，这个审查会话已结束并归档。' }); }
+          catch (error) { replaced = { error, id: bound.replaced_session }; }
+          if (!replaced && !(host.config.archived || []).some((a) => a.id === bound.replaced_session)) retiredSessions.add(bound.replaced_session);
+        }
       }
     }
+    const endedNote = !replaced ? '' : replaced.error
+      ? `旧审查会话 ${replaced.id} 没能结束（${replaced.error.message}），请用 archive --id ${replaced.id} 结束它；卡片已回到进行中。`
+      : `旧审查会话「${host.columnLabel(replaced.col)}」(${replaced.col.id})已结束并归档，卡片回到进行中。`;
     if (restored) {
       dispatch(col, text, host.columnLabel(col));
-      return { done: true, result: `「${host.columnLabel(col)}」已归档，已恢复它并把指令发过去，它准备好后会收到。` };
+      return { done: true, result: `「${host.columnLabel(col)}」已归档，已恢复它并把指令发过去，它准备好后会收到。${endedNote}` };
     }
     const busy = entry && (M.workingForSend(entry) || entry.state === 'quota');
     if (message.replace) cancelSupplement(col.id);
@@ -2623,7 +2659,38 @@
       await handle({ action: 'main-stop', to: col.id, keepQueued: true }, caller);
     }
     dispatch(col, text, host.columnLabel(col), null, message.now);
-    return { done: true, result: message.now ? `已请求中断「${host.columnLabel(col)}」，新指令在输入框就绪后立即送达。` : busy ? `「${host.columnLabel(col)}」正在干活，指令先放着（待补充），等它停下合并发送。` : `已发给「${host.columnLabel(col)}」(${col.id})。` };
+    return { done: true, result: (message.now ? `已请求中断「${host.columnLabel(col)}」，新指令在输入框就绪后立即送达。` : busy ? `「${host.columnLabel(col)}」正在干活，指令先放着（待补充），等它停下合并发送。` : `已发给「${host.columnLabel(col)}」(${col.id})。`) + endedNote };
+  }
+  // `stop --id` (Esc) and `archive --id` (end the terminal and archive it), and a
+  // reviewer replaced when its card went back to execution (tellSession). Null when
+  // there is no such live column.
+  async function endSession(id, { archive, keepQueued = false, summary = '' }) {
+    const s = state();
+    const col = host.columns().find((c) => c.id === id && !c.isMain);
+    if (!col) return null;
+    const entry = host.terms.get(id);
+    if (!archive && (!entry || !entry.alive)) throw new Error('这个会话的终端已经退出。');
+    if (!keepQueued) cancelSupplement(id);
+    if (col.executor === 'chatgpt-web' && entry) entry.webExecutorStopping = true;
+    // Close cards before Esc/PTY exit so no delayed dispatch or receipt can
+    // revive work that the Captain explicitly cancelled.
+    s.tasks.forEach((t) => {
+      if (t.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(t.status) || (keepQueued && t.status === 'queued')) return;
+      t.status = 'stopped';
+      t.doneAt = Date.now();
+      t.receipt = { summary: summary || (archive ? '队长已结束终端并归档。' : '队长已请求中断当前操作。'), files: [], images: [], failed: '', explicit: true, source: archive ? 'captain-archive' : 'captain-stop' };
+      update(t);
+    });
+    dropReceipts(s, (p) => p.colId === id);
+    if (col.executor === 'chatgpt-web') {
+      try { await window.deck.chatgptWebCancel(id); }
+      finally { if (entry) entry.webExecutorStopping = false; }
+    }
+    if (archive) host.archiveColumn(col, { captain: true, quiet: true, worktreeHandled: true });
+    else if (col.executor !== 'chatgpt-web') window.deck.ptyInput(id, '\x1b');
+    if (col.executor === 'chatgpt-web' && entry) { entry.webExecutorState = 'stopped'; entry.state = 'stopped'; }
+    save();
+    return { col, settled: archive && col.worktree ? await settleArchivedWorktree(col) : null };
   }
   function cardWorktree(record) {
     const out = { repo: record.repo, path: record.path, branch: record.branch, base: record.base, removed: record.removed === true };
@@ -2632,6 +2699,8 @@
   }
   // In-flight only. A saved settling flag must not survive tell, archive, or restart.
   const settlingIds = new Set();
+  // Reviewers a tell replaced before openSession had made their terminal.
+  const retiredSessions = new Set();
   // Archive already stopped the terminal. Remove the copy only when it is clean
   // and the branch is on the trunk or a remote; otherwise keep it and say why.
   async function settleArchivedWorktree(col) {
@@ -2887,35 +2956,12 @@
       case 'main-stop':
       case 'main-archive': {
         const id = String(message.to || '').trim();
-        const col = host.columns().find((c) => c.id === id && !c.isMain);
-        if (!col) {
-          if (message.action === 'main-archive' && (host.config.archived || []).some((c) => c.id === id && !c.isMain)) return { done: true, result: `会话 ${id} 已归档。` };
+        const archive = message.action === 'main-archive';
+        if (!host.columns().some((c) => c.id === id && !c.isMain)) {
+          if (archive && (host.config.archived || []).some((c) => c.id === id && !c.isMain)) return { done: true, result: `会话 ${id} 已归档。` };
           throw new Error(`找不到可操作的会话：${id.slice(0, 80)}。先用 ledger 看 id；不能中断或归档队长。`);
         }
-        const archive = message.action === 'main-archive';
-        const entry = host.terms.get(id);
-        if (!archive && (!entry || !entry.alive)) throw new Error('这个会话的终端已经退出。');
-        if (!message.keepQueued) cancelSupplement(id);
-        if (col.executor === 'chatgpt-web' && entry) entry.webExecutorStopping = true;
-        // Close cards before Esc/PTY exit so no delayed dispatch or receipt can
-        // revive work that the Captain explicitly cancelled.
-        s.tasks.forEach((t) => {
-          if (t.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(t.status) || (message.keepQueued && t.status === 'queued')) return;
-          t.status = 'stopped';
-          t.doneAt = Date.now();
-          t.receipt = { summary: archive ? '队长已结束终端并归档。' : '队长已请求中断当前操作。', files: [], images: [], failed: '', explicit: true, source: archive ? 'captain-archive' : 'captain-stop' };
-          update(t);
-        });
-        dropReceipts(s, (p) => p.colId === id);
-        if (col.executor === 'chatgpt-web') {
-          try { await window.deck.chatgptWebCancel(id); }
-          finally { if (entry) entry.webExecutorStopping = false; }
-        }
-        if (archive) host.archiveColumn(col, { captain: true, quiet: true, worktreeHandled: true });
-        else if (col.executor !== 'chatgpt-web') window.deck.ptyInput(id, '\x1b');
-        if (col.executor === 'chatgpt-web' && entry) { entry.webExecutorState = 'stopped'; entry.state = 'stopped'; }
-        save();
-        const settled = archive && col.worktree ? await settleArchivedWorktree(col) : null;
+        const { col, settled } = await endSession(id, { archive, keepQueued: !!message.keepQueued });
         const note = settled?.reason ? ' ' + settled.reason : '';
         return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。${note}` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
       }

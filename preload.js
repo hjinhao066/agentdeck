@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('deck', {
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
   quotaRefresh: (seatId) => ipcRenderer.invoke('quota:refresh', { seatId }),
   onQuotaUpdated: (cb) => ipcRenderer.on('quota:updated', (_e, samples) => cb(samples)),
+  ptyBackgroundWork: (id) => ipcRenderer.invoke('pty:background-work', { id }),
   seatAuthFailure: (payload) => ipcRenderer.invoke('seat-auth:failure', payload),
   barkStatus: () => ipcRenderer.invoke('bark:status'),
   refreshBarkCalendar: () => ipcRenderer.invoke('bark:refresh'),

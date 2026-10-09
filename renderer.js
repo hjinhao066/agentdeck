@@ -563,7 +563,7 @@ function terminalIdle(col, entry) {
     return live === 'idle' || (live !== 'working' && !MainCore.cursorBusy(entry.lastScreen) && AGENT_IDLE_RE.test(entry.lastScreen || ''));
   }
   const screen = MainCore.codexStatusScreen(entry.lastScreen, col.cmd);
-  return !WORKING_RE.test(screen) && AGENT_IDLE_RE.test(screen);
+  return !WORKING_RE.test(MainCore.claudeStatusRowsBlanked(screen, col.cmd)) && AGENT_IDLE_RE.test(screen);
 }
 const WEB_QUEUED_TIP = '排队中：前面还有网页调研在跑';
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
@@ -583,7 +583,7 @@ function classify(text, entry, cmd, isCaptain = false, withoutBackground = false
     if (entry?.state === 'working' && Date.now() - (entry.lastOutputAt || 0) < 10_000) return 'working';
     return entry?.hasWorked ? 'done' : 'plain';
   }
-  if (WORKING_RE.test(text) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
+  if (WORKING_RE.test(MainCore.claudeStatusRowsBlanked(text, cmd)) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
   if (!isCaptain && !withoutBackground && MainCore.claudeBackgroundTasks(text, cmd)) return 'working';
   // After submission, an unrecognised/empty Cursor screen is initialization
@@ -3922,7 +3922,7 @@ const deckHost = {
   createSession, sendWhenReady,
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
-  createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen,
+  createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, ptyBackgroundWork,
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
@@ -4028,6 +4028,24 @@ function statusScreen(term) {
     text = nl >= 0 ? text.slice(nl + 1) : '';
   }
   return text.trimEnd();
+}
+// Background shell commands under a column's terminal, for the automatic archive
+// (pty-work.js in the main process). An answer is used for PTY_WORK_MS, a busy one
+// for PTY_WORK_BUSY_MS (on Windows each listing starts PowerShell, and a background
+// job can run for hours); until a fresh one arrives the column reads undefined
+// (unknown), null when the main process could not list processes.
+const PTY_WORK_MS = 10_000;
+const PTY_WORK_BUSY_MS = 60_000;
+const ptyWorkAnswers = new Map();
+function ptyBackgroundWork(col) {
+  const known = ptyWorkAnswers.get(col.id);
+  if (known && !known.pending && Date.now() - known.at < (known.busy === true ? PTY_WORK_BUSY_MS : PTY_WORK_MS)) return known.busy;
+  if (!known?.pending) {
+    ptyWorkAnswers.set(col.id, { pending: true });
+    const answer = (busy) => ptyWorkAnswers.set(col.id, { at: Date.now(), busy: typeof busy === 'boolean' ? busy : null });
+    Promise.resolve().then(() => window.deck.ptyBackgroundWork(col.id)).then(answer, () => answer(null));
+  }
+  return undefined;
 }
 // Format elapsed ms compactly: 42s → 3m 12s → 1h 05m.
 function fmtElapsed(ms) {

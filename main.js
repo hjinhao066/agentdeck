@@ -44,6 +44,7 @@ const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
+const { createPtyWork } = require('./pty-work');
 const Battery = require('./battery-core');
 const RestartResume = require('./restart-resume');
 const AgentSessions = require('./agent-sessions');
@@ -196,6 +197,13 @@ function handleMain(channel, handler) {
 }
 const memoryPressure = createMemoryPressure({ platform: process.platform, execFile });
 handleMain('memory-pressure', () => memoryPressure.read());
+// Shell commands Claude started that still run under a terminal: the automatic
+// archive's last check (pty-work.js; one cached process listing for all terminals).
+const ptyWork = createPtyWork({ platform: process.platform, execFile });
+handleMain('pty:background-work', (_e, { id }) => {
+  const p = validId(id) && ptys.get(id);
+  return p && p.pid ? ptyWork.busy(p.pid) : false;
+});
 
 // Battery mode: the page decides what to limit; main only needs the power source and the
 // setting to pace its own timers (`power.every`) and to tell the page when the source changes.
