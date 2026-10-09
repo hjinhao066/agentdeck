@@ -159,6 +159,7 @@
           <button type="button" data-view="crew" title="终端架构图：现在正在跑的会话">架构图</button>
           <button type="button" data-view="canvas" title="旧版自由画布：手动拖拽、连线">自由画布</button>
           <button type="button" data-view="tasks" class="active" aria-pressed="true" title="任务看板：全部任务">任务看板</button>
+          <button type="button" data-view="tokens" aria-pressed="false" title="Token 用量：每天各模型用了多少">Token 用量</button>
         </div>
         <button type="button" class="tbv-icon tbv-close" title="关闭任务看板 (Esc)" aria-label="关闭任务看板 (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
       </div>
@@ -202,6 +203,7 @@
       </div>
       <aside class="tbv-detail" hidden aria-label="卡片详情"></aside>
     </div>
+    <div class="tu-view" hidden></div>
     <div class="tbv-live" role="status" aria-live="polite"></div>
   </section>
   <section id="boardView" hidden aria-label="Conductor Board">
@@ -215,6 +217,7 @@
           <button type="button" data-mode="crew" title="队长和它派出的会话、审查关系，实时">架构图</button>
           <button type="button" data-mode="canvas" title="旧版自由画布：手动拖拽、连线">自由画布</button>
           <button type="button" id="boardTasksTab" data-view="tasks" title="任务看板：全部任务">任务看板</button>
+          <button type="button" id="boardTokensTab" data-view="tokens" title="Token 用量：每天各模型用了多少">Token 用量</button>
         </div>
         <span class="board-gesture-hint">Drag cards to place · drag a blue port to link</span>
         <button class="btn" id="boardAutoArrange" title="Arrange the task DAG into clean lanes">Auto arrange</button>
@@ -614,6 +617,8 @@
   <script src="crew-map.js"></script>
   <script src="fleet-ui.js"></script>
   <script src="task-board-ui-core.js"></script>
+  <script src="token-usage-core.js"></script>
+  <script src="token-usage-ui.js"></script>
   <script src="task-board-ui.js"></script>
   <script src="release-notes-ui.js"></script>
   <script src="version-progress-core.js"></script>

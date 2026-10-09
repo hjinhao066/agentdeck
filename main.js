@@ -25,6 +25,7 @@ const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
 const PerpetualCaptainCore = require('./perpetual-captain-core');
 const { seatEnvironment, credentialLocation, initializeOnboarding, trustWorktree: trustClaudeWorktree, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
+const { registerTokenUsageIpc } = require('./token-usage-main');
 const { createWarmupService } = require('./quota-warmup-service');
 const { createQuotaWarmupRunner } = require('./quota-warmup-main');
 const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
@@ -993,6 +994,9 @@ app.whenReady().then(async () => {
     // The Relay handoff reads the same board the heartbeat does, done and archived cards included.
     handoffOptions: { discussionsRoot: tudArg ? path.join(app.getPath('userData'), 'discussions') : undefined, cards: () => taskStore.list({ archived: true }), tasksDir: taskStore.dir, boardVersion: () => boardVersionOf(taskStore.dir),
       machine: { platform: process.platform, hostname: os.hostname(), appVersion: app.getVersion() } } });
+  // Token 用量: this machine's CLI logs, scanned in a utility process. A test profile reads only its own usage-home.
+  registerTokenUsageIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'usage-home') : HOME, userData: app.getPath('userData'),
+    getSeats: () => seatConfig().claudeSeats, test: !!tudArg });
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
