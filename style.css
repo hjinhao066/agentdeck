@@ -2771,7 +2771,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-node.kind-captain .cm-count .cm-ico { width: 16px; height: 16px; }
 /* the crew as one bar: a segment per state, as long as its share; it sits under the tally */
 .cm-fleet { grid-row: 3; grid-column: 2 / 4; display: flex; gap: 2px; height: 3px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--cm-text) 6%, transparent); }
-.cm-fleet i { flex: 1 1 0; min-width: 3px; height: 100%; background: var(--cm-wait); transition: flex-grow .4s cubic-bezier(.2, .8, .2, 1); }
+.cm-fleet i { flex: 1 1 0; min-width: 3px; height: 100%; background: var(--cm-wait); }
 .cm-fleet .st-working { background: var(--cm-work); }
 .cm-fleet .st-input { background: var(--cm-need); }
 .cm-fleet .st-failed { background: var(--cm-fail); }
@@ -2970,12 +2970,12 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .cm-pulse, .cm-trail, .cm-hub-beat, .cm-edge.review, #crewMap .cm-ico svg, #crewMap .cm-ico::after, #crewMap .cm-node::before, #crewMap .cm-node::after { animation: none; }
   .cm-pulse, .cm-trail, .cm-hub-beat, #crewMap .cm-ico::after { display: none; }
-  .cm-node, .cm-canvas.cm-smooth, .cm-viewport.cm-smooth, .cm-tray-arrow svg, .cm-fleet i { transition: none; }
+  .cm-node, .cm-canvas.cm-smooth, .cm-viewport.cm-smooth, .cm-tray-arrow svg { transition: none; }
 }
 /* the same stillness when motion is switched off from the toolbar */
 :root[data-motion="off"] :is(.cm-pulse, .cm-trail, .cm-hub-beat, .cm-edge.review), :root[data-motion="off"] #crewMap .cm-ico svg, :root[data-motion="off"] #crewMap .cm-ico::after, :root[data-motion="off"] #crewMap .cm-node::before, :root[data-motion="off"] #crewMap .cm-node::after { animation: none; }
 :root[data-motion="off"] :is(.cm-pulse, .cm-trail, .cm-hub-beat), :root[data-motion="off"] #crewMap .cm-ico::after { display: none; }
-:root[data-motion="off"] :is(.cm-node, .cm-canvas.cm-smooth, .cm-viewport.cm-smooth, .cm-tray-arrow svg, .cm-fleet i) { transition: none; }
+:root[data-motion="off"] :is(.cm-node, .cm-canvas.cm-smooth, .cm-viewport.cm-smooth, .cm-tray-arrow svg) { transition: none; }
 .cm-controls [aria-disabled="true"], .tbv-icon[aria-disabled="true"] { opacity: .45; cursor: default; }
 [data-motion-toggle] svg { width: 16px; height: 16px; stroke-width: 1.8; }
 /* Claude seats: account switching stays local to the Captain. */
