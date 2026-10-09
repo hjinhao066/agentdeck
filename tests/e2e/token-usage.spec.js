@@ -119,7 +119,7 @@ const geometry = () => page.evaluate(() => [...document.querySelectorAll('.tu-co
   };
 }));
 
-test('7 days: totals, biggest model at the bottom, totals on the caps, hover, day table, sources, refresh icon, both themes', async () => {
+test('7 days: totals, biggest model on top, totals on the caps, hover, day table, sources, refresh icon, both themes', async () => {
   await launch();
   await resize(1440, 900);
   await page.locator('#navTop .nav-row[data-nav="tasks"]').click();
@@ -147,12 +147,13 @@ test('7 days: totals, biggest model at the bottom, totals on the caps, hover, da
   for (const c of cols) {
     if (c.day === empty) { expect(c.stub).toBe(true); expect(c.label).toBeNull(); continue; }
     expect(c.label.text, c.day).toBe(C.formatShort(dayTotal(c.day)));
-    // biggest model at the bottom, then smaller and smaller towards the top (drawn bottom-up)
+    // biggest model on top (the legend and the tooltip list it first), smaller and smaller
+    // towards the bottom (drawn bottom-up, so the biggest is the last segment)
     const order = Object.entries(fixture.expected[c.day]).sort((a, b) => b[1] - a[1]).map(([k]) => k);
     const keys = c.segs.map((s) => s.key);
-    expect(keys[0], c.day).toBe(order[0]);
+    expect(keys[keys.length - 1], c.day).toBe(order[0]);
     const heights = c.segs.map((s) => s.b - s.t);
-    for (let i = 1; i < heights.length; i++) expect(heights[i], `${c.day} segment ${i}`).toBeLessThanOrEqual(heights[i - 1] + 0.5);
+    for (let i = 1; i < heights.length; i++) expect(heights[i], `${c.day} segment ${i}`).toBeGreaterThanOrEqual(heights[i - 1] - 2.5); // each upper segment gives up a 2px gap
     for (let i = 1; i < c.segs.length; i++) expect(c.segs[i].b, 'stacked upwards with a gap').toBeLessThan(c.segs[i - 1].t + 0.01);
     // the label sits above its own column
     expect(c.label.b).toBeLessThanOrEqual(c.segs[c.segs.length - 1].t + 0.5);

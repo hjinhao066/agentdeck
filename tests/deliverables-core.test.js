@@ -183,3 +183,40 @@ test('grouped by day, newest first: 今天, 昨天, then the date', () => {
   const groups = D.byDay(items, now);
   assert.deepEqual(groups.map((g) => [g.label, g.items.length]), [['今天', 2], ['昨天', 1], ['10月6日 周二', 1], ['2025年12月31日 周三', 1], ['时间未知', 1]]);
 });
+
+test('a receipt\'s files: results first in their order, code and test files set apart to fold', () => {
+  const files = ['/Users/me/proj/src/app.js', '/Users/me/proj/README.md', '/Users/me/proj/tests/app.test.js', '/Users/me/proj/build.py',
+    '/Users/me/reports/summary.pdf', '/Users/me/proj/src/types.ts', '/Users/me/shots/after.png', '/Users/me/proj/out', '/Users/me/proj/index.html',
+    'C:\\Users\\me\\proj\\Run.PS1', '/Users/me/proj/notes.md:12', '/Users/me/data/orders.xlsx'];
+  const { results, code } = D.splitReceiptFiles(files, rules);
+  assert.deepEqual(results, ['/Users/me/proj/README.md', '/Users/me/reports/summary.pdf', '/Users/me/shots/after.png', '/Users/me/proj/out',
+    '/Users/me/proj/index.html', '/Users/me/proj/notes.md:12', '/Users/me/data/orders.xlsx']);
+  assert.deepEqual(code, ['/Users/me/proj/src/app.js', '/Users/me/proj/tests/app.test.js', '/Users/me/proj/build.py', '/Users/me/proj/src/types.ts', 'C:\\Users\\me\\proj\\Run.PS1']);
+  // a screenshot in a scratch folder is still something to look at: only the type decides
+  assert.deepEqual(D.splitReceiptFiles(['/private/tmp/x/scratchpad/before.png'], rules), { results: ['/private/tmp/x/scratchpad/before.png'], code: [] });
+  // the user's own 从不算交付 list decides what counts as code
+  assert.deepEqual(D.splitReceiptFiles(['/a/b.md', '/a/c.js'], D.normalizeRules({ process: ['md'] })), { results: ['/a/c.js'], code: ['/a/b.md'] });
+  assert.deepEqual(D.splitReceiptFiles(undefined, rules), { results: [], code: [] });
+});
+
+test('the head button counts only the files that came in since the panel was last open', () => {
+  const item = (name, ts) => ({ path: '/Users/me/reports/' + name, ts, from: 'receipt' });
+  // a saved index from before this count: nothing in it is new
+  let index = D.normalizeIndex({ items: [{ ...item('a.md', 100), key: 'a' }, { ...item('b.md', 200), key: 'b' }] }, rules);
+  index = D.markSeen(index);
+  assert.equal(index.seen, 200);
+  assert.equal(D.unseenCount(index), 0);
+  // two more arrive while the panel is folded away
+  index = D.mergeIndex(index, [item('c.pdf', 300), item('d.png', 400)], { home: HOME });
+  assert.equal(D.unseenCount(index), 2);
+  // the seen mark is kept through a save and a reload, and a rules change
+  index = D.normalizeIndex(JSON.parse(JSON.stringify(index)), D.normalizeRules({ skip: ['x'] }));
+  assert.equal(D.unseenCount(index), 2);
+  // opening the panel shows them: the count goes back to nothing
+  index = D.markSeen(index);
+  assert.equal(index.seen, 400);
+  assert.equal(D.unseenCount(index), 0);
+  // an empty index starts counting from now
+  assert.equal(D.markSeen(D.normalizeIndex(null, rules), 5000).seen, 5000);
+  assert.equal(D.markSeen({ ...index, seen: 900 }).seen, 900);
+});
