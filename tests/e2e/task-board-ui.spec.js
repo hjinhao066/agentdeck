@@ -147,12 +147,15 @@ async function launch(big = false) {
   });
   page = await application.firstWindow(); errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
-  await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(6);
+  // (a busy machine can take well over five seconds to bring the page up)
+  await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 30000 }).toBe(6);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(6);
 }
 test.afterEach(async () => {
   if (application) await closeElectron(application);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  // A force-closed Electron's helpers can still hold files in the profile for a few seconds (EPERM on Windows):
+  // a temporary folder left behind is reported, it does not fail a test that passed.
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
   application = null;
 });
 
