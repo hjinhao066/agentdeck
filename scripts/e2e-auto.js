@@ -120,6 +120,16 @@ function isMacOnlySpec(specPath) {
 }
 
 // ---- arguments -------------------------------------------------------------------------
+// Windows runs the specs in its own checkout, where a path on this Mac names nothing: a spec given by
+// its absolute path is passed on relative to the repository. One outside it cannot run anywhere.
+function repoRelative(spec) {
+  if (!path.isAbsolute(spec)) return spec;
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  const rel = path.relative(real(ROOT), real(spec));
+  if (!rel || rel.split(path.sep)[0] === '..' || path.isAbsolute(rel)) throw new Error(`${spec} is outside this repository (${ROOT})`);
+  return rel.split(path.sep).join('/');
+}
+
 // Returns { status, host, specs, playwrightArgs }. Anything else before `--` is an error:
 // silently dropping e.g. --grep would run a whole file when one test was meant.
 function parseArgs(argv) {
@@ -130,7 +140,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--status') args.status = true;
     else if (arg === '--host') { if (!argv[i + 1]) throw new Error('--host needs a value'); args.host = argv[++i]; }
-    else if (arg.endsWith('.spec.js')) args.specs.push(arg);
+    else if (arg.endsWith('.spec.js')) args.specs.push(repoRelative(arg));
     else throw new Error(`Unrecognized argument "${arg}". Spec files end in .spec.js; Playwright options go after --`);
   }
   return args;

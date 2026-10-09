@@ -248,3 +248,17 @@ test('a spec given as an absolute path or from another folder is judged by the f
   await main([path.join(ROOT, 'tests/e2e/a.spec.js')], f.deps);
   assert.deepEqual(seenPaths, [path.join(ROOT, 'tests/e2e/a.spec.js')]);
 });
+// Windows runs the specs in its own checkout, where a Mac path names nothing: Playwright said "No tests
+// found" (exit 1), reported as a real test failure with the hint to mark the spec Mac-only.
+test('a spec given as an absolute path reaches Windows as the repo-relative path its checkout can find', async () => {
+  const r = await run([path.join(ROOT, 'tests', 'e2e', 'a.spec.js'), path.join(ROOT, 'tests', 'e2e', 'mac.spec.js')]);
+  assert.equal(r.code, 0);
+  assert.deepEqual(r.win.map((w) => w.specs), [['tests/e2e/a.spec.js']]);
+  assert.deepEqual(r.local.map((l) => l.specs), [['tests/e2e/mac.spec.js']]);
+  assert.deepEqual(parseArgs([path.join(ROOT, 'tests', 'e2e', 'a.spec.js')]).specs, ['tests/e2e/a.spec.js']);
+});
+test('a spec outside this repository is refused up front: neither the Mac nor Windows could find it', async () => {
+  const outside = path.join(path.dirname(ROOT), 'another-checkout', 'tests', 'e2e', 'a.spec.js');
+  assert.throws(() => parseArgs([outside]), /outside this repository/);
+  await assert.rejects(run([outside]), /outside this repository/);
+});
