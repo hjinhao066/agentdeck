@@ -67,7 +67,9 @@ async function launch(crew, boardProjects) {
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'captain' },
     columns: [column('cap', '队长', { isMain: true, captainCrew: false }), ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
-      tasks: workers.map((c, i) => { const st = states[i]; return { id: 'task-' + c.id, colId: c.id, gen: 1, status: st, sentAt: now - (90 - i * 3) * 60_000, doneAt: now - (40 - i) * 60_000, turnId: '',
+      // (a finished one finished a few minutes ago: one done over 10 minutes ago is archived once its terminal has been
+      // quiet a minute, and on a slow machine that comes before every terminal has drawn)
+      tasks: workers.map((c, i) => { const st = states[i]; return { id: 'task-' + c.id, colId: c.id, gen: 1, status: st, sentAt: now - (90 - i * 3) * 60_000, doneAt: now - (st === 'done' ? 3 : 40 - i) * 60_000, turnId: '',
         receipt: st === 'done' ? { summary: RECEIPT.done, files: [], explicit: true } : st === 'failed' ? { failed: RECEIPT.failed, files: [], explicit: true } : null }; }) },
   }));
   const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
