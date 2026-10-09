@@ -12,14 +12,6 @@ const { spawnSync } = require('node:child_process');
 
 const say = (message) => console.log(`[remote-job] ${message}`);
 const run = (command, args, options = {}) => {
-  // On Windows, run with BelowNormal priority to avoid blocking user's foreground work
-  if (process.platform === 'win32' && options.lowPriority) {
-    // Use PowerShell to start process with BelowNormal priority
-    const psCmd = `Start-Process -NoNewWindow -Wait -FilePath "${command}" -ArgumentList ${JSON.stringify(args)} -Priority BelowNormal`;
-    const result = spawnSync('powershell', ['-Command', psCmd], { stdio: 'inherit', shell: false, ...options });
-    if (result.error) throw result.error;
-    return result.status ?? 1;
-  }
   const result = spawnSync(command, args, { stdio: 'inherit', shell: false, ...options });
   if (result.error) throw result.error;
   return result.status ?? 1;
@@ -86,8 +78,7 @@ function main(jobFile) {
   const started = Date.now();
   const env = { ...process.env, PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(runDir, 'results.json'), AGENTDECK_E2E_QUEUE_HELD: '1' };
   delete env.ELECTRON_RUN_AS_NODE;
-  // Windows: run with low priority to avoid blocking user's foreground work
-  const code = run(process.execPath, args, { cwd: workDir, env, lowPriority: process.platform === 'win32' });
+  const code = run(process.execPath, args, { cwd: workDir, env });
   return finish(code, { seconds: Math.round((Date.now() - started) / 1000) });
 }
 
