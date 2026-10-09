@@ -2687,6 +2687,13 @@ function restoreArchived(id, focus, quiet) {
   const { archivedAt, ...rest } = a;
   const col = BoardCore.normalizeColumn({ ...rest, role: 'manual', relationship: 'Independent manual terminal', view: 'term' });
   if (col.folderId && !config.folders.some((f) => f.id === col.folderId)) col.folderId = null;
+  // If the seat no longer exists, clear the seat information so it uses the default seat on launch.
+  // This prevents "Not logged in" errors when a session is restored after its seat is deleted.
+  const claudeSeats = config.claudeSeats || [];
+  if (col.claudeSeatId && !claudeSeats.some((s) => s.id === col.claudeSeatId)) {
+    col.claudeSeatId = undefined;
+    col.claudeConfigDir = undefined;
+  }
   if (!quiet) {
     if (zoomedId) { zoomedId = null; updateColumnStyles(); }
     Pages.hide();
