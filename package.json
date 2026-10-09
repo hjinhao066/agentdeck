@@ -45,6 +45,7 @@
       "main.js",
       "memory-pressure.js",
       "pty-work.js",
+      "config-cache.js",
       "battery-core.js",
       "preload.js",
       "index.html",

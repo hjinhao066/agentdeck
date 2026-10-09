@@ -45,6 +45,7 @@ const { createRefresh: createClaudeQuotaRefresh, createSeatGate, readSeat: readC
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
 const { createPtyWork } = require('./pty-work');
+const { createJsonFileCache } = require('./config-cache');
 const Battery = require('./battery-core');
 const RestartResume = require('./restart-resume');
 const AgentSessions = require('./agent-sessions');
@@ -1039,7 +1040,8 @@ app.whenReady().then(async () => {
   const feedHome = tudArg ? path.join(app.getPath('userData'), 'schedule-home') : HOME;
   registerScheduleFeedIpc({ handleMain, dir: path.join(feedHome, '.agents', 'schedules'), home: feedHome, userData: app.getPath('userData'), env: ENV });
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
-  const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
+  // Parsed config.json is several MB; re-read only when the file changed (config-cache.js).
+  const seatConfig = createJsonFileCache(configPath);
   // What the periodic seat checks read from config.json (the 队长's idle report every
   // status tick, the quota warm-up and seat-login checks every 30 s): parsed again only
   // when the file changed, and only these fields are kept, not the archived sessions

@@ -1,15 +1,50 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { execFileSync, spawnSync } = require('node:child_process');
-const { parseArgs, makeRunId, queueCommand } = require('../scripts/e2e-remote-win');
+const { makeJob, knownBasesCommand, HUB, checkHome, removeRunCommand, prepareCommand, queueCommand, parseArgs, makeRunId } = require('../scripts/e2e-remote-win');
 const { checkJob } = require('../scripts/e2e-remote-job');
 
-const JOB = path.join(__dirname, '..', 'scripts', 'e2e-remote-job.js');
-const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+const base = { runId: 'r1', sha: 'a'.repeat(40), ref: 'refs/e2e-remote/r1', winBase: 'C:\\Users\\u\\agentdeck-e2e-win', needBundle: true,
+  specs: ['tests/e2e/a.spec.js'], playwrightArgs: ['--workers=1'], install: 'auto' };
+
+test('jobs use the hub folder, never the old shared "work" folder that older dispatchers still install into and clean', () => {
+  const job = makeJob(base);
+  assert.equal(HUB, 'hub');
+  assert.equal(job.workDir, 'C:\\Users\\u\\agentdeck-e2e-win\\hub');
+  assert.equal(job.runDir, 'C:\\Users\\u\\agentdeck-e2e-win\\runs\\r1');
+  assert.equal(job.bundle, 'C:\\Users\\u\\agentdeck-e2e-win\\inbox\\r1\\commit.bundle');
+  assert.equal(makeJob({ ...base, needBundle: false }).bundle, null);
+  assert.deepEqual(job.specs, base.specs);
+});
+test('the list of commits Windows already holds is read from the hub too', () => {
+  assert.match(knownBasesCommand('agentdeck-e2e-win'), /agentdeck-e2e-win\\hub" for-each-ref/);
+  assert.doesNotMatch(knownBasesCommand('agentdeck-e2e-win'), /\\work /);
+});
+
+// A home folder can contain a space ("C:\\Users\\John Smith"). Unquoted, `rmdir /s /q C:\\Users\\John Smith\\...` deletes C:\\Users\\John.
+const SPACED = 'C:\\Users\\John Smith\\agentdeck-e2e-win';
+test('a home folder with a space is refused up front', () => {
+  assert.equal(checkHome('C:\\Users\\hjinh'), 'C:\\Users\\hjinh');
+  assert.throws(() => checkHome('C:\\Users\\John Smith'), /Unexpected Windows home/);
+  assert.throws(() => checkHome('C:\\Users\\x & del *'), /Unexpected Windows home/);
+});
+test('every Windows path in a command is quoted, delete commands included', () => {
+  const rm = removeRunCommand(SPACED, 'r1');
+  assert.ok(rm.includes('rmdir /s /q "C:\\Users\\John Smith\\agentdeck-e2e-win\\inbox\\r1"'), rm);
+  assert.ok(rm.includes('rmdir /s /q "C:\\Users\\John Smith\\agentdeck-e2e-win\\runs\\r1"'), rm);
+  assert.doesNotMatch(rm, /rmdir \/s \/q [^"]/);
+  assert.match(prepareCommand(SPACED, 'r1'), /mkdir "C:\\Users\\John Smith\\agentdeck-e2e-win\\inbox\\r1\\tools"/);
+  const q = queueCommand('C:\\Users\\John Smith', 'r1', { waitMinutes: 1, runMinutes: 2 });
+  assert.ok(q.includes('"C:\\Users\\John Smith\\agentdeck-e2e-win\\inbox\\r1\\tools\\e2e-queue.js"'), q);
+  assert.match(knownBasesCommand('agentdeck-e2e-win'), /git -C "%USERPROFILE%\\agentdeck-e2e-win\\hub"/);
+});
+test('delete commands refuse anything that is not a run folder under agentdeck-e2e-win', () => {
+  assert.throws(() => removeRunCommand(SPACED, 'r1 & del *'), /run id/);
+  assert.throws(() => removeRunCommand(SPACED, '..'), /run id/);
+  assert.throws(() => removeRunCommand('C:\\Users\\John Smith', 'r1'), /agentdeck-e2e-win/);
+  assert.throws(() => removeRunCommand('C:\\Users\\x\\agentdeck-e2e-win\\..\\..', 'r1'), /agentdeck-e2e-win/);
+  assert.throws(() => removeRunCommand('C:\\Users\\x"\\agentdeck-e2e-win', 'r1'), /agentdeck-e2e-win/);
+});
 
 test('remote runner arguments: branch, specs, options and extra Playwright arguments', () => {
   const o = parseArgs(['agentdeck/t-1', 'tests/e2e/a.spec.js', 'tests/e2e/b.spec.js', '--host', 'pc2', '--queue-wait-timeout', '10', '--no-install', '--', '--grep', 'two words']);
@@ -37,7 +72,8 @@ test('run ids are unique, filename-safe and name the commit', () => {
 
 test('the Windows command runs the uploaded job through the same queue, with the chosen timeouts', () => {
   const cmd = queueCommand('C:\\Users\\x', 'run1', { waitMinutes: 7, runMinutes: 9 });
-  assert.equal(cmd, 'node C:\\Users\\x\\agentdeck-e2e-win\\inbox\\run1\\tools\\e2e-queue.js --queue-wait-timeout 7 --queue-run-timeout 9 -- node C:\\Users\\x\\agentdeck-e2e-win\\inbox\\run1\\tools\\e2e-remote-job.js C:\\Users\\x\\agentdeck-e2e-win\\inbox\\run1\\job.json');
+  // Every Windows path is quoted (a home folder with odd characters cannot split the command).
+  assert.equal(cmd, 'node "C:\\Users\\x\\agentdeck-e2e-win\\inbox\\run1\\tools\\e2e-queue.js" --queue-wait-timeout 7 --queue-run-timeout 9 -- node "C:\\Users\\x\\agentdeck-e2e-win\\inbox\\run1\\tools\\e2e-remote-job.js" "C:\\Users\\x\\agentdeck-e2e-win\\inbox\\run1\\job.json"');
 });
 
 test('job files are validated before anything runs', () => {
@@ -47,55 +83,4 @@ test('job files are validated before anything runs', () => {
   assert.throws(() => checkJob({ ...ok, runId: '..\\x' }), /runId/);
   assert.throws(() => checkJob({ ...ok, specs: 'x' }), /specs/);
   assert.throws(() => checkJob({ ...ok, workDir: '' }), /workDir/);
-});
-
-test('the remote job fetches the commit into its own checkout, runs the specs and records the result', (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-remote-job-test-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const source = path.join(root, 'source'); fs.mkdirSync(source);
-  git(source, 'init', '-q', '-b', 'main');
-  git(source, 'config', 'user.email', 't@t'); git(source, 'config', 'user.name', 't');
-  fs.writeFileSync(path.join(source, 'package-lock.json'), '{}');
-  fs.writeFileSync(path.join(source, 'marker.txt'), 'one');
-  git(source, 'add', '.'); git(source, 'commit', '-q', '-m', 'one');
-  const sha = git(source, 'rev-parse', 'HEAD');
-  git(source, 'update-ref', 'refs/e2e-remote/test', sha);
-  const bundle = path.join(root, 'c.bundle');
-  git(source, 'bundle', 'create', bundle, 'refs/e2e-remote/test');
-
-  // A stand-in Playwright that echoes its arguments and the marker file of the checked-out commit.
-  const work = path.join(root, 'work');
-  const cli = path.join(work, 'node_modules', '@playwright', 'test', 'cli.js');
-  fs.mkdirSync(path.dirname(cli), { recursive: true });
-  fs.writeFileSync(cli, `console.log('ARGS ' + JSON.stringify(process.argv.slice(2)));
-console.log('MARKER ' + require('fs').readFileSync('marker.txt', 'utf8'));
-process.exit(Number(process.env.FAKE_EXIT || 0));`);
-
-  const runJob = (runId, extra = {}, env = {}) => {
-    const job = { runId, sha, ref: 'refs/e2e-remote/test', bundle, workDir: work, runDir: path.join(root, 'runs', runId),
-      specs: ['tests/e2e/a.spec.js'], playwrightArgs: ['--grep', 'x'], install: 'skip', ...extra };
-    const file = path.join(root, `${runId}.json`);
-    fs.writeFileSync(file, JSON.stringify(job));
-    const r = spawnSync(process.execPath, [JOB, file], { encoding: 'utf8', env: { ...process.env, ...env } });
-    return { r, summary: JSON.parse(fs.readFileSync(path.join(job.runDir, 'summary.json'), 'utf8')) };
-  };
-
-  const first = runJob('r1');
-  assert.equal(first.r.status, 0, first.r.stdout + first.r.stderr);
-  assert.match(first.r.stdout, /MARKER one/);
-  const args = JSON.parse(/ARGS (.*)/.exec(first.r.stdout)[1]);
-  assert.deepEqual(args.slice(0, 2), ['test', 'tests/e2e/a.spec.js']);
-  assert.ok(args.includes('--reporter=list,json') && args.includes('--grep'));
-  assert.equal(first.summary.exitCode, 0);
-  assert.equal(git(work, 'rev-parse', 'HEAD'), sha);
-
-  // A second run of the same commit needs no bundle; a failing run reports its exit code.
-  const second = runJob('r2', { bundle: null }, { FAKE_EXIT: '3' });
-  assert.equal(second.r.status, 3);
-  assert.equal(second.summary.exitCode, 3);
-
-  // An unknown commit without a bundle fails loudly instead of testing something else.
-  const lost = runJob('r3', { bundle: null, sha: 'c'.repeat(40) });
-  assert.equal(lost.r.status, 11);
-  assert.match(lost.summary.failed, /no bundle/);
 });

@@ -1146,6 +1146,12 @@ npm run dist:mac
 - **发版**（小版本打包前）：跑 `npm test` 和 `npm run test:smoke`。冒烟复用现有用例，用 Playwright 标签 `@smoke` 标出，不另抄一份测试。命令是 `playwright test --grep @smoke --workers=1`，单 worker，目标 5 分钟内。覆盖：应用能启动并显示主界面；队长用 board-cli `new` / `tell` 派活且队员收到；队员回执回到队长；会话归档后能恢复；终端能显示输出；额度区能显示；任务看板能打开。
 - **全量**：`npm run test:e2e` 夜里跑，或换一台机器跑。冒烟通过不能代替全量。
 
+**Mac 压力下的 E2E 分流：** 跑 E2E 时用 `node scripts/e2e-auto.js tests/e2e/a.spec.js [b.spec.js] [-- playwright 参数]`：带 Windows 平台跳过标记（`test.skip(process.platform === 'win32', …)`）的 spec 走本机排队锁；其余 spec 在 Windows 在线时合成一组、经 ssh 在后台（非桌面会话，不弹窗）派到 Windows 跑，ssh 或远端准备失败时自动改走本机排队锁。Windows 测的是当前工作区（没提交的改动也会带过去）；测试在 Windows 上真失败就是失败，不会悄悄换 Mac 重跑，只在 Windows 才不通过的 spec 要加上面的跳过标记。看本机队列：`node scripts/e2e-auto.js --status`。
+
+**Windows 后台执行：** Windows 上每个任务有自己的检出目录（`agentdeck-e2e-win\checkouts\<运行号>`），依赖按 lockfile 分目录（`deps\<哈希>`，哈希不含根 `version`；同一 lockfile 只装一次，其他任务等它装完复用，等锁有日志、25 分钟超时后退出码 15 并自动改走 Mac；每次任务结束后只留最近用过的 2 份、正在被用的不删，新装前可用空间不足 2 GB 退出码 16 并改走 Mac），所以 `AGENTDECK_E2E_SLOTS` 大于 1 时几组可以同时跑，互不覆盖。进程优先级没有调低。验证没有窗口跑到桌面的办法：`scripts/verify-windows-background.ps1`（ssh 登录在会话 0，看不到桌面会话的窗口，所以证据是「所有测试进程都在会话 0、桌面会话里没有新的测试进程」）。
+
+**性能基准：** `node scripts/perf-e2e-benchmark.js --mode win --groups N --sha <提交> --out <目录> <spec…>` 与 `--mode mac …` 对同一提交实测，只输出实测值。实测结果见 `docs/e2e-windows-background.md`（Windows 单组比 Mac 慢；并行吞吐倍数因 Windows 一直有别的会话的任务而没能测到干净数据，所以没给倍数）。
+
 冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 
 **发版必须先写「版本更新」**：在仓库根目录的 `release-notes.json` 里，把这一版加到 `released` 最前面（版本号如 `2.0`、日期 `YYYY-MM-DD`、一句标题、3–6 条写给用户看的大白话，每条不超过 60 字），并把它从 `upcoming` 里拿掉；顺手更新 `upcoming`（接下来做什么，用户还没拍板的写 `"state": "pending"`，界面上显示「待你定」）和 `updated`。只改这一个文件，桌面端（侧栏底部点版本号）和手机总台（总览最下面、平板侧栏底部的版本号）都读它（每日进展另读本机统计文件，不在这个文件里）。漏改有两道提醒：`npm test` 里的 `tests/release-notes.test.js` 要求最新一条等于 package.json 的版本；`scripts/release.js` 合完分支、升完版本号后先查这一条，不对就停下，不进测试和打包。规则写在 `mobile-web/hub/core.js` 的 `releaseProblems`。
@@ -1175,7 +1181,7 @@ node scripts/e2e-remote-win.js <分支或提交> tests/e2e/foo.spec.js [tests/e2
 ```
 
 - 只测**已提交**的代码：脚本把这个提交打成 git bundle 传过去（不需要先 push，也不需要 Windows 登录 GitHub），所以先 `git commit`。工作区里没提交的改动不会被带过去，脚本会提醒。
-- Windows 上一切都在自己的目录 `C:\Users\hjinh\agentdeck-e2e-win\`：`work\` 是独立检出和依赖（只在 `package-lock.json` 变了才重装，首次要下载 Electron，约几分钟），`inbox\<运行号>\`（含本次上传的排队脚本）和 `runs\<运行号>\` 是每次运行的临时目录，跑完自动只删本次的。**不碰** Windows 上已安装的 AgentDeck、别的会话目录和用户目录里别的东西。
+- Windows 上一切都在自己的目录 `C:\Users\hjinh\agentdeck-e2e-win\`：`hub\` 存传过去的提交，`checkouts\<运行号>\` 是每次运行自己的检出（跑完删），`deps\<依赖键>\` 按 lockfile 各装一份依赖（只在依赖变了才新装，首次要下载 Electron，约几分钟；自动只留最近 2 份；新装前空间不足 2GB 先清旧的，仍不够就退出码 16，`e2e-auto` 改在 Mac 跑，见 `docs/e2e-windows-background.md`），`inbox\<运行号>\`（含本次上传的排队脚本）和 `runs\<运行号>\` 是每次运行的临时目录，跑完自动只删本次的。**不碰** Windows 上已安装的 AgentDeck、别的会话目录和用户目录里别的东西。
 - Windows 上同样走 `e2e-queue`，同一时间只跑 1 组，后来的排队。
 - 结果拉回 Mac：`~/reports/agentdeck-e2e-remote/<运行号>/`，内含 `console.log`（完整输出）、`results.json`（Playwright JSON 报告）、`summary.json`（提交、spec、退出码、耗时）、`test-results/`（失败时的 trace 等）。脚本退出码等于 Windows 上的结果（0 通过，75 排队超时，124 跑太久，其余为失败）。
 

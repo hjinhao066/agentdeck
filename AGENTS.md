@@ -16,6 +16,15 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
    group run at a time so 20 sessions do not stall the Mac; wait for your turn, do
    not remove its lock. To use the Windows PC instead, `node scripts/e2e-remote-win.js
    <branch> <spec>` (README 「E2E 排队与 Windows 远程跑」).
+   To spare a loaded Mac, run `node scripts/e2e-auto.js tests/e2e/a.spec.js [b.spec.js] [-- playwright args]`:
+   specs carrying a Windows platform skip (`test.skip(process.platform === 'win32', ...)`) go through
+   the local queue; the others go to the Windows PC as one group, in the background over ssh (a
+   non-desktop session, so no window appears), and fall back to the local queue when ssh or the
+   remote setup fails. Windows tests the working tree as it is now, a dirty tree included. A test
+   failing on Windows stays a failure (it is not re-run on the Mac); a spec that only works on
+   macOS/POSIX needs the platform skip above. Measured numbers and the recommended
+   `AGENTDECK_E2E_SLOTS`: `docs/e2e-windows-background.md`; re-measure with
+   `scripts/perf-e2e-benchmark.js`.
    A patch release runs `npm test` and `npm run test:smoke` (see README 发版流程).
    Full `npm run test:e2e` runs overnight or on another machine. Run `npm audit`
    before packaging. Run the packaged E2E suite when runtime, preload, native
