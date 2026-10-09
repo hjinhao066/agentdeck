@@ -12,16 +12,6 @@
   const STATUS_LABEL = { working: '干活中', input: '待补充', queued: '排队', done: '已完成', failed: '失败', stopped: '已停下', idle: '空闲' };
   const ACTIVE = ['working', 'input', 'queued'];
   const MAX_LINE = 140;
-  // A project's frame is one card wide; with this many of its sessions running at once (同时在跑)
-  // or more it is two cards wide, and never wider: the rest of a big project goes down inside its own frame.
-  const PROJECT_TWO_COLUMNS_AT = 7;
-  const PROJECT_MAX_COLUMNS = 2;
-  const projectColumns = (running, at = PROJECT_TWO_COLUMNS_AT) => (running >= at ? PROJECT_MAX_COLUMNS : 1);
-  const SLOT_WAIT = '等空位';
-  // Running (在跑): a session with a terminal that has not finished its work: 干活中, 待补充 (waiting on an
-  // answer) or queued until its terminal is ready. Finished, failed, stopped, idle and archived sessions do
-  // not count, nor does work still waiting for a slot to open (no terminal is working on it yet).
-  const isRunning = (n) => !!n && n.kind !== 'waiting' && !n.archived && ACTIVE.includes(n.status) && n.detail !== SLOT_WAIT;
 
   const oneLine = (s, max = MAX_LINE) => {
     const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
@@ -37,7 +27,7 @@
     if (term && term.alive && term.state === 'input') return { status: 'input', detail: '停在确认' };
     if (!task) return { status: term && term.state === 'done' ? 'done' : 'idle', detail: '' };
     switch (task.status) {
-      case 'waiting': return { status: 'queued', detail: SLOT_WAIT };
+      case 'waiting': return { status: 'queued', detail: '等空位' };
       case 'queued': return { status: 'queued', detail: '等终端就绪' };
       case 'working': return { status: 'working', detail: '' };
       case 'input': return { status: 'input', detail: '停在确认' };
@@ -334,7 +324,7 @@
     // tally need); the cards then stand centred in it, `inset` in from where they would start.
     const cardsW = cols * o.nodeW + (cols - 1) * o.gapX + 2 * o.padX;
     const w = Math.max(collapsed ? 320 : cardsW, Math.ceil((o.headW && o.headW[p.key]) || 0));
-    return { p, collapsed, cols, rows, w, running: nodes.filter(isRunning).length, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), h: collapsed ? o.headH + 4 : o.headH + top + o.nodeH + o.padBottom };
+    return { p, collapsed, cols, count, rows, w, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), h: collapsed ? o.headH + 4 : o.headH + top + o.nodeH + o.padBottom };
   }
   // headH: the frame's title strip, above its first row of cards
   const LAYOUT = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, padX: 44, padBottom: 28, pad: 40, headH: 52, fold: false, collapsedProjects: {}, columnsPerProject: Infinity, grid: false, center: false, tray: false, lane: 7 };
@@ -422,10 +412,10 @@
     return { captain, nodes: pos, groups, fold, feeds, grid: !!o.grid, rails, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
   }
 
-  // Which lane each project stands in and how many cards wide its frame is, for a window size.w
-  // wide (in the canvas's own units, at the scale the map is shown at). A frame is one card wide,
-  // two once opts.twoColumnsAt of its sessions run at once (PROJECT_TWO_COLUMNS_AT, isRunning: finished
-  // cards and work still waiting for a slot do not count), never wider. The projects
+  // Which lane each project stands in, for a window size.w wide (in the canvas's own units, at the
+  // scale the map is shown at), when the map is taller than a page (智能一页 could not fit it: see
+  // planPage). Each frame is as many cards wide as opts.caps asks (planPage's choice; one when it does
+  // not say), fewer when the window cannot hold that frame. The projects
   // stand across the top in their order, as many abreast as the width holds, one lane each. Every
   // project after them goes under the lane that ends highest (of lanes ending within BAND of the
   // highest, the leftmost): the width is used before the height, and a big project grows down in
@@ -437,7 +427,7 @@
   // Returns { lanes, caps }.
   const BAND = 48, LANE_KEEP = 1.15;
   function planAcross(map, size, opts) {
-    const o = { ...LAYOUT, twoColumnsAt: PROJECT_TWO_COLUMNS_AT, ...opts };
+    const o = { ...LAYOUT, ...opts };
     const shown = new Set(map.nodes.map((n) => n.id));
     const projects = ordered(map.projects, o.order).filter((p) => frame(p, o, shown, 1));
     const n = projects.length;
@@ -445,8 +435,8 @@
     const availW = Math.max(1, size.w) - 2 * o.pad;
     const sized = new Map();
     const at = (p, c) => { const k = c + '\u0001' + p.key; if (!sized.has(k)) sized.set(k, frame(p, o, shown, c)); return sized.get(k); };
-    // two cards wide once that many of its sessions run at once, unless the window cannot hold even one such frame
-    const caps = new Map(projects.map((p) => { const c = projectColumns(at(p, 1).running, o.twoColumnsAt); return [p.key, c > 1 && at(p, c).w <= availW ? c : 1]; }));
+    // as wide as asked, narrower where the window cannot hold that frame
+    const caps = new Map(projects.map((p) => { let c = Math.max(1, Math.floor((o.caps && o.caps[p.key]) || 1)); while (c > 1 && at(p, c).w > availW) c--; return [p.key, c]; }));
     const fr = (p) => at(p, caps.get(p.key));
     const height = (lane) => lane.reduce((h, p) => h + fr(p).h, 0) + (lane.length - 1) * o.clusterGap;
     // the lanes' width the way layout() lays them
@@ -481,6 +471,79 @@
       if (inOrder && fits(lanes) && Math.max(...lanes.map(height)) <= Math.max(...fresh.map(height)) * LANE_KEEP + 0.5) return out(lanes);
     }
     return out(fresh);
+  }
+
+  // 智能一页: every project across one row, each frame 1 to PAGE_COLUMNS cards wide (never more than it
+  // has cards), all the widths chosen together so the whole map shows on one page, as large as it can.
+  // Every combination is scored and the best one wins:
+  //   - it must fit the page at s of the map's own 100% (s = min(page width / map width, page height /
+  //     map height, 1)); below PAGE_MIN_SCALE the cards are too small to read and it does not fit;
+  //   - the larger s, the better: bigger cards, the page better filled;
+  //   - no frame much taller than the rest: every row the tallest frame runs beyond the next tallest,
+  //     past one, costs PAGE_ROW_COST of s (a frame of two cards beside frames of one is not too long);
+  //   - with nothing else between them, fewer columns (PAGE_COLUMN_COST each).
+  // opts.keep (the plan in use) stays while it still fits and scores within PAGE_KEEP of the best, so a
+  // card more or less, or a window a little wider, does not send frames back and forth.
+  // size: { w, h }, the page in the canvas's units at the map's own 100% (no h: as tall as needed).
+  // Returns { lanes (one per project, in order), caps, scale (s), fits }. fits is false when no
+  // combination shows the map on one page at PAGE_MIN_SCALE: the best one's columns then serve
+  // planAcross, which stacks the frames in lanes at 100%.
+  const PAGE_COLUMNS = 4, PAGE_MIN_SCALE = 0.8, PAGE_ROW_COST = 0.05, PAGE_COLUMN_COST = 0.002, PAGE_KEEP = 0.03, PAGE_COMBOS = 50000;
+  function planPage(map, size, opts) {
+    const o = { ...LAYOUT, ...opts };
+    const shown = new Set(map.nodes.map((n) => n.id));
+    const projects = ordered(map.projects, o.order).filter((p) => frame(p, o, shown, 1));
+    if (!projects.length) return { lanes: [], caps: {}, scale: 1, fits: true };
+    const W = Math.max(1, size.w), H = Number.isFinite(size.h) ? Math.max(1, size.h) : Infinity;
+    const minScale = Number.isFinite(o.minScale) ? o.minScale : PAGE_MIN_SCALE;
+    // every project's frame at each width it can take (a folded frame has one)
+    const choices = projects.map((p) => {
+      const one = frame(p, o, shown, 1);
+      if (one.collapsed) return [one];
+      return [one, ...Array.from({ length: Math.min(PAGE_COLUMNS, one.count) - 1 }, (_, i) => frame(p, o, shown, i + 2))];
+    });
+    // the map's size the way layout() and the view's fit measure it: the frames one lane each side by
+    // side, 队长 above them, the 16px the map keeps round itself
+    const gap = laneGap(o, 0), edge = 32;
+    const score = (pick) => {
+      const width = Math.max(o.captainW, pick.reduce((a, f) => a + f.w, 0) + (pick.length - 1) * gap) + edge;
+      const height = o.captainH + o.fanY + Math.max(...pick.map((f) => f.h)) + edge;
+      const s = Math.min(1, W / width, H / height);
+      const rows = pick.map((f) => (f.collapsed ? 0 : f.rows.length)).sort((a, b) => b - a);
+      const excess = Math.max(0, rows[0] - Math.max(1, rows[1] || 0) - 1);
+      const extra = pick.reduce((a, f) => a + (f.collapsed ? 0 : f.cols - 1), 0);
+      return { s, fits: s >= minScale - 1e-9, value: s - PAGE_ROW_COST * excess - PAGE_COLUMN_COST * extra };
+    };
+    const better = (a, b) => !b || (a.fits !== b.fits ? a.fits : a.value > b.value + 1e-9);
+    const pickOf = (idx) => idx.map((i, k) => choices[k][i]);
+    let best = null;
+    const total = choices.reduce((a, c) => a * c.length, 1);
+    if (total <= PAGE_COMBOS) {
+      // every combination, as a mixed-radix count
+      const idx = choices.map(() => 0);
+      for (let n = 0; n < total; n++) {
+        const r = score(pickOf(idx));
+        if (better(r, best)) best = { ...r, idx: idx.slice() };
+        for (let k = idx.length - 1; k >= 0; k--) { if (++idx[k] < choices[k].length) break; idx[k] = 0; }
+      }
+    } else {
+      // too many projects to try every one: from one card wide each, widen whichever frame helps most
+      let idx = choices.map(() => 0);
+      best = { ...score(pickOf(idx)), idx };
+      for (;;) {
+        let step = null;
+        choices.forEach((c, k) => { if (idx[k] + 1 >= c.length) return; const next = idx.slice(); next[k]++; const r = score(pickOf(next)); if (better(r, step || best)) step = { ...r, idx: next }; });
+        if (!step) break;
+        best = step; idx = step.idx;
+      }
+    }
+    // the plan in use, while it is still a plan for these frames and nearly as good
+    const keep = o.keep && o.keep.caps && Array.isArray(o.keep.lanes) && o.keep.lanes.length === projects.length && o.keep.lanes.every((lane, k) => lane.length === 1 && lane[0] === projects[k].key) ? o.keep : null;
+    if (keep && best.fits) {
+      const idx = projects.map((p, k) => choices[k].findIndex((f) => f.cols === (choices[k].length === 1 ? choices[k][0].cols : keep.caps[p.key])));
+      if (idx.every((i) => i >= 0)) { const r = score(pickOf(idx)); if (r.fits && r.value >= best.value - PAGE_KEEP) best = { ...r, idx }; }
+    }
+    return { lanes: projects.map((p) => [p.key]), caps: Object.fromEntries(projects.map((p, k) => [p.key, choices[k][best.idx[k]].cols])), scale: best.s, fits: best.fits };
   }
 
   // The order the user has put the project frames in, read from where they stand now the way
@@ -739,7 +802,7 @@
     // the arrangement in use when the user last placed something by hand (null: arranged for the window every time)
     const pl = s.plan && typeof s.plan === 'object' && Array.isArray(s.plan.lanes) ? s.plan : null;
     const plan = pl && pl.lanes.length <= 50 && pl.lanes.every((l) => Array.isArray(l) && l.length <= 500 && l.every(key))
-      ? { lanes: pl.lanes.map((l) => l.slice()), caps: Object.fromEntries(Object.entries(pl.caps || {}).filter(([k, v]) => key(k) && Number.isInteger(v) && v >= 1 && v <= 12)), tight: !!pl.tight } : null;
+      ? { lanes: pl.lanes.map((l) => l.slice()), caps: Object.fromEntries(Object.entries(pl.caps || {}).filter(([k, v]) => key(k) && Number.isInteger(v) && v >= 1 && v <= 12)), tight: !!pl.tight, page: !!pl.page } : null;
     return { projectPositions, mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view, collapsedProjects, showReturn: !!s.showReturn, projectOrder, plan };
   }
   // The map's own zoom. Its 100% is BASE_SCALE of the canvas's drawn size (cards are drawn 280px wide
@@ -775,5 +838,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, PROJECT_TWO_COLUMNS_AT, PROJECT_MAX_COLUMNS, projectColumns, isRunning, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, PAGE_COLUMNS, PAGE_MIN_SCALE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, planPage, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
 });

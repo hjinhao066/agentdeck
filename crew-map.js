@@ -7,20 +7,21 @@
 //
 // Arrangement and view are one system with two layers:
 // - Where things stand. Untouched (智能一页, the default), the map arranges
-//   itself for the window and again whenever the window changes: project
-//   frames left to right, as many abreast as its width holds, each one card
-//   wide (two while CrewMapCore.PROJECT_TWO_COLUMNS_AT of its sessions run at
-//   once, CrewMapCore.isRunning) and growing down; the rest go under the lane
-//   that ends highest (CrewMapCore.planAcross).
+//   itself for the window and again whenever the window changes: every project
+//   frame across one row, each 1 to CrewMapCore.PAGE_COLUMNS cards wide, the
+//   widths chosen together so the whole map shows on one page as large as it
+//   can, no frame much taller than the rest (CrewMapCore.planPage). A map too
+//   big for one page even at PAGE_MIN_SCALE stands in lanes at 100%, the rest
+//   under the lane that ends highest (CrewMapCore.planAcross), and is panned.
 //   Once the user drags a card or a frame, that plan is kept under their
 //   moves until they tidy or go back to 智能一页, so a window resize never
 //   pulls the ground from under a hand-placed map.
-// - How it is seen. Untouched, the map stands at its own 100% (C.BASE_SCALE
-//   of the drawn size), centred, from the top when it is taller than the
-//   window; once the user pans or zooms, the view is theirs.
+// - How it is seen. Untouched, the map is shown as large as its page holds it,
+//   never past its own 100% (C.BASE_SCALE of the drawn size), centred; in lanes,
+//   at 100% from the top. Once the user pans or zooms, the view is theirs.
 // 一键整理 puts every frame and card back on the grid in the order the frames
 // were left in, and leaves a hand-set zoom alone. 智能一页 hands both layers
-// back: arrangement and order are worked out again for this window, at 100%.
+// back: arrangement and order are worked out again for this window.
 // Either can be undone until the next move by hand.
 (function () {
   'use strict';
@@ -37,6 +38,7 @@
   const FIT = C.BASE_SCALE;
   const MOVE_MS = 280;    // frames and cards gliding to a new place (shorter than the view's own glide)
   const GRAIN = 28;       // canvas px between the dots of the grid under the map
+  const RESIZE_MS = 160;  // a window resized: how long it rests before the map arranges itself once more
   // Spacing given up when the roomy map just misses the window at 100% and this brings all of it in.
   const TIGHT = { captainH: 104, fanY: 40, rowGap: 10, padBottom: 12 };
   const DRAG_PX = 4;
@@ -61,6 +63,7 @@
   let smoothT = 0;
   let plan = null;          // the arrangement in use: { lanes, caps, tight }
   let planW = 0;            // the viewport width it was worked out for
+  let drawnFor = '';        // the viewport size the map was last arranged for
   let pageFits = true;      // the whole map shows at 100% in this window
   let undo = null;          // what 一键整理 / 智能一页 replaced, until the next move by hand
   let hintT = 0;
@@ -478,12 +481,13 @@
   function fit(smooth) {
     if (!lay) return;
     const bounds = fitBounds(lay), inset = FIT_INSET;
-    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, { min: FIT, max: FIT });
+    // 智能一页's one-page plan is shown as large as the page holds it (never past 100%); a map in lanes at 100%
+    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, plan && plan.page && pageFits ? { min: FIT * C.PAGE_MIN_SCALE, max: FIT } : { min: FIT, max: FIT });
     // too tall for the window: start at the top (队长 and the first rows), not mid-map
     if ((bounds.bottom - bounds.top) * view.scale > vpEl.clientHeight - inset.top - inset.bottom) {
       view.y = inset.top - bounds.top * view.scale;
       view.y += cutShift(view);
-    }
+    } else if (plan && plan.page) view.y = inset.top - bounds.top * view.scale;   // one page: read from 队长 down, the room to spare below
     userView = false;
     glide(smooth === true);
     applyView();
@@ -523,22 +527,34 @@
     const base = { ...dims, ...GRID, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, order: saved().projectOrder, grid: true, center: true, tray: true, headW: headNeeds(map) };
     const tightly = { ...TIGHT, captainH: TIGHT.captainH + (capWrap ? CAP_ROW : 0) };
     const build = (p) => C.layout(map, { ...base, ...(p.tight ? tightly : {}), lanes: p.lanes, caps: p.caps });
-    const whole = (l) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= FIT - 1e-9;
+    // the whole layout shows in this window at `least` of the drawn size or more
+    const whole = (l, least = FIT) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= least - 1e-9;
     const pinned = hasManual() ? saved().plan : null;
     if (pinned) {
       const l = build(pinned), keys = new Set(pinned.lanes.flat());
       // still the same projects on the canvas: the hand-placed map keeps its ground
-      if (l.groups.length === keys.size && l.groups.every((g) => keys.has(g.key))) { plan = pinned; pageFits = whole(l); return l; }
+      if (l.groups.length === keys.size && l.groups.every((g) => keys.has(g.key))) { plan = pinned; pageFits = whole(l, pinned.page ? FIT * C.PAGE_MIN_SCALE : FIT); return l; }
     }
     if (!hasManual() && saved().plan) { saved().plan = null; host.save(); }   // nothing hand-placed is left to stand on it
-    const size = { w: (vw - FIT_INSET.left - FIT_INSET.right) / FIT };
+    const size = { w: (vw - FIT_INSET.left - FIT_INSET.right) / FIT, h: (vh - FIT_INSET.top - FIT_INSET.bottom) / FIT };
+    // 智能一页: every project across one row, its columns chosen to show the whole map on one page
+    const onePage = C.planPage(map, size, { ...base, keep: plan && plan.page ? plan : null });
+    if (onePage.fits) {
+      const next = { lanes: onePage.lanes, caps: onePage.caps, tight: false, page: true };
+      const l = build(next);
+      if (whole(l, FIT * C.PAGE_MIN_SCALE)) {
+        plan = next; planW = vw; pageFits = true;
+        if (hasManual()) { saved().plan = plan; host.save(); }
+        return l;
+      }
+    }
+    // Taller than a page: the frames in lanes at 100% with the columns 智能一页 found best, panned down.
+    // Roomy while the whole map shows at 100%; tight when only that brings it all in.
     const pick = (tight) => {
-      const p = C.planAcross(map, size, { ...base, ...(tight ? tightly : {}), keep: plan && planW === vw && !!plan.tight === tight ? plan : null });
+      const p = C.planAcross(map, size, { ...base, ...(tight ? tightly : {}), caps: onePage.caps, keep: plan && !plan.page && planW === vw && !!plan.tight === tight ? plan : null });
       const next = { lanes: p.lanes, caps: p.caps, tight };
       return { plan: next, lay: build(next) };
     };
-    // Roomy while the whole map shows at 100%; tight when only that brings it all in;
-    // a map too tall either way stays roomy and is panned.
     let chosen = pick(false);
     pageFits = whole(chosen.lay);
     if (!pageFits) { const tight = pick(true); if (whole(tight.lay)) { chosen = tight; pageFits = true; } }
@@ -754,6 +770,7 @@
 
   function render(opts) {
     if (!rootEl || mode !== 'crew' || !host.visible() || drag) return;
+    drawnFor = vpEl.clientWidth + 'x' + vpEl.clientHeight;
     const map = collect();
     lastMap = map;
     lastSig = C.signature(map) + '|' + showArchived;
@@ -840,8 +857,8 @@
   }
   // Arranged by the map itself for this window (智能一页): nothing placed by hand, no order of the user's own.
   const arranged = () => !hasManual() && !saved().projectOrder.length;
-  const FIT_ON = '智能一页：已开启，项目按窗口宽度从左往右排开，窗口变了自动重排；点一下回到 100% 和顶部';
-  const FIT_OFF = '智能一页：回到自动排法，放弃手动拖动的位置和先后，缩放回到 100%（可撤销）';
+  const FIT_ON = '智能一页：已开启，项目从左往右排成一行，每个框排几列自动算好，让整张图一屏放下；窗口变了自动重排；点一下回到这一页';
+  const FIT_OFF = '智能一页：回到自动排法，放弃手动拖动的位置和先后，缩放回到一屏放下的大小（可撤销）';
   // The button says which it is: lit while the map arranges itself, a dot on it once things were placed by hand.
   function syncFit() {
     if (!fitBtn) return;
@@ -967,7 +984,16 @@
     window.addEventListener('pointercancel', onUp);
     vpEl.addEventListener('wheel', onWheel, { passive: false });
     viewEl.querySelectorAll('.board-mode button[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
-    new ResizeObserver(() => { if (host.visible() && vpEl.clientWidth && !drag) render(); }).observe(vpEl);
+    // A window being resized: the map arranges itself at once, then (if the size moved on meanwhile) once
+    // more when the window has rested RESIZE_MS, gliding there; a size it was already arranged for does nothing.
+    let resizeT = 0, resizeAt = 0;
+    new ResizeObserver(() => {
+      const ready = () => host.visible() && vpEl.clientWidth && !drag && vpEl.clientWidth + 'x' + vpEl.clientHeight !== drawnFor;
+      clearTimeout(resizeT);
+      if (ready() && Date.now() - resizeAt > RESIZE_MS) render();
+      resizeAt = Date.now();
+      resizeT = setTimeout(() => { resizeAt = 0; if (ready()) render({ smooth: true }); }, RESIZE_MS);
+    }).observe(vpEl);
     setMode(host.config.crewMap.mode);
   }
 
