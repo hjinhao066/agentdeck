@@ -149,11 +149,15 @@
   }
   async function api(url, options) {
     if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, 'X-CSRF-Token': csrfToken } };
-    const response = await fetch(url, { credentials: 'same-origin', ...options });
-    if (response.status === 401) { window.location.reload(); throw new Error('登录已过期。'); }
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '请求失败，请稍后刷新。');
-    return result;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(url, { credentials: 'same-origin', ...options, signal: controller.signal });
+      if (response.status === 401) { window.location.reload(); throw new Error('登录已过期。'); }
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '请求失败，请稍后刷新。');
+      return result;
+    } finally { clearTimeout(timeout); }
   }
   function iconButton(name, label, onClick) {
     const button = node('button', 'icon-button');
@@ -1181,9 +1185,16 @@
       sendStatus(item.forWorker ? '已转给队长，等待处理。' : '已排队，等待队长处理。');
       refresh();
     } catch (err) {
-      // No answer at all: it may have arrived. If it shows up in the conversation, this bubble gives way to it.
-      item.state = 'failed'; item.unsure = err instanceof TypeError;
-      item.reason = item.unsure ? '手机没连上电脑，不确定这条有没有送到。先看一眼对话，再决定要不要重发。' : err.message;
+      const isTimeout = err.name === 'AbortError';
+      const isNetwork = err instanceof TypeError;
+      item.state = 'failed'; item.unsure = isNetwork || isTimeout;
+      if (isTimeout) {
+        item.reason = '没有连上电脑（超过 15 秒）。可重试，或先看一眼对话确认是否已送到。';
+      } else if (isNetwork) {
+        item.reason = '手机没连上电脑，不确定这条有没有送到。先看一眼对话，再决定要不要重发。';
+      } else {
+        item.reason = err.message;
+      }
       sendStatus('这条没有发出，原文留在对话里，可重试。', true);
     }
     finally { sending = false; renderCaptain(); }
