@@ -64,7 +64,8 @@
   // receipts, questions and prompts wait in s.subReceipts[its id] for its own `receipts`,
   // never in the Captain's pending. Its terminal holds a control token, but only the
   // commands in SUB_ACTIONS, and only on its own children, are accepted from it.
-  const isSubCaptain = (col) => !!(col && col.subCaptain === true && col.captainCrew && !col.isMain && host.columns().includes(col));
+  // Only the Captain's `new --sub-captain` sets the flag; filing the session into a folder keeps the role.
+  const isSubCaptain = (col) => !!(col && col.subCaptain === true && !col.isMain && host.columns().includes(col));
   function subCaptainOf(col) {
     if (!col || !col.subCaptainId) return null;
     const sub = host.columns().find((c) => c.id === col.subCaptainId);
@@ -532,7 +533,7 @@
     s.subReceipts = {};
     for (const [id, items] of Object.entries(queues)) {
       if (!Array.isArray(items) || !items.length) continue;
-      if (host.columns().some((c) => c.id === id && c.subCaptain === true && c.captainCrew && !c.isMain)) s.subReceipts[id] = items;
+      if (host.columns().some((c) => c.id === id && c.subCaptain === true && !c.isMain)) s.subReceipts[id] = items;
       else s.pending.push(...items);
     }
     // the column was closed while the app was down

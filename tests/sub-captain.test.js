@@ -250,3 +250,14 @@ test('D: a sub-captain with live children is never archived automatically', asyn
   r.api.onTick(sub.id, entry);
   assert.ok(!r.columns.includes(sub), 'archived like any finished session once no child is left');
 });
+
+test('a sub-captain filed into a folder is still the sub-captain of its children', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  const kid = await r.child(sub, '子会话A');
+  sub.captainCrew = false; sub.folderId = 'f1'; // the user dragged it out of the 队长 list
+  await r.api.submit({ action: 'complete', result: 'A 在文件夹里也归小队长', files: [] }, kid);
+  assert.doesNotMatch(await r.text('main-receipts', r.captain), /A 在文件夹里也归小队长/);
+  assert.match(await r.text('main-receipts', sub), /A 在文件夹里也归小队长/);
+  assert.match(await r.text('main-ledger', sub), new RegExp(kid.id));
+});

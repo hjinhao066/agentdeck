@@ -2229,7 +2229,7 @@ function buildColumn(col, isFresh) {
         const boundSeat = col.executor === 'chatgpt-web' ? {} : ClaudeSeatsCore.bindColumn(col, config);
         flushConfig();
 
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain || (col.subCaptain === true && !!col.captainCrew), boundSeat.id, boundSeat.configDir, !!col.captainCrew && !col.isMain);
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain || col.subCaptain === true, boundSeat.id, boundSeat.configDir, !!col.captainCrew && !col.isMain);
         if (col.executor === 'chatgpt-web') terms.get(col.id).webExecutorReady = true;
 
         if (launch && col.executor !== 'chatgpt-web') {
@@ -3623,7 +3623,7 @@ window.deck.onBoardCommand(async (message) => {
   // 队长's commands: only its own column may use them. A 小队长 reaches a few of them, and
   // create-child, on its own children (MainSession checks which).
   if (String(message.action || '').startsWith('main-') || message.action === 'seat-auth-alert' ||
-      (message.action === 'create-child' && caller?.subCaptain === true && caller.captainCrew && !message.submitOnly)) {
+      (message.action === 'create-child' && caller?.subCaptain === true && !caller.isMain && !message.submitOnly)) {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
