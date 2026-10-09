@@ -66,6 +66,6 @@ test('column navigation preserves native center and nearest scrolling, including
     expect(covering.actual).toBe(covering.start);
   } finally {
     if (app) await closeElectron(app);
-    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
   }
 });

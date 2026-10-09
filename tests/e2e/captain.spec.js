@@ -57,7 +57,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => {
   if (application) await closeElectron(application);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
 });
 
 test('there is one Captain: the sidebar entry creates it first, then just returns to it', { tag: '@smoke' }, async () => {
@@ -174,7 +174,9 @@ test('tell, ledger and read from the Captain terminal; a worker stuck on a confi
 
   await run(mainId, `clear; node "${CLI}" ledger`);
   await expect.poll(() => screen(mainId), { timeout: 15000 }).toMatch(/cap-x\s+「Worker x」\s+等你回复/);
-  await expect.poll(() => screen(mainId)).toContain('写周报');
+  // A wide character that no longer fits a row wraps, and ConPTY pads the row's last cell with a
+  // space (「写周 报」 in a narrow Windows column). The agent reads the ledger from stdout, not the screen.
+  await expect.poll(async () => (await screen(mainId)).replace(/\s+/g, '')).toContain('写周报');
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
   await run(mainId, `clear; node "${CLI}" read --id ${child}`);
   await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('用户：please write the report');

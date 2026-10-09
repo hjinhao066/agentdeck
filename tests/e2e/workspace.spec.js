@@ -48,7 +48,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => {
   if (application) await closeElectron(application);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
 });
 
 test('status lines under the composer, a clean reply, and an artifact from it', async () => {

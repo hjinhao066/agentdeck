@@ -57,7 +57,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => {
   if (app) await closeElectron(app);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
 });
 
 test('all raw terminals hold scrollback during output and input, then follow on click or bottom', async () => {

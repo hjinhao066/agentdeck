@@ -89,7 +89,7 @@ test.beforeEach(async ({}, testInfo) => {
 test.afterEach(async () => {
   if (page && !page.isClosed()) await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach((d) => d.close()));
   if (application) await closeApplication();
-  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
 });
 test('fresh Captain receives its complete multiline briefing after input is ready', async () => {
   const expected = await page.evaluate(() => MainCore.instructions(env.platform));
