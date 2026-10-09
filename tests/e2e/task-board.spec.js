@@ -576,9 +576,10 @@ test('exhausted Gemini dispatch switches tier, marks the session and tells the c
     QuotaCore.commandQuota = (store, cmd, ...args) => /gemini-[\d.]+-flash(?:-(?:low|medium|high))?(?:\s|$)/.test(cmd) || cmd === agy
       ? { out: true, state: 'exhausted', stale: false, fiveHour: 0, weekly: 0 }
       : window.switchGate(store, cmd, ...args);
-    QuotaCore.quotaFallback = (...args) => {
-      const plan = window.switchFallback(...args);
-      window.switchPlan = plan;
+    QuotaCore.quotaFallback = (store, cmd, ...args) => {
+      const plan = window.switchFallback(store, cmd, ...args);
+      // the Gemini dispatch's own plan: other sessions' quota checks (a tick's agy check) can run meanwhile on a slow machine
+      if (/gemini-[\d.]+-flash/.test(cmd)) window.switchPlan = plan;
       return plan.action === 'switch' ? { ...plan, cmd: fake } : plan;
     };
     TaskBoard.settings('gemini');
