@@ -396,8 +396,8 @@ test('without the new callbacks the heartbeat is exactly the old one', (t) => {
 
 test('the Captain briefing describes the automatic loop, stays static, and leaves rule 16 alone', () => {
   const M = require('../main-core');
-  const text = M.instructions('darwin');
-  assert.equal(text, M.instructions('darwin'));
+  const text = require('./fixtures/captain-rulebook').rulebook('darwin');
+  assert.equal(M.instructions('darwin'), M.instructions('darwin'));
   assert.match(text, /程序自动开一个和执行会话不同提供方的审查会话/); assert.match(text, /审查员的原话自动发回原执行会话返工/);
   assert.match(text, /连续失败两次 held，先由队长决定，不再自动重试/); assert.match(text, /选不出审查者（同一提供方或额度用尽）时卡片停在 review 并写明原因/);
   assert.match(text, /16\. 重要的活完成后，派 Gemini 3\.8 Flash/);

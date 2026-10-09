@@ -1,7 +1,7 @@
 # 队长交接（Relay handoff）
 
 队长换席位（Relay）、清空上下文或 AgentDeck 重启后，接任的队长靠两样东西接续：
-`briefing`（稳定规则，见 `main-core.js` 的 `instructions()`）和交接（动态状态）。
+`briefing`（稳定规则：`main-core.js` 的 `instructions()` 是核心提示词，细则在 `docs/captain/*.md`，用 `briefing --topic 名` 读）和交接（动态状态）。
 本页说明交接从哪里来、里面是什么、哪些事由程序保证。
 
 ## 文件，各有主人

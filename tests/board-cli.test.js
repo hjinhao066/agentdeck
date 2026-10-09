@@ -359,7 +359,8 @@ test('queue list/cancel send Captain requests, validate ids and document replace
     const help = (await runCli(['help'], {})).stdout;
     assert.match(help, /queue cancel --task-id/); assert.match(help, /replaces a changed command\/model/);
     const prompt = require('../main-core').instructions('darwin');
-    assert.match(prompt, /queue list；queue cancel --task-id/);
+    assert.match(prompt, /queue list｜queue cancel --task-id/);
+    assert.match(require('./fixtures/captain-rulebook').topic('commands'), /queue list；queue cancel --task-id 卡片或排队id；同卡 new 换命令\/模型会替换，移到 done\/todo 撤队/);
     assert.equal(prompt, require('../main-core').instructions('darwin', 'dynamic note must stay out'));
   } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -602,5 +603,6 @@ test('inbox help and the Captain briefing say a report is read once the user saw
   assert.equal(help.code, 0);
   assert.match(help.stdout, /汇报自动挂到你这一轮回复：用户在对话里看过这轮回复就算已读，不进「做完了你还没看」/);
   const M = require('../main-core');
-  for (const platform of ['darwin', 'win32']) assert.match(M.instructions(platform, '', false, 30), /report（挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说）/);
+  for (const platform of ['darwin', 'win32']) assert.match(M.instructions(platform, '', false, 30), /inbox：找用户、要用户介入、向用户汇报结论/);
+  assert.match(require('./fixtures/captain-rulebook').topic('inbox'), /report（挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说）/);
 });

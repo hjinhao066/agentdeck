@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const B = require('../board-core');
 const M = require('../main-core');
+const { rulebook } = require('./fixtures/captain-rulebook');
 const S = require('../schedule-core');
 
 test('a blank session offers Claude, Antigravity, Grok, Cursor CLI and Codex (ChatGPT), in that order', () => {
@@ -83,7 +84,7 @@ test('every --agent name offered anywhere resolves to a real preset, never the s
   const root = path.join(__dirname, '..');
   const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
   const offered = new Set();
-  for (const src of [read('board-cli.js'), M.instructions()]) {
+  for (const src of [read('board-cli.js'), rulebook()]) {
     for (const m of src.matchAll(/--agent ([a-z|-]+)/g)) m[1].split('|').filter(Boolean).forEach((a) => offered.add(a));
   }
   const accepted = /\[((?:'[a-z-]+',?\s*)+)\]\.includes\(agent\)/.exec(read('main-session.js'));
@@ -174,7 +175,7 @@ test('a launch only counts as started once the agent is identified; a Windows ti
 });
 
 test('队长 knows the providers, only verified models, and the routing preferences', () => {
-  const text = M.instructions();
+  const text = rulebook();
   for (const key of ['agy']) assert.ok(text.includes(B.commandForAgent(key)), key);
   assert.ok(text.includes('claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high'));
   assert.ok(text.includes('cursor-agent --force --model grok-4.7-high-fast'));
@@ -199,12 +200,13 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.match(agyLine, /claude-sonnet-4-6[^\n]*claude-opus-4-6-thinking[^\n]*gpt-oss-120b-medium/);
   assert.ok(!text.includes('gemini-3.1-pro-high'));
   // who gets what
-  const route = (needle) => text.split('\n').find((l) => l.startsWith('   - ') && l.includes(needle)) || '';
+  const routing = text.slice(text.indexOf('模型分工（用户点名优先）：'), text.indexOf('用多大的档位（effort）：'));
+  const route = (needle) => routing.split('\n').find((l) => l.startsWith('- ') && l.includes(needle)) || '';
   assert.match(route('UI 设计'), /Opus 5\.5[^\n]*最关键核心代码[^\n]*最终审核/);
   assert.match(route('重要代码'), /Sonnet 5\.5[^\n]*核心改动/);
-  assert.match(route('批量写代码'), /^   - Haiku 5\.5[^\n]*写测试[^\n]*CI[^\n]*--model claude-haiku-5-5[^\n]*--effort[^\n]*Sonnet 5\.5/);
+  assert.match(route('批量写代码'), /^- Haiku 5\.5[^\n]*写测试[^\n]*CI[^\n]*--model claude-haiku-5-5[^\n]*--effort[^\n]*Sonnet 5\.5/);
   assert.ok(!/GPT-6 Luna|gpt-6-luna/.test(text), 'Luna is no longer an execution fallback');
-  assert.ok(!text.split('\n').some((l) => l.startsWith('   - Codex')), 'no Codex routing line');
+  assert.ok(!routing.split('\n').some((l) => l.startsWith('- Codex')), 'no Codex routing line');
   assert.match(route('检索、整理'), /Gemini 3\.8 Flash[^\n]*中文[^\n]*不用 Gemini 3\.1 Pro/);
   assert.match(route('检索、整理'), /Gemini 周额度用尽时[^\n]*GPT-OSS[^\n]*Sonnet 4\.6[^\n]*Opus 4\.6/);
   assert.match(route('脏活'), /Cursor Grok 4\.7[^\n]*抓数据/);
@@ -230,7 +232,7 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.ok(text.indexOf('3. 目标清楚就派活') < text.indexOf('4. 派活单步原则'), 'the ask-or-dispatch rule comes before the dispatch rules');
   assert.match(text, /10\. 判断会话卡没卡先用 peek，至少等 5 分钟/);
   assert.match(text, /「待补充」[^\n]*自动执行/);
-  assert.ok(text.length <= M.BRIEFING_LIMIT, 'goes out as a prompt, not a file');
+  assert.ok(M.instructions().length <= M.CORE_LIMIT, 'what is pasted every time is only the core');
 });
 
 test('队长 picks the effort: simple medium, ordinary code high, complex or failed xhigh, critical max', () => {
@@ -239,7 +241,7 @@ test('队长 picks the effort: simple medium, ordinary code high, complex or fai
     'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-opus-5-5-xhigh', 'claude-opus-5-5-max',
     'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-xhigh', 'claude-sonnet-5-5-max',
   ]);
-  const lines = M.instructions().split('\n');
+  const lines = rulebook().split('\n');
   const tierOf = (cue) => {
     const l = lines.find((x) => x.includes(cue));
     assert.ok(l, cue);
@@ -252,12 +254,12 @@ test('队长 picks the effort: simple medium, ordinary code high, complex or fai
   // Cursor's tier is the exact model id, no other suffix is ever offered
   const cursor = lines.find((l) => l.includes('Cursor 把档位写在模型名最后'));
   for (const id of M.CURSOR_MODELS) assert.ok(cursor.includes(id), id);
-  assert.ok(!/claude-(?:opus|sonnet)-5-5-(?!medium|high|xhigh|max)/.test(M.instructions()));
+  assert.ok(!/claude-(?:opus|sonnet)-5-5-(?!medium|high|xhigh|max)/.test(rulebook()));
   // Antigravity's tier is the model id's suffix, never --effort (it would switch models)
   const agy = lines.find((l) => l.includes('Antigravity：'));
   assert.match(agy, /gemini-3\.8-flash-low、gemini-3\.8-flash-medium、gemini-3\.8-flash-high/);
   assert.match(agy, /绝对不要给 agy 加 --effort/);
-  assert.match(M.instructions(), /Antigravity 的 Gemini Flash 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max）/);
+  assert.match(rulebook(), /Antigravity 的 Gemini Flash 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max）/);
 });
 
 test('队长 instructions call the board CLI the way the column\'s shell reads env vars', () => {
@@ -265,13 +267,16 @@ test('队长 instructions call the board CLI the way the column\'s shell reads e
   assert.equal(M.boardCli('darwin'), 'node "$AGENTDECK_BOARD_CLI"');
   const win = M.instructions('win32');
   const mac = M.instructions('darwin');
-  for (const cmd of ['ledger', 'new --title', 'tell --to', 'read --id', 'receipts', 'answer --to']) {
-    assert.ok(win.includes(`node "$env:AGENTDECK_BOARD_CLI" ${cmd}`), `win ${cmd}`);
-    assert.ok(mac.includes(`node "$AGENTDECK_BOARD_CLI" ${cmd}`), `mac ${cmd}`);
+  // The prefix is written once, above the command list, the way this column's shell reads it.
+  assert.ok(win.includes('命令，前面都加 node "$env:AGENTDECK_BOARD_CLI"：\n'), 'win prefix');
+  assert.ok(mac.includes('命令，前面都加 node "$AGENTDECK_BOARD_CLI"：\n'), 'mac prefix');
+  for (const text of [win, mac]) {
+    const list = text.slice(text.indexOf('命令，前面都加'), text.indexOf('做下面的事之前'));
+    for (const cmd of ['ledger', 'new --title', 'tell --to', 'read --id', 'receipts', 'answer --to']) assert.match(list, new RegExp(`(?:^ {3}|｜)${cmd}`, 'm'), cmd);
   }
   // Terminal commands use PowerShell; the background Bash tool uses POSIX
   // syntax on Windows too. Only its explicitly labelled rule may contain it.
-  const bashRule = win.split('\n').find((line) => line.startsWith('8. '));
+  const bashRule = win.split('\n').find((line) => line.startsWith('- 回执监听：'));
   assert.match(bashRule, /Bash 工具.*node "\$AGENTDECK_BOARD_CLI" receipts --wait/);
   assert.ok(!/"\$AGENTDECK_BOARD_CLI"/.test(win.split('\n').filter((line) => line !== bashRule).join('\n')));
   assert.ok(!/\$env:/.test(mac));

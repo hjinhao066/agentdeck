@@ -59,6 +59,8 @@
       "discussion-runner.js",
       "discussion-command.js",
       "docs/discuss.md",
+      "docs/captain/**",
+      "captain-rules.js",
       "board-cli.js",
       "receipt-listener-core.js",
       "board-credentials.js",

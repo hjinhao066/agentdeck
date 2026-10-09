@@ -8,6 +8,7 @@ const ChatCore = require('../chat-core');
 const BoardCore = require('../board-core');
 const M = require('../main-core');
 const Q = require('../quota-core');
+const { rulebook, topic } = require('./fixtures/captain-rulebook');
 
 const read = (name) => fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
 const PLATFORMS = ['darwin', 'win32'];
@@ -45,14 +46,15 @@ function grown(platform, length) {
   return rules + '规'.repeat(length - rules.length - closing.length) + closing;
 }
 
-test('the Captain briefing may be 10000 characters; every other prompt keeps the 8000 cut', () => {
+test('the Captain core prompt stays within 2500 characters; a briefing send may be 10000, every other prompt keeps the 8000 cut', () => {
   assert.equal(M.LONG_PROMPT, 8000);
   assert.equal(M.BRIEFING_LIMIT, 10000);
+  assert.equal(M.CORE_LIMIT, 2500);
   for (const platform of PLATFORMS) for (const legacy of [false, true]) for (const cap of [5, 30, 50]) {
     const brief = M.instructions(platform, '', legacy, cap);
     assert.ok(brief.endsWith(M.AUTONOMOUS_CONTINUATION), platform);
-    assert.ok((brief + M.SAVER_RESUME).length <= M.BRIEFING_LIMIT,
-      `${platform}${legacy ? ' legacy' : ''}：队长提示词超出一次粘贴上限 ${M.BRIEFING_LIMIT}。调高 MainCore.BRIEFING_LIMIT 并按 docs/captain-briefing-checklist.md 重新取证，不要删规则凑字数`);
+    assert.ok((brief + M.SAVER_RESUME).length <= M.CORE_LIMIT,
+      `${platform}${legacy ? ' legacy' : ''}：队长核心提示词 ${brief.length} 字，超出 ${M.CORE_LIMIT}。把不是每一轮都要守的规则挪进 docs/captain/ 的规范文件并在触发清单里加一行，不要删规则凑字数`);
   }
 });
 
@@ -67,7 +69,7 @@ test('no briefing line passes the line-reading limit, so a terminal that takes p
 test('the token saver resend reaches the Captain whole on Mac and Windows, closing and 读看板继续 included', async () => {
   await Promise.all(PLATFORMS.flatMap((platform) => [false, true].map(async (legacy) => {
     const text = M.instructions(platform, '', legacy) + M.SAVER_RESUME, t = terminal();
-    assert.ok(text.length > M.LONG_PROMPT, 'longer than an ordinary prompt may be');
+    assert.ok(text.length <= M.CORE_LIMIT, 'the core is all that is pasted again');
     assert.ok(await t.send(text, BRIEFING), platform);
     assert.deepEqual(t.saved, [], platform + ': nothing goes to a file');
     assert.deepEqual(t.typed, ['\x1b[200~' + text + '\x1b[201~', '\r'], platform + ': one paste, one Enter');
@@ -117,7 +119,7 @@ test('only the three briefing sends carry the larger limit; the queue keeps the 
   const session = read('main-session.js');
   // the first briefing, the rebrief after a context reset, and the token saver's steps
   assert.equal(session.split('inlineLimit: M.BRIEFING_LIMIT').length - 1, 3);
-  assert.match(session, /host\.sendWhenReady\(col, briefingText\(note\), \{\n\s+silent: true, onSent: sent, guardUserInput: true, inlineLimit: M\.BRIEFING_LIMIT,/);
+  assert.match(session, /host\.sendWhenReady\(col, text, \{\n\s+silent: true, onSent: sent, guardUserInput: true, inlineLimit: M\.BRIEFING_LIMIT,/);
   assert.match(session, /host\.sendWhenReady\(op\.col, briefingText\(\), \{\n\s+silent: true, guardUserInput: true, requireIdle: true, inlineLimit: M\.BRIEFING_LIMIT,/);
   assert.ok(session.includes("saverSend(op, briefingText() + M.SAVER_RESUME, 'briefing', true"));
   for (const file of ['main-session.js', 'renderer.js', 'chat-ui.js', 'task-board-ui.js', 'schedule-core.js']) {
@@ -129,7 +131,8 @@ test('only the three briefing sends carry the larger limit; the queue keeps the 
 
 test('the briefing explains the DeepSeek fallback: when, how, what for, and that it costs money on the Mac only', () => {
   for (const platform of PLATFORMS) {
-    const text = M.instructions(platform);
+    assert.match(M.instructions(platform), /models：[^\n]*用 DeepSeek 兜底/, platform + ': the core says when to read it');
+    const text = topic('models');
     const agents = text.slice(text.indexOf('可用 agent：'), text.indexOf('模型分工（用户点名优先）：'));
     const routing = text.slice(text.indexOf('模型分工（用户点名优先）：'), text.indexOf('用多大的档位（effort）：'));
     assert.ok(agents.includes(`DeepSeek 兜底（仅 Mac，按量扣费，用户已同意启用）：new --command "${DEEPSEEK}"，必须写绝对路径`), platform);
@@ -144,14 +147,16 @@ test('the briefing explains the DeepSeek fallback: when, how, what for, and that
 // These four went missing once, when a rewrite made room under the old limit.
 test('qualifiers a shorter briefing once dropped are still there', () => {
   for (const platform of PLATFORMS) {
-    const text = M.instructions(platform);
+    const text = rulebook(platform);
     assert.match(text, /Claude Code 额度受限时，可改用 Cursor 里的同名模型（claude-opus-5-5-high、claude-sonnet-5-5-high）。/, platform);
     assert.match(text, /agy 第三方模型的剩余额度目前无法读取，遇到限流就换另一个已实测模型。/, platform);
     assert.match(text, /只对 Gemini Flash 写档位后缀：[^\n]*；其余模型必须使用上面列出的完整 ID。/, platform);
     assert.match(text, /quota {3}只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的；未知不代表可用/, platform);
     assert.match(text, /额度轮换：quota 只读被动观测，未知不代表可用，不要因此换模型。/, platform);
     assert.match(text, /Opus 留给 UI、最关键的代码和终审；重要代码用 Sonnet。/, platform);
-    for (let n = 1; n <= 17; n++) assert.match(text, new RegExp(`^${n}\\. `, 'm'), `${platform} rule ${n}`);
+    // Rule 1 is the core's first red line; rules 2–17 keep their numbers in the rule files.
+    assert.match(M.instructions(platform), /^- 不要在这一列里改文件、跑任务或写实现过程，实际工作和返工都交给别的会话。你自己只做：读写进度看板和有效决定文件，以及 capacity 规范里的只读 sysctl。例外：各家都没额度而你还有额度时可以亲自动手，活不能停。$/m, platform);
+    for (let n = 2; n <= 17; n++) assert.match(text, new RegExp(`^${n}\\. `, 'm'), `${platform} rule ${n}`);
   }
 });
 
@@ -180,7 +185,7 @@ test('discussion instructions preserve rules 3, 4, 5 and 9 verbatim from the mai
     9: '9. 队员向你提问、或停在确认/权限提示时，你来拿主意：先看清它问的是什么，不盲按 y 或 enter；有把握就用 tell 或 answer 回复它；没把握，或者涉及删除数据、花钱、对外发布这类不可逆的事，再请用户决定，并说清要用户决定什么。',
   };
   for (const platform of PLATFORMS) for (const legacy of [false, true]) {
-    const lines = M.instructions(platform, '', legacy).split('\n');
+    const lines = rulebook(platform, '', legacy).split('\n');
     for (const [number, expected] of Object.entries(baseline)) {
       assert.equal(lines.find((line) => line.startsWith(number + '. ')), expected, `${platform} rule ${number}`);
     }
@@ -190,13 +195,16 @@ test('discussion instructions preserve rules 3, 4, 5 and 9 verbatim from the mai
 test('the briefing keeps Chinese and English discussion triggers plus discovery, help and safe recovery under the paste limit', () => {
   for (const platform of PLATFORMS) for (const legacy of [false, true]) for (const cap of [5, 30, 50]) {
     const text = M.instructions(platform, '', legacy, cap);
-    const line = text.split('\n').find((value) => value.includes('discuss start --topic'));
-    assert.ok(line, platform + ': a Captain can start a discussion');
+    // the phrases that start one are in the core, pasted every time; discovery and recovery are in the commands rule file
+    const core = text.split('\n').find((value) => value.includes('discuss start --topic'));
+    assert.ok(core, platform + ': a Captain can start a discussion');
+    for (const trigger of ['讨论一下', 'group discussion', 'do a group discussion', 'group chat', 'discuss help']) assert.ok(core.includes(trigger), `${platform} core: ${trigger}`);
+    const line = topic('commands').split('\n').find((value) => value.includes('discuss start --topic'));
     for (const trigger of ['讨论一下', 'group discussion', 'do a group discussion', 'group chat']) assert.ok(line.includes(trigger), `${platform}: ${trigger}`);
     assert.match(line, /status 查全部/, platform + ': a new Captain can discover existing discussion IDs');
     assert.match(line, /status\/wait\/resume\/cancel --id ID/, platform);
     assert.match(line, /discuss help/, platform + ': installed Captains have a readable usage entry');
     assert.match(line, /unknown.*核对旧请求.*确认结束.*resume --retry JOB --confirmed-ended JOB/, platform);
-    assert.ok((text + M.SAVER_RESUME).length <= 10000, `${platform}: discussion commands and existing rules still fit in one complete paste`);
+    assert.ok((text + M.SAVER_RESUME).length <= M.CORE_LIMIT, `${platform}: discussion commands and the red lines still fit in the core`);
   }
 });

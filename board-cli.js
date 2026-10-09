@@ -249,7 +249,9 @@ function usage() {
     '                                           --boost on = 临时拉满: on battery, open sessions up to the normal limit instead of the battery cap\n' +
     '                                           (用户说「强度拉满」); ends at --for/--until, when plugged in, or --boost off. The battery mode itself stays on.\n' +
     '                                           --mode off = 不限制 for good, auto = 没插电时按 --cap 限制同时干活的会话数\n' +
-    '  briefing                                 current Captain instructions, read-only\n' +
+    '  briefing                                 the Captain core prompt, read-only\n' +
+    '  briefing --topic <name>|all|list          one of the Captain rule files (models, dispatch, review, inbox,\n' +
+    '                                           sessions, capacity, release, handoff, commands), read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
     '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
     '  worktree clean [--apply --path copy]      list copies a person may remove; deletion needs --apply and each --path\n' +
@@ -621,6 +623,12 @@ async function main() {
     }
     const response = await request({ action: 'main-settings', op: 'battery', input }, false);
     process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
+  if (action === 'briefing' && args.topic !== undefined) {
+    // Rule files are read where the CLI is installed; the running app is not asked.
+    try { process.stdout.write(`${require('./captain-rules').briefing(args.topic)}\n`); }
+    catch (err) { fail(err.message); }
     return;
   }
   if (action === 'quota' || action === 'briefing' || action === 'handoff') {

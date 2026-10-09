@@ -133,6 +133,15 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   fields, rate limited, stoppable and resettable in Settings. A caller-supplied `automation` marker is
   dropped; the page honors it only from the gate's own stamp (empty `callerId`). Never let a script
   borrow the phone page, a terminal token or the user's identity.
+- Captain prompt (`MainCore.instructions`, `captain-rules.js`, `docs/captain/*.md`): the pasted
+  prompt is only the core (identity, red lines, one line per command, the "before X read Y"
+  list), at most `MainCore.CORE_LIMIT` characters. Every other rule is in a rule file read with
+  `briefing --topic <name>`; `MainCore.BRIEFING_TOPICS` and the files must match. Never drop a
+  rule to make room: move it to a rule file and add its trigger. A rule the program enforces
+  stays out of the core. A user's `~/.agents/captain/<topic>.md` is appended, never a
+  replacement. A new model context (new Captain, clear, Relay) gets the core; an app restart
+  that brings the same conversation back (`mainSession.briefed` matches) gets only
+  `MainCore.restartNotice`, never the prompt again.
 - Task boards (`task-board.js`, `task-heartbeat.js`): shared UTF-8 JSON in
   `~/.agents/boards/tasks`, fresh reads and atomic writes; invalid synced JSON
   is never overwritten. UI uses the fixed `TaskBoard` bridge documented in

@@ -2261,7 +2261,7 @@ function buildColumn(col, isFresh) {
           saveConfig();
         }
         queueInitialPrompt(col, col.cmd ? 700 : 0);
-        MainSession.noteColdColumn(col, isFresh);
+        MainSession.noteColdColumn(col, isFresh, resumedAgent);
       }
     };
     reconnect();

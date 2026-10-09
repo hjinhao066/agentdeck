@@ -4,8 +4,10 @@ const os = require('os');
 const path = require('path');
 const M = require('../../main-core');
 
-// The Captain briefing is the one prompt allowed past the ordinary 8000-character
-// cut. These tests send it through the real window, a real PTY (ConPTY on
+// A briefing send is the one prompt allowed past the ordinary 8000-character cut
+// (up to MainCore.BRIEFING_LIMIT). The Captain's own prompt is now the short core,
+// far below either limit; the 10000-character cases keep proving the ceiling.
+// These tests send both through the real window, a real PTY (ConPTY on
 // Windows) and a stand-in agent that writes down exactly what reached its stdin.
 // Two stand-ins: one reads lines, one asks for bracketed paste like Claude Code
 // and records its raw input. AgentDeck pastes when the terminal was asked to and
@@ -85,10 +87,10 @@ test.afterEach(async () => {
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
-test('the Captain\'s first briefing, longer than an ordinary prompt may be, reaches a line-reading agent whole', async () => {
+test('the Captain\'s first briefing, the short core, reaches a line-reading agent whole', async () => {
   await launch();
   const brief = await briefing();
-  expect(brief.length).toBeGreaterThan(M.LONG_PROMPT);
+  expect(brief.length).toBeLessThanOrEqual(M.CORE_LIMIT);
   await expect.poll(() => received(CAPTAIN).length, { timeout: 30000 }).toBeGreaterThan(0);
   const got = received(CAPTAIN)[0];
   evidence('first briefing', await way(CAPTAIN), brief, got);
