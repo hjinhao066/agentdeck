@@ -437,8 +437,9 @@ again with the current provider, model and effort instructions.
   refused with a message telling the 队长 what to use instead. Haiku 5.5 is allowed
   (Claude Code `--model claude-haiku-5-5 --effort medium|high`, measured on claude
   2.1.294; Cursor's `claude-haiku-5-5-<tier>` and `claude-haiku-5-5-thinking-<tier>`
-  pass the check too) and is the 队长's first choice for simple, lightweight work;
-  Codex GPT-6 Luna is the fallback when Claude quota runs short.
+  pass the check too) and is the 队长's first choice for simple, lightweight work,
+  bulk code, tests and CI/CD fixes; the 队长 does not hand execution work to Codex
+  (Sol/Luna) for now, so ChatGPT quota is left alone unless the user names it.
   On macOS/Linux, app launches invoke the Codex binary directly so a shell
   function that adds `--yolo` cannot duplicate the explicit bypass flag.
   The 队长 can read observed subscription quotas with `quota` and switches
@@ -1218,7 +1219,7 @@ Both paths use the same code on macOS and Windows (agy's Windows config is `%USE
 
 A prompt that carries an image path (for example a screenshot) is turned into an attachment by Claude Code, which says "Pasting…" in its footer while it reads the file and drops an Enter pressed meanwhile. AgentDeck therefore waits (at most 30 s) until that footer is gone before it presses Enter, so the task is submitted instead of sitting in the input box.
 
-The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. When every Claude seat, Codex, Cursor and Gemini is exhausted or below the threshold and work must not stop, the briefing lets the Captain open a pay-as-you-go DeepSeek-backed Claude Code (`claude-ds` by absolute path, Mac only) for simple to medium work; it is outside every measured quota pool, so it opens while the subscriptions wait. Notification and token-saver controls share the Settings dialog.
+The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5`, `--model claude-sonnet-5-5` or `--model claude-haiku-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. When every Claude seat, Codex, Cursor and Gemini is exhausted or below the threshold and work must not stop, the briefing lets the Captain open a pay-as-you-go DeepSeek-backed Claude Code (`claude-ds` by absolute path, Mac only) for simple to medium work; it is outside every measured quota pool, so it opens while the subscriptions wait. Notification and token-saver controls share the Settings dialog.
 
 Claude's macOS quota reader and seat-isolated Relay are described in
 [Claude usage API](docs/claude-usage-api.md). Claude percentages in quota UI and
