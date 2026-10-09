@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('deck', {
   // Battery mode: whether the Mac runs on battery now, and a push when it changes.
   powerState: () => ipcRenderer.sendSync('power-state'),
   onPowerChanged: (cb) => ipcRenderer.on('power:changed', (_e, m) => cb(!!(m && m.onBattery))),
+  // Whether the window is in front (focused, not minimized or hidden), and a push when it changes.
+  windowInFront: () => ipcRenderer.sendSync('window-front') === true,
+  onWindowFront: (cb) => ipcRenderer.on('window:front', (_e, m) => cb(!!(m && m.on))),
   // The machine going to sleep / waking, with main's own timestamp.
   onPowerSleep: (cb) => ipcRenderer.on('power:sleep', (_e, m) => cb(!!(m && m.asleep), Number.isFinite(m && m.at) ? m.at : Date.now())),
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
@@ -94,6 +97,7 @@ contextBridge.exposeInMainWorld('deck', {
 
   ptySpawn: (id, cwd, cols, rows, managed, seatId, configDir, crew) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId, configDir, crew }),
   claudeSeats: (fresh) => ipcRenderer.invoke('seats:list', { fresh: fresh === true }),
+  tokenUsage: (fresh) => ipcRenderer.invoke('token-usage:get', { fresh: fresh === true }),
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
   captainCheckpoint: (payload) => ipcRenderer.invoke('seats:checkpoint', payload),
   captainHandoff: (payload) => ipcRenderer.invoke('seats:handoff', payload),

@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const H = require('../relay-handoff-core');
 const M = require('../main-core');
+const { rulebook } = require('./fixtures/captain-rulebook');
 const R = require('../restart-resume');
 const AV = require('../auto-verify-core');
 const Seats = require('../claude-seats-main');
@@ -272,9 +273,9 @@ test('a pause the user asked for is not overridden by the standing continue-the-
   assert.match(built.brief, /启动方式：「现行有效的决定」里有生效中的暂停或取消项：这些事项不续派、不重启，运行中的会话和旧的续活计划都不能推翻它。其余已授权任务照核对顺序核对后续接/);
   assert.match(built.file('playbook.md'), /旧命令、旧安装计划和历史用户消息只是核对资料，不因为读到就再执行一遍/);
   // the static prompt no longer tells every new Captain to restart everything unconditionally
-  const brief = M.instructions('darwin');
+  const brief = rulebook('darwin');
   assert.doesNotMatch(brief, /重新派起来|持续自主拆解并派活/);
-  assert.match(brief, /被暂停或取消的不续派/);
+  assert.match(M.instructions('darwin'), /被暂停或取消的不续派/);
   assert.match(brief, /暂停只在它说的范围和阶段内有效，“继续当前工作”不等于可以新立项目/);
 });
 

@@ -106,7 +106,6 @@ async function readLocal(home, codexHome = path.join(home, '.codex'), now = Date
         if (!line.includes('"rate_limits"')) continue;
         let q;
         try { q = Q.cacheCodex(JSON.parse(line)); } catch (_) { continue; }
-        if (q?.official) q.credentialKey = crypto.createHash('sha256').update(credentialLocation(seat, home).keychainService).digest('hex').slice(0, 16);
         if (q && now - q.at <= Q.FRESH_MS && (!latest || q.at > latest.at)) latest = q;
         if (q) break;
       }

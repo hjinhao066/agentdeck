@@ -112,7 +112,7 @@ function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AU
 let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
-  boardResponses: {}, boardPositions: {}, globalViewMode: 'term',
+  boardResponses: {}, boardPositions: {}, todoDeliveries: {}, todoInbox: {}, globalViewMode: 'term',
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
@@ -122,13 +122,14 @@ let config = {
   quotaWarmup: QuotaWarmupCore.normalizeSettings(),
 
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
-  folders: [], archived: [], schedules: [], navArchivedOpen: false, crewModelsCollapsed: [], artifactsCollapsed: [],
+  folders: [], archived: [], schedules: [], navArchivedOpen: false, crewOpen: true, crewModelsCollapsed: [], artifactsCollapsed: [],
   captainTokenSaver: MainCore.tokenSaverSettings(),
   concurrencyCap: MainCore.concurrencyCap(), captainHandoffOverview: MainCore.handoffBudget(),
   batteryMode: BatteryCore.MODE_DEFAULT, batteryConcurrency: BatteryCore.CAP_DEFAULT,
 };
 const saved = window.deck.loadConfig();
 config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
+config.todoShortcut = TodoShortcutCore.normalize(saved?.todoShortcut);
 // Persist only parsed observations, never terminal text or credentials.
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {
@@ -167,12 +168,16 @@ if (saved) {
   }));
   if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
   config.navArchivedOpen = !!saved.navArchivedOpen;
-  config.crewModelsCollapsed = SidebarCore.normalizeCollapsedModels(saved.crewModelsCollapsed);
+  // crewOpen and crewModelsCollapsed are not restored: the crew list opens fully at every launch.
   config.resumeOnRestart = window.RestartResume.resumeEnabled(saved);
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   // 待我处理 (attention-ui.js normalizes and migrates it); without this every restart emptied the page.
   if (saved.attention && typeof saved.attention === 'object') config.attention = saved.attention;
+  if (saved.todoDeliveries && typeof saved.todoDeliveries === 'object' && !Array.isArray(saved.todoDeliveries)) {
+    config.todoDeliveries = Object.fromEntries(Object.entries(saved.todoDeliveries).filter(([id, accepted]) => /^todo-(?:error-)?[a-f0-9]{64}$/.test(id) && accepted === true));
+  }
+  if (saved.todoInbox && typeof saved.todoInbox === 'object' && !Array.isArray(saved.todoInbox)) config.todoInbox = saved.todoInbox;
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
   config.batteryMode = BatteryCore.normalizeMode(saved.batteryMode);
@@ -192,8 +197,13 @@ if (saved) {
       completedOpen: v.completedOpen === true,
     };
   }
+  if (saved.tokenUsageView?.days === 30) config.tokenUsageView = { days: 30 };
   // Artifacts: the projects the user folded away
   config.artifactsCollapsed = (Array.isArray(saved.artifactsCollapsed) ? saved.artifactsCollapsed : []).filter((k) => typeof k === 'string' && k.length <= 120).slice(0, 500);
+  // 队长's 交付文件 panel: folded away or not, its two lists if changed, and the index of what it found (DeliverablesCore)
+  if (saved.chatDeliverablesOpen === false) config.chatDeliverablesOpen = false;
+  if (saved.deliverableRules && typeof saved.deliverableRules === 'object') config.deliverableRules = DeliverablesCore.normalizeRules(saved.deliverableRules);
+  if (saved.chatDeliverables && typeof saved.chatDeliverables === 'object') config.chatDeliverables = DeliverablesCore.normalizeIndex(saved.chatDeliverables, DeliverablesCore.normalizeRules(config.deliverableRules));
   if (saved.activeView === 'board') config.activeView = 'board';
   if (saved.side && typeof saved.side === 'object') config.side = saved.side;
   config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
@@ -2259,7 +2269,7 @@ function buildColumn(col, isFresh) {
           saveConfig();
         }
         queueInitialPrompt(col, col.cmd ? 700 : 0);
-        MainSession.noteColdColumn(col, isFresh);
+        MainSession.noteColdColumn(col, isFresh, resumedAgent);
       }
     };
     reconnect();
@@ -2429,6 +2439,54 @@ function trimTrail(text, s, e) {
   while (e > s && /[\s.,;:!?)\]}>'"]/.test(text[e - 1])) e--;
   return e;
 }
+// The relative file references in one run of [\w.+@%:/-], i.e. the matches of
+//   /(?:\.{1,2}\/)?(?:[\w.+@%-]+\/)+[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?
+//    |[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}:\d+(?::\d+)?/g
+// ("dir/…/name.ext[:line[:col]]" or "name.ext:line[:col]"), found in one pass.
+// That pattern backtracked across the rest of the run from every position: a
+// 20,000-character token with a dot in it (a JWT, a dotted version list) took
+// seconds to half a minute.
+function relativeLinks(run) {
+  const n = run.length, out = [];
+  const isDigit = (i) => { const c = run.charCodeAt(i); return c >= 48 && c <= 57; };   // NaN past the end
+  const isAlnum = (i) => { const c = run.charCodeAt(i) | 32; return isDigit(i) || (c >= 97 && c <= 122); };
+  const isW = (i) => isAlnum(i) || '_.+@%-'.includes(run[i] || ' ');   // [\w.+@%-]
+  // From the right: wEnd, the end of the [\w.+@%-] stretch at i; aEnd, the end of
+  // the letters and digits at i; dot, the stretch's last "." before a letter or
+  // digit, at i or later; name, where the last usable "name.ext" starts among the
+  // stretches reachable from i through "stretch/" steps (the regex's greedy
+  // directory part settles on the last one).
+  const wEnd = new Int32Array(n + 1), aEnd = new Int32Array(n + 1), dot = new Int32Array(n + 1).fill(-1), name = new Int32Array(n + 1).fill(-1);
+  wEnd[n] = n; aEnd[n] = n;
+  for (let i = n - 1; i >= 0; i--) {
+    aEnd[i] = isAlnum(i) ? aEnd[i + 1] : i;
+    if (!isW(i)) { wEnd[i] = i; continue; }
+    wEnd[i] = wEnd[i + 1];
+    dot[i] = dot[i + 1] >= 0 ? dot[i + 1] : run[i] === '.' && isAlnum(i + 1) ? i : -1;
+    const next = run[wEnd[i]] === '/' ? name[wEnd[i] + 1] : -1;
+    name[i] = next >= 0 ? next : run[i] !== '.' && dot[i] >= 0 ? i : -1;
+  }
+  const lineSuffix = (p) => {   // (?::\d+(?::\d+)?)?
+    if (run[p] !== ':' || !isDigit(p + 1)) return p;
+    let e = p + 1;
+    while (isDigit(e)) e++;
+    if (run[e] === ':' && isDigit(e + 1)) { e++; while (isDigit(e)) e++; }
+    return e;
+  };
+  for (let s = 0; s < n;) {
+    let e = -1;
+    const q = isW(s) && run[wEnd[s]] === '/' ? name[wEnd[s] + 1] : -1;
+    // "dir/…/name.ext": up to 8 letters or digits after the dot, then an optional :line[:col]
+    if (q >= 0) e = lineSuffix(dot[q] + 1 + Math.min(aEnd[dot[q] + 1] - dot[q] - 1, 8));
+    // "name.ext:line": the extension is all of the stretch after its last dot
+    else if (isW(s) && run[s] !== '.' && dot[s] >= 0 && aEnd[dot[s] + 1] === wEnd[s] && wEnd[s] - dot[s] - 1 <= 8 &&
+      run[wEnd[s]] === ':' && isDigit(wEnd[s] + 1)) e = lineSuffix(wEnd[s]);
+    if (e < 0) { s++; continue; }
+    out.push({ index: s, text: run.slice(s, e) });
+    s = e;
+  }
+  return out;
+}
 function findLinks(text) {
   const out = [];
   let m;
@@ -2469,14 +2527,22 @@ function findLinks(text) {
   // Relative references the agents print constantly: "src/renderer.js:406",
   // "main.js:128". To stay quiet on ordinary prose ("and/or", "Node.js"), a
   // candidate needs either a slash-path ending in a dotted filename, or a bare
-  // filename with a :line suffix. The main process anchors these to the
-  // column's live shell cwd before resolving.
-  const relRe = /(?:\.{1,2}\/)?(?:[\w.+@%-]+\/)+[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?|[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}:\d+(?::\d+)?/g;
-  while ((m = relRe.exec(text))) {
-    const s = m.index, e = trimTrail(text, s, s + m[0].length);
-    if (s > 0 && /[\w/~.\\-]/.test(text[s - 1])) continue; // mid-token or tail of an absolute path
-    if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL or absolute path
-    out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
+  // filename with a :line suffix (relativeLinks has the exact rules). The main
+  // process anchors these to the column's live shell cwd before resolving.
+  // A match lies inside one run of the characters it can contain and holds a
+  // ".ext": search each such run on its own and skip runs without one, or runs
+  // a URL or absolute path already covers (every match there would overlap it).
+  const runRe = /[\w.+@%:/-]+/g;
+  let run;
+  while ((run = runRe.exec(text))) {
+    if (!/\.[A-Za-z0-9]/.test(run[0])) continue;
+    if (out.some((o) => run.index >= o.start && run.index + run[0].length <= o.end)) continue;
+    for (const rel of relativeLinks(run[0])) {
+      const s = run.index + rel.index, e = trimTrail(text, s, s + rel.text.length);
+      if (s > 0 && /[\w/~.\\-]/.test(text[s - 1])) continue; // mid-token or tail of an absolute path
+      if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL or absolute path
+      out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
+    }
   }
   return out;
 }
@@ -2619,6 +2685,8 @@ function removeCol(col) {
 function detachColumn(col, keepReplay) {
   const t = terms.get(col.id);
   const idx = columns.indexOf(col);
+  // Its place in the deck the user sees: 队长's background sessions are in `columns` but not there.
+  const deckIdx = deckColumns().indexOf(col);
   if (selectedBoardId === col.id) {
     restoreBoardTerminal();
     selectedBoardId = null;
@@ -2638,7 +2706,7 @@ function detachColumn(col, keepReplay) {
   // the user happens to click another column.
   if (focusedId === col.id) {
     focusedId = null;
-    if (columns.length) focusColumnByIndex(Math.min(Math.max(idx, 0), columns.length - 1));
+    if (columns.length) focusColumnByIndex(deckIdx >= 0 ? deckIdx : Math.min(Math.max(idx, 0), columns.length - 1));
   }
   updateColumnStyles();
 }
@@ -3098,16 +3166,18 @@ const cwdInput = document.getElementById('cwdInput');
 const cmdInput = document.getElementById('cmdInput');
 const dlgTitle = document.getElementById('dlgTitle');
 const cmdLockedHint = document.getElementById('cmdLockedHint');
-let editIndex = null;
+// The column itself, not its position: 队长 opens and archives sessions while the dialog is open.
+let editColumn = null;
 
 function openDialog(idx) {
-  editIndex = (typeof idx === 'number') ? idx : null;
-  dlgTitle.textContent = editIndex === null ? '添加列' : '编辑列';
-  titleInput.value = editIndex === null ? '' : columnLabel(columns[editIndex]);
-  cwdInput.value = editIndex === null ? '' : (columns[editIndex].cwd || '');
-  cmdInput.value = editIndex === null ? '' : (columns[editIndex].cmd || '');
+  if (typeof idx === 'number' && !columns[idx]) return;   // that column is already gone
+  editColumn = typeof idx === 'number' ? columns[idx] : null;
+  dlgTitle.textContent = editColumn === null ? '添加列' : '编辑列';
+  titleInput.value = editColumn === null ? '' : columnLabel(editColumn);
+  cwdInput.value = editColumn === null ? '' : (editColumn.cwd || '');
+  cmdInput.value = editColumn === null ? '' : (editColumn.cmd || '');
   // A 网页版 ChatGPT session has no launch command to change.
-  const web = editIndex !== null && columns[editIndex].executor === 'chatgpt-web';
+  const web = editColumn !== null && editColumn.executor === 'chatgpt-web';
   cmdInput.disabled = web;
   dlg.querySelectorAll('.preset').forEach((b) => { b.disabled = web; });
   cmdLockedHint.hidden = !web;
@@ -3124,12 +3194,17 @@ document.getElementById('dlgSave').onclick = () => {
   const title = titleInput.value.trim() || 'Agent';
   const cwd = cwdInput.value.trim();
   const cmd = cmdInput.value.trim();
-  if (editIndex === null) {
+  if (editColumn === null) {
     addColumn({ title, displayTitle: titleInput.value.trim() ? title : '', cwd, cmd, manualTitle: titleInput.value.trim() !== '' });
     dlg.close();
     return;
   }
-  const col = columns[editIndex];
+  const col = editColumn;
+  if (!columns.includes(col)) {
+    showToast(`「${columnLabel(col)}」已经关闭或归档，修改没有保存`);
+    dlg.close();
+    return;
+  }
   const needsRespawn = (col.cwd || '') !== cwd || (col.cmd || '') !== cmd;
   const titleChanged = title !== columnLabel(col);
   if ((col.cmd || '') !== cmd) {
@@ -3611,6 +3686,12 @@ window.deck.onBoardCommand(async (message) => {
     } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
   }
   // 队长's commands: only its own column may use them.
+  if (message.action === 'main-todo-delivery' || message.action === 'main-todo-error') {
+    Promise.resolve().then(() => MainSession.handle(message, caller)).then(
+      (response) => window.deck.boardRespond({ requestId: message.id, ...response }),
+      (error) => window.deck.boardRespond({ requestId: message.id, done: true, error: error.message }));
+    return;
+  }
   if (String(message.action || '').startsWith('main-') || message.action === 'seat-auth-alert') {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => {
@@ -3837,6 +3918,20 @@ const deckHost = {
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
+// The Captain's crew list opens fully at launch and again the first time the window is
+// used on a new day; a fold made in between holds until then.
+let crewFoldDay = SidebarCore.localDay(Date.now());
+function openCrewOnNewDay() {
+  const today = SidebarCore.localDay(Date.now());
+  if (today === crewFoldDay) return;
+  crewFoldDay = today;
+  if (config.crewOpen && !config.crewModelsCollapsed.length) return;
+  config.crewOpen = true;
+  config.crewModelsCollapsed = [];
+  Sidebar.render();
+}
+window.addEventListener('focus', openCrewOnNewDay);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) openCrewOnNewDay(); });
 AttentionUI.init(deckHost);
 MainSession.init(deckHost);
 window.deck.onParkForRestart(async (sessions) => {
@@ -3846,6 +3941,7 @@ window.deck.onParkForRestart(async (sessions) => {
 ClaudeSeats.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
+ChatDeliverables.init(deckHost);
 ReleaseNotesUI.init(deckHost);
 TodoUI.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
@@ -4373,7 +4469,8 @@ document.addEventListener('keydown', (e) => {
     addAndFocusColumn();
   } else if (k === 'w' || k === 'W') {
     const idx = columns.findIndex((c) => c.id === focusedId);
-    if (idx >= 0) { removeCol(columns[idx]); focusColumnByIndex(idx); }
+    const deckIdx = deckColumns().findIndex((c) => c.id === focusedId);   // background sessions are not in the deck
+    if (idx >= 0) { removeCol(columns[idx]); focusColumnByIndex(deckIdx >= 0 ? deckIdx : idx); }
   } else if (k === 'f' || k === 'F') {
     if (ChatUI.isChatMode(focusedId)) ChatUI.focusSearch(); else openSearch();
   } else if (e.shiftKey && (k === 'b' || k === 'B')) {
@@ -4570,6 +4667,8 @@ TaskBoardUI.init({
   },
   prefs: () => config.taskBoardView,
   savePrefs: (prefs) => { config.taskBoardView = prefs; saveConfig(); },
+  tokenPrefs: () => config.tokenUsageView,
+  saveTokenPrefs: (prefs) => { config.tokenUsageView = { days: prefs.days === 30 ? 30 : 7 }; saveConfig(); },
   copy: (text) => window.deck.clipboardWrite(text),
   renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', config.claudeSeats),
   openSession: openTaskSession,
@@ -4586,6 +4685,7 @@ TaskBoardUI.init({
   focusToggle: () => { const b = document.getElementById('taskBoardBtn'); if (b) b.focus(); },
 });
 document.getElementById('boardTasksTab').addEventListener('click', () => TaskBoardUI.open());
+document.getElementById('boardTokensTab').addEventListener('click', () => TaskBoardUI.open('tokens'));
 // View restoration comes last because showView() closes the search/broadcast
 // overlays, whose DOM bindings are initialized just above.
 showView(config.activeView);

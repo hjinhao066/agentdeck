@@ -25,7 +25,6 @@ test.beforeAll(async () => {
     return entry ? statusScreen(entry.term) : '';
   }), { timeout: 20000 }).toContain('Status stand-in ready');
   await expect.poll(() => page.evaluate(() => terms.get('captain')?.state)).not.toBe('working');
-  await page.locator('.captain-fold').click();
   await expect(page.locator('.nav-crew [data-col-id="silent-worker"]')).toBeVisible();
 });
 test.afterAll(async () => { if (app) await closeElectron(app); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });

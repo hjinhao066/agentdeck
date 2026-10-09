@@ -64,6 +64,44 @@
     if (typeof window.deck.saveConfigSync !== 'function' || !window.deck.saveConfigSync(host.config)) throw new Error('安装状态无法持久保存，禁止继续安装。');
   }
 
+  // Unread Todo receipts outlive the Captain column. Accepted is not delivered:
+  // the consuming channel, native ack or a finished legacy turn confirms delivery.
+  const todoReceiptKey = (id) => typeof id === 'string' && /^todo-(?:error-)?[a-f0-9]{64}$/.test(id);
+  function normalizeTodoInbox() {
+    const raw = host.config.todoInbox;
+    host.config.todoInbox = raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? Object.fromEntries(Object.entries(raw).filter(([id, item]) => item && todoReceiptKey(item.taskId) && id === 'r-' + item.taskId && typeof item.summary === 'string')) : {};
+    const s = state();
+    // Upgrade the previous acceptance-only index while the unread text exists.
+    for (const item of Array.isArray(s?.pending) ? s.pending : []) {
+      if (!todoReceiptKey(item.taskId) || item.receiptId !== 'r-' + item.taskId) continue;
+      host.config.todoInbox[item.receiptId] = item;
+      if (host.config.todoDeliveries) delete host.config.todoDeliveries[item.taskId];
+    }
+  }
+  function restoreTodoInbox() {
+    const s = state();
+    if (!s) return;
+    const present = new Set([...s.pending, ...s.inflight].map((item) => item.receiptId));
+    for (const item of Object.values(host.config.todoInbox || {})) {
+      if (!present.has(item.receiptId)) { s.pending.push({ ...item, colId: s.colId }); present.add(item.receiptId); }
+    }
+  }
+  function confirmTodoReceipts(items) {
+    const inbox = { ...(host.config.todoInbox || {}) }, accepted = { ...(host.config.todoDeliveries || {}) };
+    let changed = false;
+    for (const item of items) {
+      if (!inbox[item.receiptId]) continue;
+      delete inbox[item.receiptId]; accepted[item.taskId] = true; changed = true;
+    }
+    if (changed) { host.config.todoInbox = inbox; host.config.todoDeliveries = accepted; }
+    return changed;
+  }
+  function persistTodoInbox() {
+    save(); host.flushConfig?.();
+    if (typeof window.deck.saveConfigSync !== 'function' || !window.deck.saveConfigSync(host.config)) throw new Error('Todo 回执未能持久保存，请稍后重试。');
+  }
+
   function boardNotice(message) {
     const s = state();
     if (!s) throw new Error('请先创建队长，再开始卡片。');
@@ -478,6 +516,7 @@
 
   function normalize() {
     host.config.captainHistory = M.normalizeHistory(host.config.captainHistory);
+    normalizeTodoInbox();
     const s = host.config.mainSession;
     if (!s || typeof s !== 'object' || typeof s.colId !== 'string') { host.config.mainSession = null; return; }
     s.gen = Number.isFinite(s.gen) ? s.gen : 1;
@@ -503,6 +542,7 @@
     s.tasks = Array.isArray(s.tasks) ? trimTasks(s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string')) : [];
     s.tasks.forEach((t) => { delete t.boardRetrying; });
     s.waitlist = Array.isArray(s.waitlist) ? s.waitlist.filter((w) => w && typeof w.taskId === 'string' && typeof w.task === 'string' && s.tasks.some((t) => t.id === w.taskId && t.status === 'waiting')) : [];
+    restoreTodoInbox();
     // the column was closed while the app was down
     if (!host.columns().some((c) => c.id === s.colId && c.isMain)) host.config.mainSession = null;
   }
@@ -524,6 +564,7 @@
     if (mainCol()) { open(); return mainCol(); }
     const col = host.createMain({ cmd, cwd });
     host.config.mainSession = { colId: col.id, cmd, gen: 1, pending: [], inflight: [], tasks: [], fresh: false, crewMarked: true, waitlist: [] };
+    restoreTodoInbox();
     save();
     window.Sidebar.render();
     brief(col);
@@ -537,24 +578,43 @@
   function briefingText(note) {
     return M.instructions(host.platform, note, state()?.legacyReceiptInjection === true, host.config.concurrencyCap);
   }
-  function brief(col, note) {
+  // s.briefed: the prompt this column's model context was given. Removed the moment
+  // that context is cleared, so a restart in between briefs again.
+  const briefedMark = (col, text) => ({ colId: col.id, mark: M.briefingMark(text) });
+  const holdsBriefing = (col) => state()?.briefed?.colId === col.id && state().briefed.mark === M.briefingMark(briefingText());
+  // kept: the app came back and this Captain's own conversation came back with it.
+  // It still holds the prompt, so it gets the short restart notice instead.
+  function brief(col, note, kept) {
     if (!col.cmd) return;   // a bare shell would run them as commands
     const id = col.id;
     briefing = id;
     const done = () => { if (briefing === id) briefing = ''; };
+    const notice = !!kept && holdsBriefing(col);
+    const text = notice ? M.restartNotice(host.platform, state()?.seatCheckpoint || '', state()?.legacyReceiptInjection === true) : briefingText(note);
     const sent = () => {
-      if (state()?.relayStartup?.attempt?.colId === id) {
-        state().relayStartup.attempt.promptSent = true;
-        state().relayStartup.attempt.promptSentAt = Date.now();
-        save();
+      const s = state(), attempt = s?.relayStartup?.attempt?.colId === id;
+      if (attempt) {
+        s.relayStartup.attempt.promptSent = true;
+        s.relayStartup.attempt.promptSentAt = Date.now();
       }
+      const fresh = s && !notice && mainCol()?.id === id;
+      if (fresh) s.briefed = briefedMark(col, text);
+      if (attempt || fresh) save();
       done();
-      if (note) host.sendWhenReady(col, note, { silent: true, guardUserInput: true });
+      if (note && !notice) host.sendWhenReady(col, note, { silent: true, guardUserInput: true });
     };
-    host.sendWhenReady(col, briefingText(note), {
+    host.sendWhenReady(col, text, {
       silent: true, onSent: sent, guardUserInput: true, inlineLimit: M.BRIEFING_LIMIT,
       onGiveUp: () => { done(); host.showToast('没发出去：队长的 agent 一直没准备好'); },
     });
+  }
+  // The Captain column that came back with the app. Whether its conversation came
+  // back too is known only once its terminal has been reconnected or relaunched.
+  let startupBrief = '';
+  function captainRelaunched(col, kept) {
+    if (!col?.isMain || startupBrief !== col.id) return;
+    startupBrief = '';
+    brief(col, state()?.seatCheckpoint ? M.restartNote(host.platform, state().seatCheckpoint) : '', kept);
   }
   // ---- battery mode: the live cap is the settings cap, lowered while on battery ----
   const Bat = () => window.BatteryCore;
@@ -834,6 +894,7 @@
           col.cmd = M.freshCommand(col.cmd);
           state().cmd = col.cmd;
           state().fresh = true;
+          delete state().briefed;
           save();
         }
         if (tokenSaving === op) { op.since = Date.now(); onSent(turn); }
@@ -877,6 +938,7 @@
       // resume line follows it. Past M.BRIEFING_LIMIT the captain would only see
       // a file pointer and miss the "don't wait" closing.
       saverSend(op, briefingText() + M.SAVER_RESUME, 'briefing', true, () => {
+        state().briefed = briefedMark(col, briefingText()); save();
         cancelTokenSaving();
         host.showToast('队长已存看板并清空上下文，正在读看板继续');
       });
@@ -897,6 +959,7 @@
     col.cmd = M.freshCommand(col.cmd);
     s.cmd = col.cmd;
     s.fresh = true;
+    delete s.briefed;
     save();
   }
   // Called before the submitted command can erase the TUI. Typing a slash,
@@ -942,7 +1005,7 @@
     host.sendWhenReady(op.col, briefingText(), {
       silent: true, guardUserInput: true, requireIdle: true, inlineLimit: M.BRIEFING_LIMIT,
       cancelled: () => contextReset !== op && !entry.injecting,
-      onSent: () => { if (contextReset === op) { contextReset = null; host.showToast('已重新发送队长提示词，先读账本和看板里的队长交接'); } },
+      onSent: () => { state().briefed = briefedMark(op.col, briefingText()); save(); if (contextReset === op) { contextReset = null; host.showToast('已重新发送队长提示词，先读账本和看板里的队长交接'); } },
       onGiveUp: () => { if (contextReset === op) { contextReset = null; host.showToast('队长提示词没发出去；可在队长终端运行 briefing 读取'); } },
     });
   }
@@ -1016,6 +1079,7 @@
         { colId: fresh.id, targetId: s.relayTargetId, at: Date.now() });
     } else delete s.relayStartup;
     s.fresh = true;
+    delete s.briefed;
     carried.forEach((t) => window.ChatUI.addCard(s.colId, t));
     save();
     window.Sidebar.render();
@@ -1549,10 +1613,19 @@
   function takePending(nextTurn = false, batch, viaChannel = false) {
     const s = state();
     const text = M.receiptsForModel(s.pending);
+    const before = { pending: s.pending, inflight: s.inflight, seen: s.receiptsSeen,
+      inbox: host.config.todoInbox, accepted: host.config.todoDeliveries };
     const turnId = nextTurn ? '' : (window.ChatUI.turnsOf(s.colId).findLast((t) => t.kind !== 'task' && !t.done)?.id || '');
+    if (viaChannel) rememberReceiptsSeen(s.pending);
+    const confirmedTodo = viaChannel && confirmTodoReceipts(s.pending);
     s.inflight = [...s.inflight, ...s.pending.map(({ viaChannel: old, ...p }) => ({ ...p, deliveryTurnId: turnId, takenAt: Date.now(), ...(batch ? { batch } : {}), ...(viaChannel ? { viaChannel: true } : {}) }))];
     s.pending = [];
-    save();
+    try { if (confirmedTodo) persistTodoInbox(); else save(); }
+    catch (error) {
+      s.pending = before.pending; s.inflight = before.inflight; s.receiptsSeen = before.seen;
+      host.config.todoInbox = before.inbox; host.config.todoDeliveries = before.accepted;
+      save(); throw error;
+    }
     return text;
   }
   // Opt-in legacy delivery: receipts and questions reach 队长 when its agent is idle,
@@ -1780,6 +1853,7 @@
   }
   function notePtySurvived(col) {
     if (!col) return;
+    captainRelaunched(col, true);
     coldTasks.delete(col.id);
     resumeWaiting.delete(col.id);
     const task = latestTask(col.id);
@@ -1802,7 +1876,9 @@
       }).catch(() => {});
     }
   }
-  function noteColdColumn(col, isFresh) {
+  // resumed: the CLI was relaunched into the conversation it had before the app closed.
+  function noteColdColumn(col, isFresh, resumed) {
+    captainRelaunched(col, !!resumed);
     if (col?.executor === 'chatgpt-web') {
       if (!isFresh) for (const task of (state()?.tasks || []).filter((t) => t.colId === col.id && t.instructionSent && !CLOSED.includes(t.status))) {
         settle(task, { summary: '', files: [], images: [], failed: 'AgentDeck 已重启，网页任务已中断；请检查保留的请求页后再安排任务，系统不会自动重发。', explicit: true, source: 'process' });
@@ -2321,9 +2397,23 @@
       }
       if (!turn.interrupted && Number.isFinite(turn.ts)) s.captainSettledAt = Math.max(s.captainSettledAt || 0, turn.ts);
       if (s.inflight.length || s.fresh) {
-        s.inflight = s.inflight.filter((p) => p.deliveryTurnId !== turn.id);
+        const inflight = s.inflight, pending = s.pending, fresh = s.fresh;
+        const inbox = host.config.todoInbox, accepted = host.config.todoDeliveries;
+        const taken = inflight.filter((p) => p.deliveryTurnId === turn.id);
+        const confirmedTodo = !turn.interrupted && confirmTodoReceipts(taken);
+        if (turn.interrupted) {
+          const waiting = new Set(pending.map((p) => p.receiptId));
+          const unread = taken.filter((p) => inbox?.[p.receiptId] && !waiting.has(p.receiptId));
+          s.pending = [...unread.map(({ deliveryTurnId, takenAt, batch, ...item }) => item), ...pending];
+        }
+        s.inflight = inflight.filter((p) => p.deliveryTurnId !== turn.id);
         s.fresh = false;
-        save();
+        try { if (confirmedTodo) persistTodoInbox(); else save(); }
+        catch (_) {
+          s.inflight = inflight; s.pending = pending; s.fresh = fresh;
+          host.config.todoInbox = inbox; host.config.todoDeliveries = accepted;
+          save(); host.showToast('Todo 回执送达确认未能持久保存，已保留待重试。');
+        }
       }
       return;
     }
@@ -2527,6 +2617,23 @@
       s.relayStartup.attempt.output = true; save();
     }
     switch (message.action) {
+      case 'main-todo-delivery':
+      case 'main-todo-error': {
+        const key = message.action === 'main-todo-error' ? message.id : message.taskId;
+        if (!message.nativeWeb || !todoReceiptKey(key) || typeof message.result !== 'string' ||
+            (message.action === 'main-todo-error' && !key.startsWith('todo-error-'))) throw new Error('Invalid Todo delivery.');
+        const accepted = host.config.todoDeliveries || {}, inbox = host.config.todoInbox || {}, pending = s.pending;
+        if (!accepted[key]) {
+          const receiptId = 'r-' + key;
+          const notice = inbox[receiptId] || { receiptId, taskId: key, colId: s.colId,
+            title: message.action === 'main-todo-error' ? 'Todo 后台异常' : 'Todo 新任务', ts: Date.now(), summary: message.result, source: 'command' };
+          host.config.todoInbox = { ...inbox, [receiptId]: notice };
+          if (![...s.pending, ...s.inflight].some((p) => p.receiptId === receiptId)) s.pending = [...s.pending, { ...notice, colId: s.colId }];
+          try { persistTodoInbox(); }
+          catch (error) { s.pending = pending; host.config.todoInbox = inbox; save(); throw error; }
+        }
+        return { done: true };
+      }
       case 'main-install-result': {
         const r = message.installResult;
         const task = s.tasks.find((t) => t.id === r.taskId && t.colId === r.columnId);
@@ -2558,7 +2665,8 @@
       case 'main-notify-user':
         if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
         // The user also finds it on 待我处理 when they come back.
-        if (!message.test && window.AttentionUI) window.AttentionUI.fromNotify(message.message);
+        // A 待办's failure alert is not one: that item is already filed from the 待办 itself.
+        if (!message.test && window.AttentionUI && !/^todo-failures-/.test(String(message.id || ''))) window.AttentionUI.fromNotify(message.message);
         return { done: true, visible: host.captainColumnVisible(caller.id),
           turnId: message.test ? message.id : host.terms.get(caller.id)?.captainTurnId || message.id };
       case 'main-discuss-receipt': {
@@ -2677,11 +2785,15 @@
       case 'main-receipts-ack': {
         if (!Array.isArray(message.receiptIds) || message.receiptIds.length > 50 || message.receiptIds.some((id) => typeof id !== 'string' || !/^[a-z0-9-]{1,100}$/.test(id))) throw new Error('Invalid receipt ids.');
         const ids = new Set(message.receiptIds);
-        const count = s.pending.length;
-        s.pending = s.pending.filter((p) => !ids.has(p.receiptId));
-        save();
-        host.flushConfig?.();
-        return { done: true, result: JSON.stringify({ acknowledged: count - s.pending.length }) };
+        const pending = s.pending, inbox = host.config.todoInbox, accepted = host.config.todoDeliveries;
+        const confirmedTodo = confirmTodoReceipts(pending.filter((p) => ids.has(p.receiptId)));
+        s.pending = pending.filter((p) => !ids.has(p.receiptId));
+        try { if (confirmedTodo) persistTodoInbox(); else { save(); host.flushConfig?.(); } }
+        catch (error) {
+          s.pending = pending; host.config.todoInbox = inbox; host.config.todoDeliveries = accepted;
+          save(); throw error;
+        }
+        return { done: true, result: JSON.stringify({ acknowledged: pending.length - s.pending.length }) };
       }
       case 'main-receipts': {
         if (nativeCaptain(mainCol()?.cmd)) throw new Error('Native Captain host owns receipt delivery; use snapshot/ack, not a consuming receipts listener.');
@@ -2705,7 +2817,6 @@
         if (!s.pending.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
         // The CLI has the text once this returns. Record that before the copy
         // into inflight so the same config save survives relaunch and Relay.
-        rememberReceiptsSeen(s.pending);
         const text = takePending(false, undefined, true);
         return { done: true, result: text || '没有新的回执。' };
       }
@@ -2930,7 +3041,8 @@
     Bat()?.shared.onChange(syncEffectiveCap);
     window.deck.onTasksChanged?.(() => { refreshPriority(); });
     refreshPriority();
-    if (mainCol()) brief(mainCol(), state()?.seatCheckpoint ? M.restartNote(host.platform, state().seatCheckpoint) : '');
+    // Briefed (or only told the app restarted) once its terminal is back: captainRelaunched.
+    if (mainCol()) { startupBrief = mainCol().id; if (mainCol().cmd) briefing = startupBrief; }
   }
 
   window.MainSession = {

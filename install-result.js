@@ -60,6 +60,14 @@ function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
     try {
       const r = readResult(file, runtime());
       if (!r) return;
+      let ack = {};
+      try { ack = JSON.parse(fs.readFileSync(ackFile, 'utf8')); } catch (_) {}
+      if (ack.id !== r.id) ack = { id: r.id };
+      // The installer leaves its result in place, so this runs every second for as long as
+      // this version runs. Once the receipt is in and no alert can be owed, nothing below
+      // would change anything: skip the config.json parse and the acknowledgement rewrite.
+      if (ack.receipt && (ack.notification || ack.notificationAccepted || ack.notificationQueued || (ack.notificationAttempts || 0) >= 3 ||
+          r.notificationPending !== true && (r.status !== 'failed' && r.operation !== 'rollback' || r.notificationAccepted || r.notificationQueued || r.notificationSent))) return;
       const config = getConfig();
       const task = config.mainSession?.tasks?.find((t) => t.pendingInstall?.id === r.id || t.installResultId === r.id);
       const captain = config.columns?.find((c) => c.isMain);
@@ -68,9 +76,6 @@ function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
         if (r.taskId && r.taskId !== task.id || r.columnId && r.columnId !== task.colId) return;
         r.taskId = task.id; r.columnId = task.colId;
       }
-      let ack = {};
-      try { ack = JSON.parse(fs.readFileSync(ackFile, 'utf8')); } catch (_) {}
-      if (ack.id !== r.id) ack = { id: r.id };
       const saveAck = () => {
         fs.writeFileSync(ackFile + '.tmp', JSON.stringify(ack), { mode: 0o600 });
         fs.renameSync(ackFile + '.tmp', ackFile);

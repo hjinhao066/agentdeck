@@ -359,7 +359,8 @@ test('queue list/cancel send Captain requests, validate ids and document replace
     const help = (await runCli(['help'], {})).stdout;
     assert.match(help, /queue cancel --task-id/); assert.match(help, /replaces a changed command\/model/);
     const prompt = require('../main-core').instructions('darwin');
-    assert.match(prompt, /queue list；queue cancel --task-id/);
+    assert.match(prompt, /queue list｜queue cancel --task-id/);
+    assert.match(require('./fixtures/captain-rulebook').topic('commands'), /queue list；queue cancel --task-id 卡片或排队id；同卡 new 换命令\/模型会替换，移到 done\/todo 撤队/);
     assert.equal(prompt, require('../main-core').instructions('darwin', 'dynamic note must stay out'));
   } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -602,5 +603,31 @@ test('inbox help and the Captain briefing say a report is read once the user saw
   assert.equal(help.code, 0);
   assert.match(help.stdout, /汇报自动挂到你这一轮回复：用户在对话里看过这轮回复就算已读，不进「做完了你还没看」/);
   const M = require('../main-core');
-  for (const platform of ['darwin', 'win32']) assert.match(M.instructions(platform, '', false, 30), /report（挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说）/);
+  for (const platform of ['darwin', 'win32']) assert.match(M.instructions(platform, '', false, 30), /inbox：找用户、要用户介入、向用户汇报结论/);
+  assert.match(require('./fixtures/captain-rulebook').topic('inbox'), /report（挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说）/);
+});
+
+test('todo list/status reuse authenticated Captain requests and preserve artifact paths', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-todo-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  const requests = [];
+  const server = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file)); requests.push(request);
+      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: '{"ok":true}' }));
+    }
+  }, 20);
+  const env = { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token' };
+  try {
+    assert.equal((await runCli(['todo', 'list'], env)).code, 0);
+    assert.equal((await runCli(['todo', 'status', '--id', 'td-test-cli-01', '--task-id', 'todo-test', '--status', 'done', '--files', '/tmp/a b.pdf,/tmp/book.epub'], env)).code, 0);
+    assert.equal(requests[0].action, 'main-todo'); assert.equal(requests[0].op, 'list');
+    assert.deepEqual(requests[1].input, { id: 'td-test-cli-01', taskId: 'todo-test', status: 'done', message: '', files: ['/tmp/a b.pdf', '/tmp/book.epub'] });
+    assert.equal(requests[1].token, 'test-token');
+    const bad = await runCli(['todo', 'status', '--id', 'td-test-cli-01', '--status', 'guessed'], env);
+    assert.notEqual(bad.code, 0); assert.match(bad.stderr, /requires/);
+    const denied = await runCli(['todo', 'list'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.notEqual(denied.code, 0); assert.match(denied.stderr, /Only conductor-managed terminals/);
+  } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
 });

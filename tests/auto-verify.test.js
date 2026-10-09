@@ -253,6 +253,69 @@ test('two rejected rounds: round two gets its own reviewer, the second rejection
   assert.notEqual(reject1.key, get(card.id).review_reject.key);
   assert.equal(get(card.id).review_reject.delivered, true);
 });
+test('a second receipt from an executor told more: before the reviewer binds, the old round is void and the new receipt gets round 2', (t) => {
+  const { store, add, bind, event, get, executed } = fixture(t);
+  const card = add(); executed(card.id);
+  const claim1 = store.claimReview({ id: card.id }).card.review_claim;
+  // The executor is told to do more (the session layer rebinds it under a fresh attempt id).
+  bind(card.id, 'tell-1', 'worker');
+  const resumed = get(card.id);
+  assert.equal(resumed.review_session, false, 'the executor is not a reviewer'); assert.equal(resumed.status, 'doing'); assert.equal(resumed.review_claim.delivered, true);
+  assert.equal(store.reviewDue(resumed), false); assert.equal(store.reviewPending(resumed), false, 'the voided claim is not offered any more');
+  const second = event(card.id, 'complete', '补充做完', 'tell-1', 'worker', 'command', ['/tmp/a.js']).card;
+  assert.equal(second.status, 'review'); assert.equal(second.review_round, 2); assert.equal(second.exec_receipt.text, '补充做完'); assert.equal(second.exec_receipt.attempt_id, 'tell-1');
+  assert.equal(store.reviewDue(get(card.id)), true);
+  const claim2 = store.claimReview({ id: card.id }).card.review_claim; assert.equal(claim2.round, 2); assert.notEqual(claim2.key, claim1.key);
+  assert.equal(store.claimReview({ id: card.id }).ignored, true, 'one claim per round');
+});
+test('a second receipt while the reviewer works: the review is void, the new receipt is round 2 under the executor\'s own make, the old verdict is ignored', (t) => {
+  const { store, add, bind, event, get, executed, reviewer } = fixture(t);
+  const card = add(); executed(card.id);
+  const claim1 = store.claimReview({ id: card.id }).card.review_claim; store.reviewDispatched({ id: card.id, key: claim1.key });
+  bind(card.id, reviewer(card.id, 1), 'rev1', 'Antigravity', 'gemini-3.8-flash-high');
+  assert.equal(get(card.id).session_id, 'rev1');
+  // the executor's own attempt id is unchanged: the card is held by the reviewer, so nothing rebinds it
+  const second = event(card.id, 'complete', '补充做完', 'a1', 'worker', 'command', ['/tmp/a.js', '/tmp/c.js']).card;
+  assert.equal(second.status, 'review'); assert.equal(second.review_round, 2); assert.equal(second.review_session, false);
+  assert.equal(second.session_id, 'worker'); assert.deepEqual(second.exec_receipt.files, ['/tmp/a.js', '/tmp/c.js']);
+  assert.deepEqual(second.exec_receipt.assignee, { agent: 'Claude', model: 'claude-sonnet-5-5' }, 'the executor, not the old reviewer');
+  assert.equal(store.reviewDue(second), true);
+  // the voided reviewer's verdict (either way) changes nothing
+  assert.equal(event(card.id, 'failed', '不通过：旧结论', reviewer(card.id, 1), 'rev1').ignored, true);
+  assert.equal(event(card.id, 'complete', '通过：旧结论', reviewer(card.id, 1), 'rev1').ignored, true);
+  assert.equal(get(card.id).status, 'review'); assert.equal(get(card.id).review_round, 2); assert.ok(!get(card.id).review_reject);
+  // the new reviewer is picked from the executor's make (never the same provider)
+  const picked = AV.pickReviewer({ executor: get(card.id).exec_receipt.assignee, commandOf: (c) => c.id });
+  assert.notEqual(picked.family, 'anthropic');
+});
+test('only a different written receipt from the original executor voids a running review', (t) => {
+  const { store, add, bind, event, get, executed, reviewer } = fixture(t);
+  const card = add(); executed(card.id);
+  const claim = store.claimReview({ id: card.id }).card.review_claim; store.reviewDispatched({ id: card.id, key: claim.key });
+  bind(card.id, reviewer(card.id, 1), 'rev1', 'Antigravity', 'gemini-3.8-flash-high');
+  // a replay of the very receipt under review, an automatic or failure report, another session: all ignored
+  assert.equal(event(card.id, 'complete', '做完了。 完整回执第二句。', 'a1', 'worker').ignored, true);
+  assert.equal(event(card.id, 'complete', '别的话', 'a1', 'worker', 'automatic').ignored, true);
+  assert.equal(event(card.id, 'failed', '崩了', 'a1', 'worker', 'command').ignored, true);
+  assert.equal(event(card.id, 'complete', '别人', 'x1', 'stranger').ignored, true);
+  const kept = get(card.id); assert.equal(kept.session_id, 'rev1'); assert.equal(kept.review_round, 1); assert.equal(kept.review_session, true);
+  // a manual reviewer on a plain (no --verify) card is not touched either
+  const plain = add({ verify: false }); bind(plain.id, 'p1', 'w2'); event(plain.id, 'complete', 'ok', 'p1', 'w2');
+  assert.equal(event(plain.id, 'complete', '再来', 'p1', 'w2').card.status, 'done');
+});
+test('a held card takes no new review from a second receipt', (t) => {
+  const { store, add, bind, event, get, executed, reviewer } = fixture(t);
+  const card = add({ id: 't-held' }); executed(card.id);
+  for (const round of [1, 2]) {
+    const c = store.claimReview({ id: card.id }).card.review_claim; store.reviewDispatched({ id: card.id, key: c.key });
+    bind(card.id, reviewer(card.id, round), 'rev' + round, 'Antigravity', 'gemini-3.8-flash-high');
+    event(card.id, 'failed', '不通过：' + round, reviewer(card.id, round), 'rev' + round);
+    if (round === 1) { bind(card.id, AV.reworkAttemptId(card.id, 1), 'worker'); event(card.id, 'complete', '返工完成', AV.reworkAttemptId(card.id, 1), 'worker'); }
+  }
+  assert.equal(get(card.id).flag, 'held');
+  assert.equal(event(card.id, 'complete', '又来', AV.reworkAttemptId(card.id, 1), 'worker').ignored, true);
+  assert.equal(store.reviewDue(get(card.id)), false); assert.equal(store.claimReview({ id: card.id }).ignored, true);
+});
 test('a Captain move or rebind replaces a pending automatic rework; the rework only fires for the failed card on this machine', (t) => {
   const { store, add, bind, event, get, executed, reviewer } = fixture(t);
   const reject = () => { const c = add(); executed(c.id); bind(c.id, reviewer(c.id, 1), 'rev'); event(c.id, 'failed', '不通过：x', reviewer(c.id, 1), 'rev'); return c.id; };
@@ -333,8 +396,8 @@ test('without the new callbacks the heartbeat is exactly the old one', (t) => {
 
 test('the Captain briefing describes the automatic loop, stays static, and leaves rule 16 alone', () => {
   const M = require('../main-core');
-  const text = M.instructions('darwin');
-  assert.equal(text, M.instructions('darwin'));
+  const text = require('./fixtures/captain-rulebook').rulebook('darwin');
+  assert.equal(M.instructions('darwin'), M.instructions('darwin'));
   assert.match(text, /程序自动开一个和执行会话不同提供方的审查会话/); assert.match(text, /审查员的原话自动发回原执行会话返工/);
   assert.match(text, /连续失败两次 held，先由队长决定，不再自动重试/); assert.match(text, /选不出审查者（同一提供方或额度用尽）时卡片停在 review 并写明原因/);
   assert.match(text, /16\. 重要的活完成后，派 Gemini 3\.8 Flash/);

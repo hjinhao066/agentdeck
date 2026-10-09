@@ -1,13 +1,21 @@
 'use strict';
 // 随手记待办: the user's own short to-dos, shared by the desktop page, the
-// phone hub and (read-only for now) the Captain and other agents.
+// phone hub and the Captain's AI-task backend.
 //
 // Storage is ~/.agents/boards/todos/, synced between Mac and Windows by the
 // ~/.agents git job every 30 minutes. A git conflict there stops the whole
 // sync, so each computer writes only its own file, <deviceId>.json, holding
-// the complete list as that computer sees it. Reading merges every file: for
-// each id the copy with the latest `updated` wins. A deletion is kept as
+// the complete list as that computer sees it. Reading merges every file. Each
+// part of an item has its own clock, so a write that changes one part never
+// covers a part changed elsewhere (a tick on a stale copy keeps the newer text,
+// an AI answer never unticks or brings back a deleted item):
+//   content   text + textUpdated (the content version), textDevice saved it
+//   checkbox  done, doneAt, by doneUpdated
+//   deletion  deleted, by deletedUpdated
+//   AI        ai, by ai.updated, only from copies of the winning content version
+// `updated` is the copy's last change of any kind. A deletion is kept as
 // `deleted: true` so an older copy on the other computer cannot bring it back.
+// The phone hub merges the computers' answers by the same rules (mergeTodos).
 // Personal to-dos never live with the agents' task cards in boards/tasks/.
 const fs = require('fs');
 const path = require('path');
@@ -45,11 +53,17 @@ function normalizeItem(raw) {
   let text;
   try { text = cleanText(raw.text); } catch (_) { if (!deleted) return null; text = ''; }
   const done = raw.done === true;
+  const created = isTime(raw.created) ? raw.created : raw.updated;
+  // A copy from an older build has no part clocks: its creation time stands in
+  // for the content version, its last change for the checkbox and a deletion.
   const item = { ...raw, id: raw.id, text, done, doneAt: done && isTime(raw.doneAt) ? raw.doneAt : null,
-    created: isTime(raw.created) ? raw.created : raw.updated, updated: raw.updated, deleted,
+    created, updated: raw.updated, deleted,
     source: typeof raw.source === 'string' && SOURCE.test(raw.source) ? raw.source : 'desktop',
     device: typeof raw.device === 'string' && DEVICE.test(raw.device) ? raw.device : '',
-    // Reserved for 交给 AI. This version only carries it along unchanged.
+    textUpdated: isTime(raw.textUpdated) ? raw.textUpdated : created,
+    textDevice: typeof raw.textDevice === 'string' && DEVICE.test(raw.textDevice) ? raw.textDevice : (typeof raw.device === 'string' && DEVICE.test(raw.device) ? raw.device : ''),
+    doneUpdated: isTime(raw.doneUpdated) ? raw.doneUpdated : raw.updated,
+    deletedUpdated: isTime(raw.deletedUpdated) ? raw.deletedUpdated : (deleted ? raw.updated : created),
     ai: raw.ai === undefined ? null : raw.ai };
   return item;
 }
@@ -60,14 +74,41 @@ function newer(a, b) {
   if (ta !== tb) return ta > tb;
   return JSON.stringify(a) > JSON.stringify(b);
 }
+// The copy whose clock for one part is latest; a tie goes to the copy changed
+// last, so the result never depends on which file was read first.
+function latest(copies, clock) {
+  return copies.reduce((best, c) => {
+    const a = Date.parse(clock(c)), b = Date.parse(clock(best));
+    return a > b || (a === b && newer(c, best)) ? c : best;
+  });
+}
+const NO_TIME = new Date(0).toISOString();
+function combine(copies) {
+  const whole = latest(copies, (c) => c.updated);
+  const withText = copies.filter((c) => c.text);
+  const content = latest(withText.length ? withText : copies, (c) => c.textUpdated);
+  const version = copies.filter((c) => c.text === content.text && c.textUpdated === content.textUpdated);
+  // A copy built from what the phone saw (`base`) does not know who saved the
+  // text: any copy of the same version that does names the owner. Until one
+  // arrives the item stays awaitingOrigin and nobody hands it to AI.
+  const known = version.filter((c) => c.awaitingOrigin !== true);
+  const origin = known.length ? latest(known, (c) => c.updated) : content;
+  const check = latest(copies, (c) => c.doneUpdated);
+  const removal = latest(copies, (c) => c.deletedUpdated);
+  const ai = latest(version, (c) => (isTime(c.ai?.updated) ? c.ai.updated : NO_TIME)).ai;
+  return { ...whole, text: content.text, textUpdated: content.textUpdated, textDevice: origin.textDevice, awaitingOrigin: origin.awaitingOrigin === true,
+    done: check.done, doneAt: check.doneAt, doneUpdated: check.doneUpdated, deleted: removal.deleted, deletedUpdated: removal.deletedUpdated, ai };
+}
 function merge(lists) {
-  const byId = new Map();
+  const copies = new Map();
   for (const list of lists) for (const raw of Array.isArray(list) ? list : []) {
     const item = normalizeItem(raw);
     if (!item) continue;
-    const seen = byId.get(item.id);
-    if (!seen || newer(item, seen)) byId.set(item.id, item);
+    if (!copies.has(item.id)) copies.set(item.id, []);
+    copies.get(item.id).push(item);
   }
+  const byId = new Map();
+  for (const [id, list] of copies) byId.set(id, combine(list));
   return byId;
 }
 // Open items newest first, then finished ones by when they were finished.
@@ -78,12 +119,17 @@ function sorted(items) {
 }
 // What the phone gets: live items plus bare deletion marks, so it can merge
 // two computers' answers without showing an item one of them deleted.
+// Each item carries its part clocks so the phone merges two answers as merge() does.
 const PHONE_DONE_LIMIT = 200;
+function phoneItem(t) {
+  if (t.deleted) return { id: t.id, deleted: true, updated: t.updated, deletedUpdated: t.deletedUpdated };
+  return { id: t.id, text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated,
+    textUpdated: t.textUpdated, doneUpdated: t.doneUpdated, deletedUpdated: t.deletedUpdated, ...(t.ai ? { ai: t.ai } : {}) };
+}
 function phoneView(items) {
   const live = sorted(items.filter((t) => !t.deleted));
   const open = live.filter((t) => !t.done), done = live.filter((t) => t.done).slice(0, PHONE_DONE_LIMIT);
-  const pick = (t) => ({ id: t.id, text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated });
-  return [...open.map(pick), ...done.map(pick), ...items.filter((t) => t.deleted).map((t) => ({ id: t.id, deleted: true, updated: t.updated }))];
+  return [...open, ...done, ...items.filter((t) => t.deleted)].map(phoneItem);
 }
 
 class TodoStore {
@@ -120,6 +166,13 @@ class TodoStore {
   all() { return [...merge(this.readFiles().map((f) => f.doc ? f.doc.items : [])).values()]; }
   list() { return sorted(this.all().filter((t) => !t.deleted)); }
   phone() { return { items: phoneView(this.all()) }; }
+  // The phone records and ticks; it never edits text or deletes. The answer is
+  // the item as api/todos shows it, so the phone can put it straight into its list.
+  phoneWrite(input) {
+    const item = input.op === 'add' ? this.add({ text: input.text, source: 'phone' })
+      : this.update({ id: input.id, done: input.done, ...(input.base ? { base: input.base } : {}), source: 'phone' });
+    return phoneItem(item);
+  }
   stamp(previous) {
     return new Date(Math.max(this.now(), previous ? Date.parse(previous) + 1 : 0)).toISOString();
   }
@@ -146,7 +199,7 @@ class TodoStore {
     return this.mutate((byId) => {
       const at = this.stamp();
       const item = { id: 'td-' + crypto.randomUUID(), text: clean, done: false, doneAt: null, created: at, updated: at,
-        deleted: false, source, device: this.deviceId, ai: null };
+        deleted: false, source, device: this.deviceId, textUpdated: at, textDevice: this.deviceId, doneUpdated: at, deletedUpdated: at, ai: null };
       byId.set(item.id, item);
       return item;
     });
@@ -162,31 +215,49 @@ class TodoStore {
     if (!SOURCE.test(source)) throw new Error('Invalid source.');
     return this.mutate((byId) => {
       let current = byId.get(id);
-      let seen = null;
       if (base) {
+        // Only the content version the phone saw is taken from it: its text and
+        // textUpdated (an older phone page sends no textUpdated; the creation
+        // time stands in, as for old data). It does not say who saved that text,
+        // so the copy waits for the original file (merge) before anyone hands it
+        // to AI, and it holds no AI state: merge takes that from the copies of
+        // the same version by AI time.
         const b = typeof base === 'object' && !Array.isArray(base) ? base : {};
-        seen = normalizeItem({ id, text: b.text, done: b.done === true, doneAt: b.doneAt, created: b.created, updated: b.updated, deleted: false, source, ai: null });
+        const seen = normalizeItem({ id, text: b.text, textUpdated: b.textUpdated, created: b.created, updated: b.updated, deleted: false, source, ai: null, awaitingOrigin: true });
         if (!current && !seen) throw new Error('Invalid to-do.');
-      }
-      if (!current) current = seen;
-      else if (seen && !current.deleted && Date.parse(seen.updated) > Date.parse(current.updated)) {
-        // The phone saw a later version than this computer's copy (the other
-        // computer changed it less than one git sync ago). Start from what the
-        // phone saw, or this computer's older text would be written back with a
-        // newer stamp and cover that edit. A deleted copy here stays deleted,
-        // and fields the phone never sees are kept.
-        current = { ...current, text: seen.text, done: seen.done, doneAt: seen.doneAt, updated: seen.updated };
+        if (!current) current = seen;
+        // The other computer saved newer text less than one git sync ago. A
+        // deleted copy here stays deleted; fields the phone never sees are kept.
+        else if (seen && isTime(b.textUpdated) && !current.deleted && Date.parse(seen.textUpdated) > Date.parse(current.textUpdated)) {
+          current = { ...current, text: seen.text, textUpdated: seen.textUpdated, awaitingOrigin: true, ai: null };
+        }
       }
       if (!current) throw new Error('这条待办已经不在了，刷新一下。');
-      const next = { ...current, updated: this.stamp(current.updated), device: this.deviceId };
-      if (text !== undefined) next.text = text;
-      if (done !== undefined && done !== current.done) { next.done = done; next.doneAt = done ? next.updated : null; }
-      if (deleted !== undefined) next.deleted = deleted;
+      const at = this.stamp(current.updated);
+      const next = { ...current, updated: at, device: this.deviceId };
+      if (text !== undefined && text !== current.text) Object.assign(next, { text, textUpdated: at, textDevice: this.deviceId, awaitingOrigin: false, ai: null });
+      // A tick or untick is the user's latest word on the checkbox, even when
+      // this computer's copy already shows it (the phone may have seen another
+      // computer's newer untick), so it always gets a new clock. Same for delete.
+      if (done !== undefined) Object.assign(next, { done, doneAt: done ? (current.done && current.doneAt) || at : null, doneUpdated: at });
+      if (deleted !== undefined) Object.assign(next, { deleted, deletedUpdated: at });
       byId.set(id, next);
       return next;
     });
   }
   remove({ id } = {}) { return this.update({ id, deleted: true }); }
+  // AI writes never change text ownership or the user's completion checkbox.
+  writeAi(id, change) {
+    todoId(id);
+    return this.mutate((byId) => {
+      const current = byId.get(id);
+      if (!current || current.deleted) throw new Error('这条待办已经不在了。');
+      const ai = change(current);
+      const next = { ...current, ai, updated: this.stamp(current.updated) };
+      byId.set(id, next);
+      return next;
+    });
+  }
 }
 
-module.exports = { TodoStore, merge, normalizeItem, cleanText, sorted, phoneView, TEXT_MAX, VERSION };
+module.exports = { TodoStore, merge, normalizeItem, cleanText, sorted, phoneView, phoneItem, TEXT_MAX, VERSION };

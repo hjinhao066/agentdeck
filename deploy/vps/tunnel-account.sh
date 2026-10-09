@@ -82,7 +82,7 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; return 1; }
 verify_mac_account() {
   local out got
   out="$(effective_for "$MAC_ACCOUNT")" || die "sshd -T failed for $MAC_ACCOUNT; is sshd installed and its config valid?"
-  if ! printf '%s\n' "$out" | grep -qx "permitlisten 127.0.0.1:$MAC_PORT"; then
+  if ! grep -qx "permitlisten 127.0.0.1:$MAC_PORT" <<<"$out"; then
     got="$(printf '%s\n' "$out" | grep '^permitlisten ' || true)"
     die "the Mac tunnel account $MAC_ACCOUNT is not limited to 127.0.0.1:$MAC_PORT by sshd (effective: ${got:-no permitlisten line}). A compromised Mac could take port $PORT and pose as Windows. Add 'Match User $MAC_ACCOUNT' + 'PermitListen 127.0.0.1:$MAC_PORT' to the sshd config first (README), then run this again"
   fi
@@ -93,11 +93,11 @@ verify_mac_account() {
 verify_effective() {
   local out
   out="$(effective_for "$ACCOUNT")" || { fail "sshd -T failed"; return 1; }
-  printf '%s\n' "$out" | grep -qx "permitlisten 127.0.0.1:$PORT" || { fail "effective config lacks permitlisten 127.0.0.1:$PORT"; return 1; }
-  printf '%s\n' "$out" | grep -qx "allowtcpforwarding remote" || { fail "effective config: allowtcpforwarding is not remote"; return 1; }
-  printf '%s\n' "$out" | grep -qx "maxsessions 0" || { fail "effective config: maxsessions is not 0"; return 1; }
-  printf '%s\n' "$out" | grep -qx "gatewayports no" || { fail "effective config: gatewayports is not no"; return 1; }
-  printf '%s\n' "$out" | grep -qx "permitopen none" || { fail "effective config: permitopen is not none"; return 1; }
+  grep -qx "permitlisten 127.0.0.1:$PORT" <<<"$out" || { fail "effective config lacks permitlisten 127.0.0.1:$PORT"; return 1; }
+  grep -qx "allowtcpforwarding remote" <<<"$out" || { fail "effective config: allowtcpforwarding is not remote"; return 1; }
+  grep -qx "maxsessions 0" <<<"$out" || { fail "effective config: maxsessions is not 0"; return 1; }
+  grep -qx "gatewayports no" <<<"$out" || { fail "effective config: gatewayports is not no"; return 1; }
+  grep -qx "permitopen none" <<<"$out" || { fail "effective config: permitopen is not none"; return 1; }
   say "effective sshd settings for $ACCOUNT verified"
 }
 
@@ -163,7 +163,7 @@ create() {
   verify_mac_account
   local root_before=""
   if [ "$DRY" = 0 ]; then root_before="$(effective_for root)" || die "sshd -T failed for user root; is sshd installed and its config valid?"; fi
-  if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q "127.0.0.1:$PORT "; then
+  if command -v ss >/dev/null 2>&1 && grep -q "127.0.0.1:$PORT " <<<"$(ss -ltn 2>/dev/null || true)"; then
     say "warning: something already listens on 127.0.0.1:$PORT"
   fi
   local ts bdir

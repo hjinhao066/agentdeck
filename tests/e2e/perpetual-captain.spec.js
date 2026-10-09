@@ -212,7 +212,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
     // Recovery belongs to the Captain's own controlling PTY, never the external test runner.
     await expect(boardWithoutCapabilities(codexId, ['ledger'])).rejects.toThrow(/independent|conductor-managed/);
     await boardViaAgent(codexId, ['ledger'], '不中断的队员', true);
-    await boardViaAgent(codexId, ['briefing'], '动态状态和恢复顺序看 handoff', true);
+    await boardViaAgent(codexId, ['briefing'], '做下面的事之前先读对应规范：briefing --topic 名', true);
   }
   const alerts = await application.evaluate(({ app }) => app.testRelayAlerts);
   expect(alerts).toHaveLength(2);

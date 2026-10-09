@@ -139,7 +139,7 @@ async function request(command, waitForCompletion, authOverride) {
   fail(`Timed out waiting for board request ${id}.`, 2);
 }
 
-const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer'];
+const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer', 'main-todo'];
 
 // 待我处理: what the user should come back to. Plain words for 队长, who files the items.
 const INBOX_HELP = [
@@ -213,14 +213,14 @@ async function automationCommand(args) {
 // Every command lists the flags it takes. A flag outside the list is refused, never dropped:
 // `new --model … --verify` once ran a default model with no review and nobody noticed.
 // inbox and automation check their own flags above.
-const SUBCOMMANDS = ['task', 'queue', 'settings', 'worktree', 'discuss'];
+const SUBCOMMANDS = ['task', 'queue', 'settings', 'worktree', 'discuss', 'todo'];
 const COMMAND_FLAGS = {
   'create-child': ['title', 'task', 'agent', 'command', 'cwd', 'relationship', 'timeout'],
   'spawn-child': ['title', 'task', 'agent', 'command', 'cwd', 'relationship', 'timeout'],
   wait: ['task', 'timeout'],
   send: ['task', 'message'],
   progress: ['message', 'install-id', 'target-version'],
-  complete: ['result', 'files', 'failed'],
+  complete: ['result', 'files', 'failed', 'final'],
   ask: ['question'],
   'session-exit': ['code'],
   'notify-user': ['message', 'urgent', 'test'],
@@ -235,7 +235,7 @@ const COMMAND_FLAGS = {
   archive: ['id'],
   ledger: [],
   receipts: ['wait', 'timeout', 'snapshot', 'ack'],
-  new: ['title', 'task', 'project', 'reviews', 'task-id', 'cwd', 'worktree', 'base', 'branch', 'priority', 'seat', 'agent', 'command', 'web-mode'],
+  new: ['title', 'task', 'project', 'reviews', 'task-id', 'cwd', 'worktree', 'base', 'branch', 'priority', 'seat', 'agent', 'command', 'web-mode', 'sub-captain'],
   tell: ['to', 'message', 'replace', 'now'],
   answer: ['to', 'key'],
   peek: ['id', 'lines'],
@@ -243,7 +243,9 @@ const COMMAND_FLAGS = {
   'settings battery': ['mode', 'cap', 'boost', 'for', 'until'],
   status: [],
   quota: [],
-  briefing: [],
+  briefing: ['topic'],
+  'todo list': [],
+  'todo status': ['id', 'task-id', 'status', 'message', 'files'],
   handoff: [],
   'worktree clean': ['apply', 'path', 'root'],
   'discuss start': ['topic', 'topic-file', 'gemini', 'participants-file', 'summarizer', 'max-rounds'],
@@ -288,6 +290,8 @@ function usage() {
     'Captain only (队长, the main session):\n' +
     '  discuss start --topic "题目" [--gemini] [--participants-file path] [--summarizer id]\n' +
     '  discuss status [--id id] | wait --id id | resume --id id [--retry job-id] | cancel --id id\n' +
+    '  todo list                                personal Todo items and AI state\n' +
+    '  todo status --id td-… --task-id todo-… --status working|needs_user|done|failed [--message "Reason"] [--files path1,path2]\n' +
     '  notify-user --message "User action needed" [--urgent]   local alert; urgent also sends Bark\n' +
     '  notify-user --test                        Bark 【测试】 notification, shared volume setting (default 4)\n' +
     '  inbox need|report|list|resolve            the user\'s 待我处理 page; inbox help for details\n' +
@@ -308,7 +312,9 @@ function usage() {
     '                                           --boost on = 临时拉满: on battery, open sessions up to the normal limit instead of the battery cap\n' +
     '                                           (用户说「强度拉满」); ends at --for/--until, when plugged in, or --boost off. The battery mode itself stays on.\n' +
     '                                           --mode off = 不限制 for good, auto = 没插电时按 --cap 限制同时干活的会话数\n' +
-    '  briefing                                 current Captain instructions, read-only\n' +
+    '  briefing                                 the Captain core prompt, read-only\n' +
+    '  briefing --topic <name>|all|list          one of the Captain rule files (models, dispatch, review, inbox,\n' +
+    '                                           sessions, capacity, release, handoff, commands), read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
     '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
     '                                           model and effort go inside --command (…--model claude-opus-5-5 --effort high); new has no --model/--effort/--verify\n' +
@@ -465,6 +471,18 @@ async function main() {
   }
 
   // ---- main session ----
+  if (action === 'todo') {
+    const op = args._[1];
+    if (!['list', 'status'].includes(op)) fail('todo requires list or status.');
+    if (op === 'status' && (typeof args.id !== 'string' || typeof args['task-id'] !== 'string' || !['working', 'needs_user', 'done', 'failed'].includes(args.status) ||
+        (args.message !== undefined && typeof args.message !== 'string') || (args.files !== undefined && typeof args.files !== 'string'))) fail('todo status requires --id, --task-id and a valid --status.');
+    const response = await request({ action: 'main-todo', op, ...(op === 'status' ? { input: {
+      id: args.id, taskId: args['task-id'], status: args.status, message: args.message || '',
+      files: args.files ? args.files.split(',').map((file) => file.trim()).filter(Boolean) : [],
+    } } : {}) }, false);
+    process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
   if (action === 'queue') {
     const op = args._[1];
     if (!['list', 'cancel'].includes(op)) fail('queue requires list or cancel.');
@@ -683,6 +701,12 @@ async function main() {
     }
     const response = await request({ action: 'main-settings', op: 'battery', input }, false);
     process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
+  if (action === 'briefing' && args.topic !== undefined) {
+    // Rule files are read where the CLI is installed; the running app is not asked.
+    try { process.stdout.write(`${require('./captain-rules').briefing(args.topic)}\n`); }
+    catch (err) { fail(err.message); }
     return;
   }
   if (action === 'quota' || action === 'briefing' || action === 'handoff') {

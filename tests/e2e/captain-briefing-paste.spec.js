@@ -4,8 +4,10 @@ const os = require('os');
 const path = require('path');
 const M = require('../../main-core');
 
-// The Captain briefing is the one prompt allowed past the ordinary 8000-character
-// cut. These tests send it through the real window, a real PTY (ConPTY on
+// A briefing send is the one prompt allowed past the ordinary 8000-character cut
+// (up to MainCore.BRIEFING_LIMIT). The Captain's own prompt is now the short core,
+// far below either limit; the 10000-character cases keep proving the ceiling.
+// These tests send both through the real window, a real PTY (ConPTY on
 // Windows) and a stand-in agent that writes down exactly what reached its stdin.
 // Two stand-ins: one reads lines, one asks for bracketed paste like Claude Code
 // and records its raw input. AgentDeck pastes when the terminal was asked to and
@@ -85,10 +87,10 @@ test.afterEach(async () => {
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
-test('the Captain\'s first briefing, longer than an ordinary prompt may be, reaches a line-reading agent whole', async () => {
+test('the Captain\'s first briefing, the short core, reaches a line-reading agent whole', async () => {
   await launch();
   const brief = await briefing();
-  expect(brief.length).toBeGreaterThan(M.LONG_PROMPT);
+  expect(brief.length).toBeLessThanOrEqual(M.CORE_LIMIT);
   await expect.poll(() => received(CAPTAIN).length, { timeout: 30000 }).toBeGreaterThan(0);
   const got = received(CAPTAIN)[0];
   evidence('first briefing', await way(CAPTAIN), brief, got);
@@ -148,7 +150,11 @@ test('a briefing of exactly 10000 characters reaches a paste-taking agent whole,
 
 test('an ordinary prompt one character past 8000 still goes to a worker as a file', async () => {
   await launch();
-  const inside = '活'.repeat(M.LONG_PROMPT), long = '活'.repeat(M.LONG_PROMPT + 1);
+  // The worker reads lines, and a line past ~1 KB goes out as a file whatever its length (line-mode pointer), so the text is
+  // broken into lines of 300 characters: the length rule is what this test judges.
+  const lines = (length) => [...'活'.repeat(length)].map((c, i) => (i % 300 === 299 && i < length - 1 ? '\n' : c)).join('');
+  const inside = lines(M.LONG_PROMPT), long = lines(M.LONG_PROMPT + 1);
+  expect([inside.length, long.length]).toEqual([M.LONG_PROMPT, M.LONG_PROMPT + 1]);
   await page.evaluate(([i, t]) => sendWhenReady(columns.find((c) => c.id === i), t, { silent: true }), [WORKER, inside]);
   await expect.poll(() => received(WORKER).length, { timeout: 40000 }).toBe(1);
   expect(received(WORKER)[0]).toBe(inside);

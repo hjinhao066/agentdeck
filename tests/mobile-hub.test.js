@@ -23,7 +23,7 @@ test('snapshot results map to the five machine states of the design table', () =
 
 test('api/info decides between a current build and one that needs an upgrade before any login', () => {
   const info = { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath'], machine: { id: 'win', label: 'Windows', platform: 'win32' }, appVersion: '1.2.0' };
-  assert.deepEqual(Core.classifyInfo({ status: 200, body: info }), { current: true });
+  assert.deepEqual(Core.classifyInfo({ status: 200, body: info }), { current: true, dedupe: false });
   // Old builds answer 401 (not logged in) or 404 (logged in) to the probe: never a login form.
   assert.deepEqual(Core.classifyInfo({ status: 401, body: { error: 'Unauthorized.' } }), { state: 'upgrade' });
   assert.deepEqual(Core.classifyInfo({ status: 404, body: { error: 'Not found.' } }), { state: 'upgrade' });

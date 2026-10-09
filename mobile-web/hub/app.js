@@ -219,7 +219,7 @@
     } catch (_) { return controller.signal.aborted ? { timedOut: true } : { failed: true }; }
     finally { clearTimeout(timer); }
   }
-  const post = (m, path, body) => request(m, path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': m.csrf }, body: JSON.stringify(body) });
+  const post = (m, path, body, options = {}) => request(m, path, { ...options, method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': m.csrf }, body: JSON.stringify(body) });
   function saveMeta() {
     store(KEYS.meta, JSON.stringify(Object.fromEntries(machines.map((m) => [m.id, m.meta]))));
   }
@@ -240,7 +240,7 @@
     // until a snapshot fails again.
     if (!m.current) {
       const info = Core.classifyInfo(await request(m, 'api/info'));
-      if (info.current) m.current = true; else settle(m, null, info);
+      if (info.current) { m.current = true; m.dedupe = info.dedupe; } else settle(m, null, info);
     }
     const result = m.current ? await request(m, 'api/snapshot') : null;
     if (m.current && settle(m, result).state !== 'online') m.current = false;
@@ -993,7 +993,9 @@
             box.value = box.value ? box.value + '\n' + item.text : item.text;
             sendStatus = ''; render(); fitComposer(); box.focus();
           });
-          foot.append(node('p', 'bubble-reason', item.reason), resend, edit); bubble.append(foot);
+          const close = iconButton('close', '关掉这条没发出的消息');
+          close.addEventListener('click', () => { outbox.splice(outbox.indexOf(item), 1); sendStatus = ''; render(); });
+          foot.append(node('p', 'bubble-reason', item.reason), resend, edit, close); bubble.append(foot);
         } else {
           // Under the bubble, like a delivery receipt: on its way, then waiting for the Captain to take it.
           const state = node('p', 'bubble-meta'), mark = node('span', 'meta-mark'); mark.setAttribute('aria-hidden', 'true');
@@ -1143,6 +1145,9 @@
     if (!files.length) return;
     event.preventDefault(); addImages(files);
   });
+  const SEND_TIMEOUT = 15000;
+  // Made once per message and reused by its retries (the computer's deduplicationKey).
+  const sendKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   // One message, one request. The box is not locked meanwhile (locking it would
   // fold the phone's keyboard on every send); only the send button waits.
   async function deliver(m, item) {
@@ -1152,14 +1157,18 @@
     sending = true; sendStatus = '';
     render(); fitComposer();
     $('captain-turns').scrollTop = $('captain-turns').scrollHeight;
-    const result = await post(m, 'api/captain', item.images.length ? { message: item.text, images: item.images } : { message: item.text });
+    // A computer that takes keys gets this message's key on every try, and 15 seconds to answer.
+    const body = { message: item.text };
+    if (item.images.length) body.images = item.images;
+    if (m.dedupe) body.deduplicationKey = item.key;
+    const result = await post(m, 'api/captain', body, m.dedupe ? { timeout: SEND_TIMEOUT } : {});
     sending = false;
     if (result.status === 200 && result.body && result.body.queued) {
       item.state = 'sent';
       sendStatus = `已排队到 ${m.label} 队长。`;
     } else {
       // No answer at all: it may have arrived. If it shows up in the conversation, this bubble gives way to it.
-      item.state = 'failed'; item.unsure = !!(result.timedOut || result.failed); item.reason = Core.sendFailure(result, m.label);
+      item.state = 'failed'; item.unsure = !!(result.timedOut || result.failed); item.reason = Core.sendFailure(result, m.label, !!body.deduplicationKey);
     }
     render(); poll(m);
   }
@@ -1179,7 +1188,7 @@
       return;
     }
     repeatAsked = null;
-    const item = { id: ++outboxId, machineId: m.id, text, images, state: 'sending', reason: '', known: [], at: now };
+    const item = { id: ++outboxId, key: sendKey(), machineId: m.id, text, images, state: 'sending', reason: '', known: [], at: now };
     outbox.push(item); $('message').value = ''; attachments = []; renderAttachments();
     deliver(m, item);
   });
@@ -1288,17 +1297,26 @@
     renderAttention();
   }
   // An unread item counts as read once most of it has stayed on screen for a
-  // moment. Measured on a timer rather than observed: it holds when the browser
-  // throttles painting.
+  // moment while the page is in front: shown (visibilityState) and its window
+  // focused (focus/blur), as on the desktop. Leaving clears every count at once;
+  // back in front, each starts again from 0. Measured on a timer rather than
+  // observed, so throttled painting does not matter.
   const attentionSeenSince = new Map();
   // Reports read on this visit stay where the user is reading them until the tab is left.
   const attentionKept = new Set();
   const SEEN_MS = 1500;
+  let pageFocused = document.hasFocus();
+  const attending = () => pageFocused && document.visibilityState === 'visible';
+  const stopCounting = () => { attentionSeenSince.clear(); captainSeenSince.clear(); };
+  addEventListener('focus', () => { pageFocused = true; });
+  addEventListener('blur', () => { pageFocused = false; stopCounting(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') stopCounting(); });
   // Mostly in view through its scroll area and the window, on both axes (the same rule as the desktop).
   const onScreen = (el, box) => Core.mostlyShown(el.getBoundingClientRect(), [box, { left: 0, top: 0, right: innerWidth, bottom: innerHeight, width: innerWidth, height: innerHeight }]);
   function checkAttentionSeen() {
     checkCaptainSeen();
     if (document.hidden || view !== 'attention') { attentionSeenSince.clear(); attentionKept.clear(); return; }
+    if (!attending()) { attentionSeenSince.clear(); return; }
     const box = $('main').getBoundingClientRect(), now = Date.now(), ready = [];
     for (const el of document.querySelectorAll('#attention-lists .at-item.unread')) {
       const key = el.dataset.key;
@@ -1314,7 +1332,7 @@
   function checkCaptainSeen() {
     const m = byId(target);
     const unseen = m && m.state === 'online' && Array.isArray(m.attention) ? m.attention.filter((i) => i.kind === 'report' && !i.done && i.turn) : [];
-    if (document.hidden || view !== 'captain' || !unseen.length) { captainSeenSince.clear(); return; }
+    if (!attending() || view !== 'captain' || !unseen.length) { captainSeenSince.clear(); return; }
     const box = $('captain-turns').getBoundingClientRect(), now = Date.now(), ready = [];
     for (const row of $('captain-turns').querySelectorAll(`.turn[data-said][data-machine="${CSS.escape(m.id)}"]`)) {
       const said = row.dataset.said.split(' '), ids = unseen.filter((i) => said.includes(i.turn)).map((i) => m.id + ':' + i.id);
@@ -1367,7 +1385,7 @@
     if (!(shut && item.label === '要你处理')) top.append(node('span', 'at-kind', item.label));
     if (stay) top.append(node('span', 'at-seen', '已读'));
     const when = shut ? item.doneAt : item.created;
-    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.automation && '自动任务：' + item.automation, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
+    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.automation && '自动任务：' + item.automation, item.source === 'todo' && '来自待办', item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
     if (when) meta.title = (shut ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
     top.append(meta);
     // An open need with a question: the question is the biggest thing on the card,
@@ -1601,12 +1619,13 @@
     const result = await request(m, 'api/todos');
     m.todosAt = Date.now();
     // 404: a build without to-dos. Nothing to show from it, and nothing failed.
-    if (result.status === 200 && result.body) { m.todos = Core.cleanTodos(result.body); m.todosReady = true; }
+    if (result.status === 200 && result.body) { m.todos = Core.cleanTodos(result.body); m.todosReady = true; m.todoBaseKeys = Array.isArray(result.body.baseKeys) ? result.body.baseKeys : null; }
     else if (result.status === 404) { m.todos = null; m.todosReady = false; }
   }
   const todoSources = () => machines.filter((m) => Array.isArray(m.todos));
   const todoWriter = () => Core.todoWriter(machines, target);
-  // The computer's answer goes into its own copy at once; the next poll confirms it.
+  // The computer's answer (the item as its api/todos shows it) goes into its own
+  // copy at once; the next poll confirms it.
   function keepTodo(m, item) {
     const [clean] = Core.cleanTodos({ items: [item] });
     if (!clean || !Array.isArray(m.todos)) return;
@@ -1642,17 +1661,28 @@
     check.addEventListener('click', () => toggleTodo(t, row, check));
     const body = node('div', 'todo-main');
     const when = t.done ? '完成于 ' + Core.ago(Date.parse(t.doneAt || t.updated), Date.now()) : Core.ago(Date.parse(t.created), Date.now());
-    body.append(node('p', 'todo-text', t.text), node('p', 'todo-when', when));
+    body.append(node('p', 'todo-text', t.text));
+    if (t.ai) body.append(todoAi(t.ai));
+    body.append(node('p', 'todo-when', when));
     row.append(check, body);
     return row;
+  }
+  // A 待办 handed to AI (@ai). The files themselves open from 待我处理.
+  const TODO_AI_LABEL = { working: 'AI 正在办', needs_user: 'AI 在等你', done: 'AI 办完了', failed: 'AI 没办成' };
+  function todoAi(ai) {
+    const box = node('p', 'todo-ai is-' + ai.status);
+    box.append(node('span', 'todo-ai-chip', TODO_AI_LABEL[ai.status] || (ai.delivered ? '已交给 AI · 队长已收到' : '已交给 AI · 等队长接收')));
+    if (ai.message && ai.status !== 'queued') box.append(node('span', 'todo-ai-msg', ai.message));
+    if (ai.files.length) box.append(node('span', 'todo-ai-files', `交回 ${ai.files.length} 个文件：${ai.files.join('、')}（在「待我处理」打开）`));
+    return box;
   }
   async function toggleTodo(t, row, check) {
     const m = todoWriter();
     if (!m || row.classList.contains('is-saving')) return;
     const done = !t.done;
     row.classList.add('is-saving'); row.classList.toggle('is-done', done); check.setAttribute('aria-checked', String(done));
-    // The base lets a computer tick an item the other one recorded less than a git sync ago.
-    const base = { text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated };
+    // The base lets a computer tick an item the other one recorded or edited less than a git sync ago.
+    const base = Core.todoBase(t, m.todoBaseKeys);
     const result = await post(m, 'api/todos', { op: 'update', id: t.id, done, base });
     if (result.status === 200 && result.body && result.body.item) {
       keepTodo(m, result.body.item);

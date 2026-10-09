@@ -197,6 +197,7 @@
     views.set(col.id, v);
     syncRoute(v);
     applyMode(col);
+    if (col.isMain && window.ChatDeliverables) window.ChatDeliverables.mount(col, wrap, head, chat);
 
     toggle.addEventListener('click', () => setMode(col.id, modeOf(col) === 'chat' ? 'term' : 'chat'));
     form.addEventListener('submit', (e) => { e.preventDefault(); submit(col); });
@@ -1122,6 +1123,7 @@
     host.manualTurnDone(id, open.turn);
     if (nav && nav.input.value.trim()) runSearch();
     if (window.Pages) window.Pages.refresh();
+    if (window.ChatDeliverables) window.ChatDeliverables.refresh();
   }
 
   // The work before the reply, saved with the turn (bounded by ChatCore).
@@ -1469,7 +1471,7 @@
   function onColumnMouseDown(col, e) {
     if (!isChatMode(col.id)) return false;
     host.setFocused(col.id);
-    if (!e.target.closest('.chat-scroll, .chat-attn, .composer, .tui-footer, .view-toggle')) focusInput(col.id);
+    if (!e.target.closest('.chat-scroll, .chat-attn, .composer, .tui-footer, .view-toggle, .dlv, .dlv-toggle')) focusInput(col.id);
     return true;
   }
 
@@ -1591,6 +1593,7 @@
     }
     scheduleSave(id);
     if (window.Pages) window.Pages.refresh();
+    if (window.ChatDeliverables) window.ChatDeliverables.refresh();
   }
   // 队长's context is cleared: its conversation stays saved under the old id
   // (readable with `read --id`), the respawned column starts an empty one.
@@ -1795,12 +1798,14 @@
     views.forEach((v, id) => renderChat(id));
     if (nav.input.value.trim()) runSearch();
     if (window.Sidebar) window.Sidebar.render();
+    if (window.ChatDeliverables) window.ChatDeliverables.refresh();
   }
 
   window.ChatUI = {
     init, mountColumn, isChatMode, focusInput, setMode, toggleGlobalMode, onSubmitted, noteSent, sendPrompt,
     onTick, onExit, onColumnMouseDown, onColumnRemoved, onColumnArchived, deleteArchivedChat, onColumnIdChanged, onRender,
     focusSearch, reveal, lastTurnTs, artifactSources, readFooter,
+    isLoaded: () => loaded,
     hasDraft: (id) => { const v = views.get(id); return !!v && (!!v.ta.value || v.atts.length > 0); },
     attach: (id, path) => { const v = views.get(id); if (v) addAttachment(v, path); },
     attachmentChip: (path, colId) => attachmentChip(path, colId, null),
