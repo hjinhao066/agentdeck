@@ -212,12 +212,15 @@ test('new receipts and replies join the list; the index is saved with what it re
   fs.writeFileSync(fresh, '%PDF-1.4\n');
   await page.evaluate(({ id, file }) => {
     const c = columns.find((x) => x.id === id);
-    c.lastReceipt = { summary: '年度总结导出了。', files: [file, file.replace(/年度总结\.pdf$/, 'raw.csv')], explicit: true, source: 'command', ts: Date.now() };
+    c.lastReceipt = { summary: '年度总结导出了。', files: [file, file.replace(/年度总结\.pdf$/, 'raw.csv'), file.replace(/年度总结\.pdf$/, 'export.log')], explicit: true, source: 'command', ts: Date.now() };
     ChatDeliverables.refresh();
   }, { id: EXPORT, file: fresh });
-  await expect(rows().first().locator('.dlv-name')).toHaveText('年度总结.pdf');
-  await expect(rows().first().locator('.dlv-from')).toHaveText('报表导出');
-  await expect(row('raw.csv')).toHaveCount(0);
+  // one receipt, one time: its two files come first, together
+  await expect.poll(async () => (await names()).slice(0, 2).sort()).toEqual(['raw.csv', '年度总结.pdf']);
+  await expect(row('年度总结.pdf').locator('.dlv-from')).toHaveText('报表导出');
+  // handed in on purpose, a csv counts; a log never does
+  await expect(row('raw.csv')).toHaveCount(1);
+  await expect(row('export.log')).toHaveCount(0);
   // the index is in config.json: the old conversation is read once and remembered
   await page.evaluate(() => flushConfig());
   const read = () => { try { return JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')); } catch (_) { return {}; } };
@@ -234,31 +237,67 @@ test('new receipts and replies join the list; the index is saved with what it re
   await expect(row('old-plan.md')).toHaveCount(1);
 });
 
-test('the two lists are editable: a type added shows its files, the defaults come back', async () => {
-  await panel().getByRole('button', { name: '筛选规则' }).click();
+test('the three lists are editable: result types, process types, skipped folders; the defaults come back', async () => {
+  const open = async () => { await panel().getByRole('button', { name: '筛选规则' }).click(); await expect(form).toBeVisible(); };
+  const save = async () => { await form.getByRole('button', { name: '保存' }).click(); await expect(form).toBeHidden(); };
   const form = panel().locator('.dlv-rules');
-  await expect(form).toBeVisible();
-  const types = form.getByLabel('算作交付的文件类型');
+  await open();
+  const types = form.getByLabel('算作交付的文件类型'), process = form.getByLabel('从不算交付的文件类型'), skip = form.getByLabel('跳过这些文件夹里的文件');
   await expect(types).toHaveValue(/(^|[ ,])md([ ,]|$)/);
-  await types.fill((await types.inputValue()) + ', csv');
-  await form.getByRole('button', { name: '保存' }).click();
-  await expect(form).toBeHidden();
+  await expect(process).toHaveValue(/(^|[ ,])py([ ,]|$)/);
+  // 队长 mentioned build.py: a result type now, but still a process type, so still left out
+  await types.fill((await types.inputValue()) + ', py');
+  await save();
+  await expect(row('build.py')).toHaveCount(0);
+  expect(await page.evaluate(() => config.deliverableRules.types.includes('py'))).toBe(true);
+  // off the process list, it shows
+  await open();
+  await process.fill((await process.inputValue()).split(/,\s*/).filter((t) => t !== 'py').join(', '));
+  await save();
+  await expect(row('build.py')).toHaveCount(1);
+  // folders: the export folder is skipped, its csv goes
   await expect(row('orders.csv')).toHaveCount(1);
-  await expect(row('raw.csv')).toHaveCount(1);
-  expect(await page.evaluate(() => config.deliverableRules.types.includes('csv'))).toBe(true);
-  // folders work the same way
-  await panel().getByRole('button', { name: '筛选规则' }).click();
-  const skip = form.getByLabel('跳过这些文件夹里的文件');
+  await open();
   await skip.fill((await skip.inputValue()) + ', export');
-  await form.getByRole('button', { name: '保存' }).click();
+  await save();
   await expect(row('orders.csv')).toHaveCount(0);
-  // back to the defaults (minus the temp folders this test profile lives in)
-  await panel().getByRole('button', { name: '筛选规则' }).click();
+  // back to the defaults (then without the temp folders this test profile lives in)
+  await open();
   await form.getByRole('button', { name: '恢复默认' }).click();
   await expect(form).toBeHidden();
   expect(await page.evaluate(() => config.deliverableRules)).toBeUndefined();
   await page.evaluate((skip) => { config.deliverableRules = { skip }; ChatDeliverables.refresh(); }, data.build(out, Date.now(), { CAPTAIN, OLD, LOGIN, EXPORT, FAKE }).config.deliverableRules.skip);
-  await expect(row('raw.csv')).toHaveCount(0);
+  await expect(row('orders.csv')).toHaveCount(1);
+  await expect(row('build.py')).toHaveCount(0);
+});
+
+test('a long history is kept whole and paged: 显示更早的 brings the oldest back', async () => {
+  // 450 older files from a conversation long gone: only the index knows them
+  const before = await rows().count();
+  await page.evaluate((dir) => {
+    const old = Date.now() - 40 * 86_400_000;
+    const extra = Array.from({ length: 450 }, (_, i) => ({ key: `${dir}/history/${i}.md`, path: `${dir}/history/${i}.md`, ts: old + i * 60_000, from: 'reply', chatId: 'captain-gone', turnId: 'g' + i }));
+    config.chatDeliverables.items.push(...extra);
+    ChatDeliverables.refreshNow();
+  }, out.replace(/\\/g, '/'));
+  await expect(panel().locator('.dlv-count')).toHaveText(String(before + 450));
+  await expect(rows()).toHaveCount(200);
+  const more = panel().locator('.dlv-more');
+  await expect(more).toHaveText(`显示更早的 200 个（还有 ${before + 250} 个）`);
+  await more.click();
+  await expect(rows()).toHaveCount(400);
+  await expect(more).toBeFocused();
+  await more.click();
+  await expect(rows()).toHaveCount(before + 450);
+  await expect(more).toHaveCount(0);
+  await expect(rows().last().locator('.dlv-name')).toHaveText('0.md');
+  await expect(rows().last().locator('.dlv-from')).toHaveText('清空前的队长对话');
+  // saved whole
+  await page.evaluate(() => flushConfig());
+  await expect.poll(() => { try { return JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).chatDeliverables.items.length; } catch (_) { return 0; } }).toBe(before + 450);
+  // tidy up for the layout tests
+  await page.evaluate(() => { config.chatDeliverables.items = config.chatDeliverables.items.filter((i) => !/\/history\/\d+\.md$/.test(i.path)); ChatDeliverables.refreshNow(); });
+  await expect(rows()).toHaveCount(before);
 });
 
 // The reading column stands left of centre: the air on its left is about 0.618

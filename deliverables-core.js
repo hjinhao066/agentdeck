@@ -1,10 +1,10 @@
 // The 交付文件 panel beside 队长's conversation: the result files (documents,
 // reports, pictures, videos) that came up in 队长's replies and in the crew's
 // receipts, newest first, one row per path. Process files (scripts, data, logs,
-// anything under node_modules or a scratch folder) are left out by two lists the
-// user can change. What has been found is kept as an index in config.json
-// (`chatDeliverables`), so the conversations from before a context clear are
-// read once and never again. No DOM, no Electron: runs in the page and in tests.
+// anything under node_modules or a scratch folder) are left out by three lists
+// the user can change. What has been found is kept, all of it, as an index in
+// config.json (`chatDeliverables`), so the conversations from before a context
+// clear are read once and never again. No DOM, no Electron: runs in the page and in tests.
 (function (root, factory) {
   const api = factory(typeof module === 'object' && module.exports ? require('./chat-core.js') : root.ChatCore);
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -12,15 +12,19 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (C) {
   'use strict';
 
-  // types: file extensions that are results. skip: folder names (or a run of
-  // them, "var/folders") whose files are never results, whatever their type.
+  // types: the file types a path 队长 merely mentions must have to count.
+  // process: types that never count, not even when a receipt hands them in
+  // (code, data dumps, logs, databases). skip: folder names (or a run of them,
+  // "var/folders") whose files never count. A file a receipt lists is a result
+  // the worker handed in on purpose: only process and skip leave it out.
   const DEFAULT_RULES = Object.freeze({
     types: Object.freeze(['md', 'markdown', 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'key', 'xls', 'xlsx', 'numbers', 'pages',
       'html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic', 'mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav']),
     skip: Object.freeze(['node_modules', '.git', 'scratchpad', 'tmp', 'temp', 'var/folders', '.cache', 'caches', '__pycache__',
       '.venv', 'venv', 'site-packages', 'test-results', 'playwright-report', '.next', 'dist']),
+    process: Object.freeze(['py', 'pyc', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'json', 'jsonl', 'log', 'sqlite', 'sqlite3', 'db',
+      'sh', 'bash', 'zsh', 'ps1', 'bat', 'cmd', 'lock', 'map', 'css', 'scss', 'yml', 'yaml', 'toml', 'ini', 'env', 'tmp', 'bak', 'swp', 'pid']),
   });
-  const MAX_ITEMS = 1500;
   const MAX_RULES = 200;
 
   // "md, .PDF  docx" -> ['md', 'pdf', 'docx']
@@ -39,22 +43,25 @@
     return {
       types: Array.isArray(s.types) ? parseList(s.types.join(' ')) : [...DEFAULT_RULES.types],
       skip: Array.isArray(s.skip) ? parseList(s.skip.join(' '), true) : [...DEFAULT_RULES.skip],
+      process: Array.isArray(s.process) ? parseList(s.process.join(' ')) : [...DEFAULT_RULES.process],
     };
   }
   const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
-  const isDefault = (rules) => sameList(rules.types, DEFAULT_RULES.types) && sameList(rules.skip, DEFAULT_RULES.skip);
-  const rulesKey = (rules) => JSON.stringify([rules.types, rules.skip]);
+  const isDefault = (rules) => ['types', 'skip', 'process'].every((k) => sameList(rules[k], DEFAULT_RULES[k]));
+  const rulesKey = (rules) => JSON.stringify([rules.types, rules.skip, rules.process]);
 
   function segments(path) {
     return String(path).replace(/^file:\/\//, '').replace(/:\d+(?::\d+)?$/, '').split(/[\\/]+/).filter(Boolean).map((s) => s.toLowerCase());
   }
-  // A result file: its type is listed and no folder on its way is skipped.
-  function isDeliverable(path, rules) {
+  // A result file: not a process type, no folder on its way skipped, and, unless
+  // a receipt handed it in (delivered), of a result type.
+  function isDeliverable(path, rules, delivered) {
     const parts = segments(path);
     if (parts.length < 2) return false;
     const name = parts[parts.length - 1];
     const ext = C.extOf(name);
-    if (!ext || !rules.types.includes(ext)) return false;
+    if (ext && rules.process.includes(ext)) return false;
+    if (!delivered && (!ext || !rules.types.includes(ext))) return false;
     const folders = parts.slice(0, -1);
     return !rules.skip.some((rule) => {
       const run = rule.split('/').filter(Boolean);
@@ -119,7 +126,7 @@
     for (const r of receipts || []) {
       for (const raw of r.files || []) {
         const path = String(raw).trim();
-        if (!isDeliverable(path, rules)) continue;
+        if (!isDeliverable(path, rules, true)) continue;
         out.push({ path, ts: Number(r.ts) || 0, from: 'receipt', colId: r.colId || '', session: r.session || '', project: r.project || '', task: r.task || '', gone: !!r.gone, archived: !!r.archived });
       }
     }
@@ -145,14 +152,15 @@
     const s = saved && typeof saved === 'object' ? saved : {};
     const key = rulesKey(rules);
     const same = s.rules === key;
-    const items = (Array.isArray(s.items) ? s.items : []).map(normalizeItem).filter((i) => i && isDeliverable(i.path, rules));
+    const items = (Array.isArray(s.items) ? s.items : []).map(normalizeItem).filter((i) => i && isDeliverable(i.path, rules, i.from === 'receipt'));
     const scanned = same && Array.isArray(s.scanned) ? s.scanned.filter((id) => typeof id === 'string' && id.length <= 160) : [];
     return { v: 1, rules: key, scanned: [...new Set(scanned)], items };
   }
 
   // Fold what was just found into the index: one item per path (Windows paths
   // ignore case and slash direction), the latest mention wins; a receipt wins a
-  // tie and lends its project to a later mention that has none.
+  // tie and lends its project to a later mention that has none. Nothing is ever
+  // dropped for room: the panel shows the newest and pages through the rest.
   function mergeIndex(index, entries, { home, projects } = {}) {
     const byKey = new Map(index.items.map((i) => [i.key, i]));
     for (const e of entries) {
@@ -170,7 +178,7 @@
       }
       byKey.set(key, item);
     }
-    const items = [...byKey.values()].sort((a, b) => b.ts - a.ts || a.path.localeCompare(b.path)).slice(0, MAX_ITEMS);
+    const items = [...byKey.values()].sort((a, b) => b.ts - a.ts || a.path.localeCompare(b.path));
     return { ...index, items };
   }
 
@@ -201,7 +209,7 @@
   }
 
   return {
-    DEFAULT_RULES, MAX_ITEMS, parseList, normalizeRules, isDefault, rulesKey, isDeliverable, guessProject, trimProse,
+    DEFAULT_RULES, parseList, normalizeRules, isDefault, rulesKey, isDeliverable, guessProject, trimProse,
     fromReplies, fromReceipts, normalizeIndex, mergeIndex, dayLabel, byDay,
   };
 });

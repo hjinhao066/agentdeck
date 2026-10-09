@@ -809,19 +809,22 @@ folded behind one line with their count and state; click it to open them.
 `deliverables-core.js`): a panel on the right lists the result files that came
 up in 队长's conversation, newest first by day: paths in 队长's replies and the
 files in the crew's receipts (the same receipts Artifacts › 回执交付 reads),
-including the conversations from before a context clear. Documents, PDFs,
-Office files, HTML reports, pictures, video and audio count; scripts, data,
-logs and anything under node_modules, .git, tmp, scratchpad or the system temp
-folders do not. Both lists are editable from the panel's gear (saved as
-`deliverableRules` only when changed). Each row shows the file name, its
+including the conversations from before a context clear. A path 队长 only
+mentions counts when it is a result type (documents, PDFs, Office files, HTML
+reports, pictures, video, audio); a file a receipt hands in counts whatever its
+type (a final .csv or .txt too). Neither counts when it is a process type
+(code, .json, logs, databases, shell scripts…) or sits under node_modules, .git,
+tmp, scratchpad or the system temp folders. The three lists are editable from
+the panel's gear (saved as `deliverableRules` only when changed). Each row shows the file name, its
 project (a receipt's own, or the project a folder on its path is named after),
 where it came from (队长回复 / the session that delivered it / 清空前的队长对话)
 and the time; a click previews it in the side pane, a file no longer on disk is
 greyed out. Hover or focus shows icon buttons to copy the path, show it in
 Finder/Explorer and jump to the reply or session. What was found is kept as an
 index in `config.chatDeliverables` (one row per path, the latest mention wins,
-at most 1500): each old conversation is read once, and its files stay listed
-even if the conversation is later trimmed. A column at least 1100px wide docks
+nothing dropped for room; the panel shows 200 rows and 显示更早的 adds 200 at a
+time): each old conversation is read once, and its files stay listed even if the
+conversation is later trimmed. A column at least 1100px wide docks
 the panel (folding it with the head's icon is remembered); a narrower one slides
 it over the chat on request, and Esc closes it. The phone hub does not have it.
 

@@ -31,13 +31,32 @@ test('result files pass, process files and anything under a skipped folder do no
   assert.equal(D.isDeliverable('/Users/me/var/notes/a.md', rules), true);
 });
 
+test('a file a receipt hands in counts whatever its type, unless it is a process type or in a skipped folder', () => {
+  const receipts = [{ colId: 'w', session: '报表导出', project: '报表服务', ts: 5,
+    files: ['/Users/me/out/final-export.csv', '/Users/me/out/final-report.txt', '/Users/me/out/final-report.pdf', '/Users/me/out/screens/',
+      '/Users/me/out/build.py', '/Users/me/out/run.log', '/Users/me/out/data.json', '/Users/me/out/cache.sqlite',
+      '/Users/me/proj/node_modules/x/README.md', '/tmp/draft.csv'] }];
+  assert.deepEqual(D.fromReceipts(receipts, rules).map((f) => f.path),
+    ['/Users/me/out/final-export.csv', '/Users/me/out/final-report.txt', '/Users/me/out/final-report.pdf', '/Users/me/out/screens/']);
+  // the same csv only mentioned by 队长 is not a result
+  assert.equal(D.isDeliverable('/Users/me/out/final-export.csv', rules), false);
+  assert.equal(D.isDeliverable('/Users/me/out/final-export.csv', rules, true), true);
+  // a saved receipt item keeps its place when the index is loaded again
+  const index = D.mergeIndex(D.normalizeIndex(null, rules), D.fromReceipts(receipts, rules));
+  assert.equal(D.normalizeIndex(JSON.parse(JSON.stringify(index)), rules).items.length, 4);
+  // the process list is the user's too
+  const mine = D.normalizeRules({ process: ['csv'] });
+  assert.deepEqual(D.fromReceipts(receipts, mine).map((f) => f.path).sort(),
+    ['/Users/me/out/build.py', '/Users/me/out/cache.sqlite', '/Users/me/out/data.json', '/Users/me/out/final-report.pdf', '/Users/me/out/final-report.txt', '/Users/me/out/run.log', '/Users/me/out/screens/']);
+});
+
 test('the lists are the user\'s to change; an untouched list keeps the defaults', () => {
   assert.deepEqual(D.parseList('md, .PDF  *.docx，key；md'), ['md', 'pdf', 'docx', 'key']);
   assert.deepEqual(D.parseList('/node_modules/ build\\out  var/folders', true), ['node_modules', 'build/out', 'var/folders']);
-  assert.deepEqual(D.normalizeRules(undefined), { types: [...D.DEFAULT_RULES.types], skip: [...D.DEFAULT_RULES.skip] });
+  assert.deepEqual(D.normalizeRules(undefined), { types: [...D.DEFAULT_RULES.types], skip: [...D.DEFAULT_RULES.skip], process: [...D.DEFAULT_RULES.process] });
   assert.equal(D.isDefault(D.normalizeRules({})), true);
   const mine = D.normalizeRules({ types: ['md', 'CSV'], skip: ['drafts'] });
-  assert.deepEqual(mine, { types: ['md', 'csv'], skip: ['drafts'] });
+  assert.deepEqual(mine, { types: ['md', 'csv'], skip: ['drafts'], process: [...D.DEFAULT_RULES.process] });
   assert.equal(D.isDefault(mine), false);
   assert.equal(D.isDeliverable('/Users/me/export/orders.csv', mine), true);
   assert.equal(D.isDeliverable('/Users/me/export/deck.pdf', mine), false);
@@ -60,9 +79,11 @@ test('replies give the files 队长 mentioned; receipts give the files the crew 
   const shown = D.fromReplies(turns.slice(0, 1), { findLinks, rules, text: () => '只剩 /Users/me/reports/clean.md' });
   assert.deepEqual(shown.map((f) => f.path), ['/Users/me/reports/clean.md']);
   const receipts = C.deliveryReceipts({
-    sessions: [{ id: 'w1', title: '报表导出', project: '报表服务', lastReceipt: { ts: 500, summary: '导好了', files: ['/Users/me/export/q3.pdf', '/Users/me/export/orders.csv', 'relative.md'] } }],
+    sessions: [{ id: 'w1', title: '报表导出', project: '报表服务', lastReceipt: { ts: 500, summary: '导好了', files: ['/Users/me/export/q3.pdf', '/Users/me/export/orders.csv', '/Users/me/export/export.log', 'relative.md'] } }],
   });
-  assert.deepEqual(D.fromReceipts(receipts, rules).map((f) => [f.path, f.from, f.session, f.project, f.ts]), [['/Users/me/export/q3.pdf', 'receipt', '报表导出', '报表服务', 500]]);
+  // handed in on purpose: the csv counts, the log does not, a relative name is no path
+  assert.deepEqual(D.fromReceipts(receipts, rules).map((f) => [f.path, f.from, f.session, f.project, f.ts]),
+    [['/Users/me/export/q3.pdf', 'receipt', '报表导出', '报表服务', 500], ['/Users/me/export/orders.csv', 'receipt', '报表导出', '报表服务', 500]]);
 });
 
 test('one item per path: the latest mention wins, a receipt wins a tie and lends its project', () => {
@@ -135,12 +156,24 @@ test('the index keeps history: it survives a save, remembers which old conversat
   const after = D.normalizeIndex(saved, narrow);
   assert.deepEqual(after.items, []);
   assert.deepEqual(after.scanned, []);
-  // capped: the oldest go first
-  const many = Array.from({ length: D.MAX_ITEMS + 20 }, (_, i) => ({ path: `/Users/me/r/${i}.md`, ts: i + 1, from: 'reply' }));
-  const full = D.mergeIndex(D.normalizeIndex(null, rules), many);
-  assert.equal(full.items.length, D.MAX_ITEMS);
-  assert.equal(full.items[0].ts, D.MAX_ITEMS + 20);
-  assert.equal(full.items.at(-1).ts, 21);
+});
+
+test('nothing is dropped for room: thousands of files, the oldest from a conversation read once, all stay', () => {
+  // an old conversation from before a clear mentions 1501 files; it is read once and marked read
+  const many = Array.from({ length: 1501 }, (_, i) => ({ path: `/Users/me/r/${i}.md`, ts: i + 1, from: 'reply', chatId: 'captain-old', old: true }));
+  let index = D.mergeIndex(D.normalizeIndex(null, rules), many);
+  index.scanned.push('captain-old');
+  // saved, loaded, and grown by later receipts and replies
+  for (let round = 0; round < 3; round++) {
+    index = D.normalizeIndex(JSON.parse(JSON.stringify(index)), rules);
+    index = D.mergeIndex(index, Array.from({ length: 400 }, (_, i) => ({ path: `/Users/me/new/${round}-${i}.pdf`, ts: 10_000 + round * 1000 + i, from: 'receipt' })));
+  }
+  index = D.normalizeIndex(JSON.parse(JSON.stringify(index)), rules);
+  assert.equal(index.items.length, 1501 + 1200);
+  assert.deepEqual(index.scanned, ['captain-old']);
+  // the very first file of the old conversation is still there, last in line
+  assert.equal(index.items.at(-1).path, '/Users/me/r/0.md');
+  assert.equal(index.items.at(-1).old, true);
 });
 
 test('grouped by day, newest first: 今天, 昨天, then the date', () => {

@@ -17,9 +17,11 @@ const RESULTS = [
   ['reports/chat-deliverables/report.html', true], ['reports/chat-deliverables/before-wide.png', true], ['reports/chat-deliverables/after-wide.png', true],
   ['reports/chat-deliverables/demo.mov', true], ['reports/design-review.md', true], ['reports/old-plan.md', true], ['reports/brand/logo.svg', true],
   ['reports/brand/cover.jpg', true], ['reports/audio/voice-memo.m4a', true], ['reports/missing-summary.md', false], ['reports/release-notes.md', true],
+  // a data file a receipt hands in on purpose is a result too
+  ['报表服务/export/orders.csv', true],
 ];
 const PROCESS = [
-  'scripts/build.py', 'src/app.js', 'data/config.json', '报表服务/export/orders.csv', 'logs/run.log', 'db/cache.sqlite',
+  'scripts/build.py', 'src/app.js', 'data/config.json', 'data/raw-dump.csv', 'logs/run.log', 'db/cache.sqlite',
   'node_modules/pkg/README.md', 'scratchpad/notes.md', 'src/.cache/thumb.png', '客户门户/build/app.min.js', 'notes/todo.txt',
 ];
 const TMP_FILE = '/tmp/agentdeck-deliverables-e2e/draft.md';
@@ -70,7 +72,7 @@ function build(out, now, { CAPTAIN, OLD, LOGIN, EXPORT, FAKE }) {
       '2. 右侧加交付文件栏，可以收起。',
       '3. 宽窄窗、深浅色都要截图验收。',
       '',
-      '临时稿 ' + TMP_FILE + ' 和 ' + f('scratchpad/notes.md') + ' 是草稿，不算交付。',
+      '临时稿 ' + TMP_FILE + ' 和 ' + f('scratchpad/notes.md') + ' 是草稿，原始数据 ' + f('data/raw-dump.csv') + ' 也不算交付。',
     ].join('\n')),
     card('k-export', '第三季度报表和预算', EXPORT, '报表服务', { summary: '季度汇总 PDF、明年预算和趋势图都导出了。',
       files: [f('报表服务/q3-summary.pdf'), f('报表服务/budget-2027.xlsx'), f('报表服务/charts/trend.webp'), f('报表服务/charts/trend.gif'), f('报表服务/export/orders.csv'), f('db/cache.sqlite')] }),

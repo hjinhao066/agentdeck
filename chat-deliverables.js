@@ -9,7 +9,7 @@
   'use strict';
   const C = window.ChatCore, D = window.DeliverablesCore;
   const DOCK_MIN = 1100;          // a column at least this wide docks the panel
-  const SHOWN = 200;              // rows shown before 「显示更早的」
+  const PAGE = 200;               // rows shown at first, and added by each 「显示更早的」
   let host = null;
   let panel = null;               // the 队长 column's panel (there is only one 队长)
   let timer = null;
@@ -63,7 +63,7 @@
     toggle.appendChild(badge);
     head.insertBefore(toggle, head.querySelector('.view-toggle') || head.querySelector('.secondary'));
 
-    panel = { colId: col.id, wrap, chat, aside, body, count, rules, rulesBtn, toggle, badge, docked: false, overlayOpen: false, items: [], shownAll: false };
+    panel = { colId: col.id, wrap, chat, aside, body, count, rules, rulesBtn, toggle, badge, docked: false, overlayOpen: false, items: [], limit: PAGE };
     // Typing in the panel stays in the panel (the chat sends stray keys to the composer).
     aside.addEventListener('keydown', (e) => {
       if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) { e.stopPropagation(); return; }
@@ -168,6 +168,8 @@
     clearTimeout(timer);
     timer = null;
     if (!panel || !panel.wrap.isConnected) return;
+    // nothing is read or saved before the saved chats are in (their load refreshes the panel)
+    if (!window.ChatUI.isLoaded()) return;
     let items;
     try { items = collect(); } catch (_) { return; }
     panel.items = items;
@@ -197,7 +199,7 @@
     const now = Date.now();
     const main = mainColumn();
     const live = new Set(main ? window.ChatUI.turnsOf(main.id).map((t) => t.id) : []);
-    const shown = panel.shownAll ? items : items.slice(0, SHOWN);
+    const shown = items.slice(0, panel.limit);
     for (const day of D.byDay(shown, now)) {
       const sec = el('section', 'dlv-group');
       sec.appendChild(el('h3', 'dlv-day', day.label));
@@ -209,9 +211,10 @@
       body.appendChild(sec);
     }
     if (shown.length < items.length) {
-      const more = el('button', 'dlv-more', `显示更早的 ${items.length - shown.length} 个`);
+      const left = items.length - shown.length;
+      const more = el('button', 'dlv-more', left > PAGE ? `显示更早的 ${PAGE} 个（还有 ${left} 个）` : `显示更早的 ${left} 个`);
       more.type = 'button'; more.dataset.fk = 'more';
-      more.addEventListener('click', () => { panel.shownAll = true; render(); checkDisk(); });
+      more.addEventListener('click', () => { panel.limit += PAGE; render(); checkDisk(); });
       body.appendChild(more);
     }
     body.scrollTop = top;
@@ -306,7 +309,7 @@
   async function checkDisk() {
     if (!panel || !isOpen() || !panel.items.length) return;
     const run = ++diskRun;
-    const items = panel.shownAll ? panel.items : panel.items.slice(0, SHOWN);
+    const items = panel.items.slice(0, panel.limit);
     let changed = false;
     for (let at = 0; at < items.length; at += 1000) {
       const part = items.slice(at, at + 1000);
@@ -345,8 +348,9 @@
       form.appendChild(wrap);
       return input;
     };
-    const types = field('算作交付的文件类型', rules.types, '扩展名，用逗号或空格隔开。');
-    const skip = field('跳过这些文件夹里的文件', rules.skip, '文件夹名，路径里出现就不算交付，例如 node_modules、tmp。');
+    const types = field('算作交付的文件类型', rules.types, '队长回复里提到的文件要是这些类型才列出；队员回执里明确交付的文件不受这条限制。扩展名用逗号或空格隔开。');
+    const process = field('从不算交付的文件类型', rules.process, '脚本、数据、日志这类过程文件，回执里交了也不列。');
+    const skip = field('跳过这些文件夹里的文件', rules.skip, '文件夹名，路径里出现就不列，例如 node_modules、tmp。');
     const bar = el('div', 'dlv-form-bar');
     const reset = el('button', 'btn dlv-reset', '恢复默认');
     reset.type = 'button';
@@ -355,7 +359,7 @@
     bar.append(reset, el('span', 'dlv-spacer'), save);
     form.appendChild(bar);
     const apply = (next) => {
-      if (next && !D.isDefault(next)) host.config.deliverableRules = { types: next.types, skip: next.skip };
+      if (next && !D.isDefault(next)) host.config.deliverableRules = { types: next.types, skip: next.skip, process: next.process };
       else delete host.config.deliverableRules;
       host.saveConfig();
       toggleRules(false);
@@ -363,7 +367,7 @@
       refresh();
     };
     reset.addEventListener('click', () => apply(null));
-    form.onsubmit = (e) => { e.preventDefault(); apply({ types: D.parseList(types.value), skip: D.parseList(skip.value, true) }); };
+    form.onsubmit = (e) => { e.preventDefault(); apply({ types: D.parseList(types.value), skip: D.parseList(skip.value, true), process: D.parseList(process.value) }); };
     form.hidden = false;
     types.focus();
   }
