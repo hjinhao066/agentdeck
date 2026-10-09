@@ -151,6 +151,22 @@ test('one process listing serves every terminal for a few seconds; a failed list
   assert.equal(winCalls[0][2].windowsHide, true);
 });
 
+// spawn throws for errors outside EACCES/EAGAIN/EMFILE/ENFILE/ENOENT (ENOMEM, E2BIG…) instead
+// of calling back: one such listing must not leave its settled answer in place until a restart.
+test('a listing that failed by a synchronous spawn error is tried again once the cache has expired', async () => {
+  let at = 1_000, calls = 0, throwNext = true;
+  const execFile = (file, args, options, done) => {
+    calls++;
+    if (throwNext) { throwNext = false; const error = new Error('spawn ENOMEM'); error.code = 'ENOMEM'; throw error; }
+    setImmediate(() => done(null, MAC_PS));
+  };
+  const work = createPtyWork({ platform: 'darwin', execFile, now: () => at });
+  assert.equal(await work.busy(49957), null, 'the failed listing answers null (the screen decides)');
+  at += CACHE_MS + 60_000;
+  assert.equal(await work.busy(49957), true, 'a minute later a fresh listing sees what Claude started');
+  assert.equal(calls, 2, 'the process table was listed again');
+});
+
 // ---- the automatic archive asks the renderer's cached answer ----
 function archiveRun(answer) {
   const archived = [], asked = [];

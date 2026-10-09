@@ -105,10 +105,10 @@ function createPtyWork({ platform = process.platform, execFile, now = Date.now, 
   function table() {
     if (cached && now() - cached.at < cacheMs) return Promise.resolve(cached.rows);
     if (pending) return pending;
-    pending = new Promise((resolve) => {
+    // (cleared once it settles: a spawn that throws settles it before this assignment)
+    const listing = new Promise((resolve) => {
       const finish = (rows) => {
         cached = { at: now(), rows };
-        pending = null;
         resolve(rows);
       };
       const read = (error, stdout) => {
@@ -126,6 +126,7 @@ function createPtyWork({ platform = process.platform, execFile, now = Date.now, 
         }
       } catch (_) { finish(null); }
     });
+    pending = listing.then((rows) => { pending = null; return rows; });
     return pending;
   }
   // true / false, or null when the process table could not be read.

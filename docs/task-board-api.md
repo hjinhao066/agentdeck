@@ -219,7 +219,7 @@ CLI 没有 task update、settings 或 start 子命令；这些操作使用界面
 | 自动验收：执行会话被补充指令后再交一次回执（审查还没开，或审查员正在审） | 旧一轮审查作废（旧审查员之后的结论被忽略），新回执成为下一轮：review_round 加一，重新选一个不同提供方的审查员；连续失败两次 held 的规则不变，held 的卡不再自动审 |
 | 连续失败达到两次 | doing + held，通知队长，不派活、不重试 |
 | held 后队长明确 move 到 todo/doing | 解挂，清零连续失败次数，保留累计 rework_count |
-| 队长 `tell` 卡片自己的执行会话（含自动返工） | tell 就是明确要继续干：卡回到执行，这个会话以新尝试绑定（`attempt_closed=false`）。done / 已归档 / held 的卡先挪回 doing，记 `last_auto_recovered_at` / `last_auto_recovered_from`（done、archived、held），held 不清零连续失败次数（再失败一次立刻又挂起）；待验收的卡回到 doing，不会把执行会话当成审查员；还绑着的审查会话（`review_session`）被结束并归档（与 `archive --id` 同一路径），卡片清掉 `review_session`，旧审查员之后的结论不再改卡。tell 给审查会话本身只是补充审查要求，不改卡片。挪回和绑定是同一次写入，绑不上时卡片原样不动；刚绑定、终端还没开出来的审查会话被取代后不再开；自动返工发出前卡片若已被用户或队长移动，这次返工不再发。`new --task-id` 等其他绑定照旧拒绝 done/archived/held 卡 |
+| 队长 `tell` 卡片自己的执行会话（含自动返工） | tell 就是明确要继续干：卡回到执行，这个会话以新尝试绑定（`attempt_closed=false`）。done / 已归档 / held 的卡先挪回 doing，记 `last_auto_recovered_at` / `last_auto_recovered_from`（done、archived、held），held 不清零连续失败次数（再失败一次立刻又挂起）；待验收的卡回到 doing，不会把执行会话当成审查员；还绑着的审查会话（`review_session`）被结束并归档（与 `archive --id` 同一路径），卡片清掉 `review_session`，旧审查员之后的结论不再改卡。tell 给审查会话本身只是补充审查要求，不改卡片。挪回和绑定是同一次写入，绑不上时卡片原样不动；刚绑定、终端还没开出来的审查会话被取代后不再开；tell 给已归档的会话时，绑定成功后才恢复它，绑不上就不恢复；自动返工发出前卡片若已被用户或队长移动，这次返工悄悄不再发（不提示「自动返工暂未发出」，已归档的执行会话也不会被恢复出来）。`new --task-id` 等其他绑定照旧拒绝 done/archived/held 卡 |
 | 已结束却三分钟无命令回执 | needs_user，只有「已结束，未提交回执」，不把屏幕当成功结果 |
 | 新会话的命令行启动后一直没画出界面（屏幕上只有启动命令的回显），等满 3 分钟（Cursor 6 分钟） | 任务正文一个字都不送进终端；以 `source=startup` 的失败回执：doing + failed（连续两次 held），不是 needs_user、不是「已结束，未提交回执」。回执写明启动失败、任务没送达、等了多久、终端最后几行；原文可用 `read --id` 取回 |
 

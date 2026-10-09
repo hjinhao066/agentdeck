@@ -24,8 +24,12 @@ const { TaskStore, localSessions } = require('../task-board');
 const CLAUDE = 'claude --dangerously-skip-permissions --model claude-opus-5-5';
 const CODEX = 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox';
 const flush = async (n = 30) => { for (let i = 0; i < n; i++) await new Promise((resolve) => setImmediate(resolve)); };
+// What ipcRenderer.invoke rejects with in the app when the main-process handler throws.
+const electronInvoke = (channel, run) => Promise.resolve().then(run).catch((error) => {
+  throw new Error(`Error invoking remote method '${channel}': ${error}`);
+});
 
-function world(t) {
+function world(t, { ipc = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-review-stop-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const columns = [{ id: 'captain', isMain: true, cmd: CLAUDE }];
@@ -33,12 +37,13 @@ function world(t) {
     mainSession: { colId: 'captain', tasks: [], pending: [], inflight: [], waitlist: [], gen: 1, cmd: CLAUDE } };
   const store = new TaskStore(path.join(root, 'tasks'), { sessions: () => localSessions(config) });
   const entries = new Map([['captain', { alive: true, state: 'done', lastScreen: '' }]]);
-  const ended = [], sent = [];
+  const ended = [], sent = [], toasts = [], restored = [];
   const hooks = {};
+  const invoke = ipc ? electronInvoke : (_channel, run) => Promise.resolve().then(run);
   const window = {
     deck: {
       onTaskStart() {}, onTaskReview() {}, onTaskRework(cb) { hooks.rework = cb; }, onTasksChanged() {},
-      taskBoard: (op, input) => Promise.resolve().then(() => {
+      taskBoard: (op, input) => invoke('task-board:request', () => {
         if (op === 'bind') hooks.beforeBind?.(input);
         const result = store[op](input);
         const held = op === 'bind' && hooks.holdBind?.(input);
@@ -57,7 +62,7 @@ function world(t) {
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
   window.MainSession.init({
     config, platform: 'darwin', terms: entries, userComposing: () => false, columnLabel: (c) => c.title || c.id,
-    saveConfig() {}, flushConfig() {}, showToast() {}, columns: () => columns,
+    saveConfig() {}, flushConfig() {}, showToast(text) { toasts.push(text); }, columns: () => columns,
     agentInForeground: async () => true,
     createSession(meta) {
       const col = { ...meta, createdByRequestId: null };
@@ -71,6 +76,7 @@ function world(t) {
       entries.get(col.id).alive = false;
     },
     restoreArchived(id) {
+      restored.push(id);
       const snapshot = config.archived.find((a) => a.id === id);
       config.archived = config.archived.filter((a) => a.id !== id);
       columns.push(snapshot);
@@ -82,23 +88,25 @@ function world(t) {
   });
   const s = config.mainSession;
   // A verify card the worker `exec` finished (round 1), reviewed by `rev`.
-  function reviewed({ reviewerWorking = true } = {}) {
+  // execArchived: the worker finished and idled out (archived) while the review ran.
+  function reviewed({ reviewerWorking = true, execArchived = false } = {}) {
     const card = store.add({ project: 'demo', title: '修复', detail: '照做', verify: true }).card;
     const assignee = { agent: 'Claude', model: 'claude-opus-5-5' };
     store.bind({ id: card.id, session_id: 'exec', attempt_id: 'a1', assignee });
     store.event({ id: card.id, type: 'complete', message: '做完了。', attempt_id: 'a1', session_id: 'exec', source: 'command' });
     const attempt = AV.reviewAttemptId(card.id, 1);
     store.bind({ id: card.id, session_id: 'rev', attempt_id: attempt, reviews: ['exec'], review_round: 1, assignee: { agent: 'Codex', model: 'gpt-6.1-sol' } });
-    columns.push({ id: 'exec', title: '执行', cmd: CLAUDE, captainCrew: true, boardId: card.id, boardAttempt: 'a1', reviews: [] },
-      { id: 'rev', title: '审查：修复', cmd: CODEX, captainCrew: true, boardId: card.id, boardAttempt: attempt, reviews: ['exec'] });
-    entries.set('exec', { alive: true, state: 'done', lastScreen: '❯ \n  ⏵⏵ bypass permissions on' });
+    const exec = { id: 'exec', title: '执行', cmd: CLAUDE, captainCrew: true, boardId: card.id, boardAttempt: 'a1', reviews: [] };
+    if (execArchived) config.archived.push({ ...exec, archivedAt: Date.now() });
+    else { columns.push(exec); entries.set('exec', { alive: true, state: 'done', lastScreen: '❯ \n  ⏵⏵ bypass permissions on' }); }
+    columns.push({ id: 'rev', title: '审查：修复', cmd: CODEX, captainCrew: true, boardId: card.id, boardAttempt: attempt, reviews: ['exec'] });
     entries.set('rev', { alive: true, state: reviewerWorking ? 'working' : 'done', lastScreen: '› ' });
     s.tasks.push({ id: 'te', colId: 'exec', gen: 1, status: 'done', startedAt: 1, doneAt: 2, boardId: card.id, boardAttempt: 'a1' },
       { id: 'tr', colId: 'rev', gen: 1, status: reviewerWorking ? 'working' : 'done', startedAt: 3, boardId: card.id, boardAttempt: attempt });
     return { id: card.id, attempt };
   }
   return {
-    store, config, columns, ended, sent, hooks, s,
+    store, config, columns, ended, sent, toasts, restored, hooks, s,
     reviewed,
     card: (id) => store.list({ archived: true }).find((c) => c.id === id),
     tell: (to, message, id = 'tell-' + Math.random().toString(36).slice(2)) => window.MainSession.handle({ action: 'main-tell', to, message, id }, columns.find((c) => c.isMain)),
@@ -157,6 +165,48 @@ test('an automatic rework overtaken by the user (card moved to done meanwhile) i
   assert.equal(w.card(id).status, 'done');
   assert.equal(w.card(id).last_auto_recovered_at, undefined);
   assert.deepEqual(w.sent, []);
+});
+
+// In the app the board answers through ipcRenderer.invoke, whose error reads
+// "Error invoking remote method 'task-board:request': Error: 自动返工已经不用发了…".
+test('a stale automatic rework is dropped quietly when the board answers through Electron IPC', async (t) => {
+  const w = world(t, { ipc: true });
+  const { id, attempt } = w.reviewed({ reviewerWorking: false });
+  w.store.event({ id, type: 'complete', message: '不通过：测试没跑。', attempt_id: attempt, session_id: 'rev', source: 'command' });
+  w.hooks.beforeBind = (input) => { if (String(input.attempt_id).startsWith('auto-rework-')) w.store.move({ id, status: 'done' }); };
+  w.hooks.rework({ id, key: w.card(id).review_reject.key });
+  await flush(60);
+  assert.equal(w.card(id).status, 'done', 'the card stays where the user put it');
+  assert.deepEqual(w.sent, []);
+  assert.deepEqual(w.toasts, [], 'no 「自动返工暂未发出」 toast: the rework was dropped, it is not pending');
+  assert.equal(w.card(id).review_reject.delivered, true, 'the dropped rework is marked handled');
+});
+
+test('a stale automatic rework does not bring the archived executor back', async (t) => {
+  const w = world(t);
+  const { id, attempt } = w.reviewed({ reviewerWorking: false, execArchived: true });
+  w.store.event({ id, type: 'complete', message: '不通过：测试没跑。', attempt_id: attempt, session_id: 'rev', source: 'command' });
+  w.hooks.beforeBind = (input) => { if (String(input.attempt_id).startsWith('auto-rework-')) w.store.move({ id, status: 'done' }); };
+  w.hooks.rework({ id, key: w.card(id).review_reject.key });
+  await flush(60);
+  assert.equal(w.card(id).status, 'done');
+  assert.deepEqual(w.sent, []);
+  assert.deepEqual(w.restored, [], 'the archived executor stays archived: nothing would be sent to it');
+  assert.ok(w.config.archived.some((a) => a.id === 'exec'));
+});
+
+test('automatic rework to an archived executor restores it on the new attempt and sends the findings', async (t) => {
+  const w = world(t);
+  const { id, attempt } = w.reviewed({ reviewerWorking: false, execArchived: true });
+  w.store.event({ id, type: 'complete', message: '不通过：测试没跑。', attempt_id: attempt, session_id: 'rev', source: 'command' });
+  w.hooks.rework({ id, key: w.card(id).review_reject.key });
+  await flush(60);
+  assert.deepEqual(w.restored, ['exec']);
+  const exec = w.columns.find((c) => c.id === 'exec');
+  assert.equal(exec.boardAttempt, AV.reworkAttemptId(id, 1), 'the restored terminal carries the rework attempt');
+  assert.equal(w.card(id).session_id, 'exec');
+  assert.equal(w.card(id).attempt_id, AV.reworkAttemptId(id, 1));
+  assert.match(w.sent[0].text, /测试没跑/);
 });
 
 test('after the Captain moves the card back to doing, the next tell ends the reviewer that is still running', async (t) => {

@@ -973,9 +973,23 @@
   // Claude's live footer counts background work after its ready prompt, and
   // its completed-turn status row counts it just above (claudeStatusRowRunning).
   // Ignore quoted/output rows above that prompt, and zero/completed counts.
+  // Claude may draw a panel in its live area between the status row and the prompt
+  // (SendFeedback's "Bug report drafted … 1 to review · 2 to send" box, kept until the
+  // user deals with it). It is not a newer turn: the status row above it still counts,
+  // so one whole box with only blank rows and rules under it is set aside.
+  function withoutLiveBox(lines) {
+    const prompt = lines.findLastIndex((line) => /^\s*[│┃]?\s*❯(?:\s|$)/.test(line));
+    let bottom = prompt - 1;
+    while (bottom >= 0 && CLAUDE_CHROME.test(lines[bottom])) bottom--;
+    if (bottom < 0 || !/^\s*╰─+╯\s*$/.test(lines[bottom])) return lines;
+    let top = bottom - 1;
+    while (top >= 0 && /^\s*│/.test(lines[top])) top--;
+    if (top < 0 || !/^\s*╭─+╮\s*$/.test(lines[top])) return lines;
+    return [...lines.slice(0, top), ...lines.slice(bottom + 1)];
+  }
   function claudeBackgroundTasks(screen, cmd) {
     if (cmd && !/\bclaude\b/i.test(cmd)) return false;
-    const lines = String(screen || '').split('\n').slice(-20);
+    const lines = withoutLiveBox(String(screen || '').split('\n')).slice(-20);
     const prompt = lines.findLastIndex((line) => /^\s*[│┃]?\s*❯(?:\s|$)/.test(line));
     if (prompt < 0 || /^\s*[│┃]?\s*❯\s*\d+\./.test(lines[prompt])) return false;
     if (claudeStatusRowRunning(lines.slice(0, prompt))) return true;

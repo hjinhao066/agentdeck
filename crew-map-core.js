@@ -528,6 +528,13 @@
       return w + (lanes.length === 1 && lanes[0].length > 1 ? o.clusterGap / 2 + o.lane * (lanes[0].length - 2) : 0);
     };
     const fits = (lanes) => lanes.length === 1 || across(lanes) <= availW + 0.5;
+    // one lane always stands, but no wider than the window: its line channel stands left of it, so its widest
+    // frames give up columns until the two fit (or every frame is one card wide)
+    const roomy = (lanes) => lanes.length > 1 || across(lanes) <= availW + 0.5 || lanes[0].every((p) => caps.get(p.key) === 1);
+    const narrow = (lanes) => {
+      while (!roomy(lanes)) { const p = lanes[0].filter((q) => caps.get(q.key) > 1).sort((a, b) => fr(b).w - fr(a).w)[0]; caps.set(p.key, caps.get(p.key) - 1); }
+      return lanes;
+    };
     const out = (lanes) => ({ lanes: lanes.map((lane) => lane.map((p) => p.key)), caps: Object.fromEntries(projects.map((p) => [p.key, caps.get(p.key)])) });
     // the plan given, as it stands (opts.exact): null when it no longer holds these frames in this order or fits
     const rank = new Map(projects.map((p, i) => [p.key, i]));
@@ -536,7 +543,7 @@
       const lanes = plan.lanes.map((lane) => lane.map((key) => projects[rank.get(key)]));
       const tops = lanes.map((lane) => rank.get(lane[0].key));
       const inOrder = lanes.every((lane) => lane.length) && tops.every((r, i) => r === i) && lanes.every((lane) => lane.every((p, k) => !k || rank.get(p.key) > rank.get(lane[k - 1].key)));
-      return inOrder && fits(lanes) ? lanes : null;
+      return inOrder && fits(lanes) && roomy(lanes) ? lanes : null;
     };
     if (o.exact) { const lanes = held(o.exact); return lanes ? out(lanes) : null; }
     // opts.count: that many lanes and no other (null when the frames cannot stand so)
@@ -553,7 +560,7 @@
         lanes[i].push(p);
         return true;
       });
-      if (placed) fresh = lanes;
+      if (placed) fresh = narrow(lanes);
     }
     if (!fresh) return null;
     // the plan in use, if it is still a plan for these frames in this order
@@ -571,8 +578,9 @@
   //   - no frame much taller than the rest: every row the tallest frame runs beyond the next tallest,
   //     past one, costs PAGE_ROW_COST of s (a frame of two cards beside frames of one is not too long);
   //   - with nothing else between them, fewer columns (PAGE_COLUMN_COST each).
-  // opts.keep (the plan in use) stays while it still fits and scores within PAGE_KEEP of the best, so a
-  // card more or less, or a window a little wider, does not send frames back and forth.
+  // opts.keep (the plan in use) stays while it still fits and scores within PAGE_KEEP of the best, or the
+  // best fits with less than WRAP_KEEP's room to spare, so a card more or less, or a window a little
+  // wider, does not send frames back and forth.
   // size: { w, h }, the page in the canvas's units at the map's own 100% (no h: as tall as needed).
   // Returns { lanes (one per project, in order), caps, scale (s), fits }. fits is false when no
   // combination shows the map on one page at PAGE_MIN_SCALE: the best one's columns then serve
@@ -599,11 +607,11 @@
     const score = (pick) => {
       const width = Math.max(o.captainW, pick.reduce((a, f) => a + f.w, 0) + (pick.length - 1) * gap) + edge;
       const height = o.captainH + o.fanY + Math.max(...pick.map((f) => f.h)) + edge;
-      const s = Math.min(cap, W / width, H / height);
+      const room = Math.min(W / width, H / height), s = Math.min(cap, room);
       const rows = pick.map((f) => (f.collapsed ? 0 : f.rows.length)).sort((a, b) => b - a);
       const excess = Math.max(0, rows[0] - Math.max(1, rows[1] || 0) - 1);
       const extra = pick.reduce((a, f) => a + (f.collapsed ? 0 : f.cols - 1), 0);
-      return { s, fits: s >= minScale - 1e-9, value: s - PAGE_ROW_COST * excess - PAGE_COLUMN_COST * extra };
+      return { s, room, fits: s >= minScale - 1e-9, value: s - PAGE_ROW_COST * excess - PAGE_COLUMN_COST * extra };
     };
     const better = (a, b) => !b || (a.fits !== b.fits ? a.fits : a.value > b.value + 1e-9);
     const pickOf = (idx) => idx.map((i, k) => choices[k][i]);
@@ -632,7 +640,9 @@
     const keep = o.keep && o.keep.caps && Array.isArray(o.keep.lanes) && o.keep.lanes.length === projects.length && o.keep.lanes.every((lane, k) => lane.length === 1 && lane[0] === projects[k].key) ? o.keep : null;
     if (keep && best.fits) {
       const idx = projects.map((p, k) => choices[k].findIndex((f) => f.cols === (choices[k].length === 1 ? choices[k][0].cols : keep.caps[p.key])));
-      if (idx.every((i) => i >= 0)) { const r = score(pickOf(idx)); if (r.fits && r.value >= best.value - PAGE_KEEP) best = { ...r, idx }; }
+      // (the best takes over only fitting with WRAP_KEEP's room to spare, so a few pixels back and forth over the
+      // width where it just fits do not flip the columns)
+      if (idx.every((i) => i >= 0)) { const r = score(pickOf(idx)); if (r.fits && (r.value >= best.value - PAGE_KEEP || best.room < minScale * WRAP_KEEP - 1e-9)) best = { ...r, idx }; }
     }
     return { lanes: projects.map((p) => [p.key]), caps: Object.fromEntries(projects.map((p, k) => [p.key, choices[k][best.idx[k]].cols])), scale: best.s, fits: best.fits };
   }

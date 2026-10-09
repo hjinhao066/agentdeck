@@ -1369,3 +1369,40 @@ test('智能一页 with no project on the map and the board view not laid out ye
     assert.equal(r.pageFits, false);
   }
 });
+
+// README 终端架构图: lanes stand at 100% (124% on a 1x screen) and scroll down, 「不出现横向滚动；窗口放不下那么宽的框时它少
+// 几列」. 2.0.2 narrowed a frame only against the window's width, not the line channel one lane keeps left of its frames,
+// so a map that fell back to one lane stood up to 55px wider than the window and was cut on both sides.
+test('智能一页 in one lane is never wider than the window: its frames give up columns for the line channel beside them', () => {
+  const cases = [[{ agentdeck: 15, 秋招: 3, kenke: 2, fuqing: 2, daily: 1, other: 1 }, 1, 580, 890, 900], [{ agentdeck: 11, 秋招: 3, skills: 1 }, 1, 580, 860, 700],
+    [{ a: 3, b: 1, c: 1, d: 1, e: 1, f: 1 }, 1.25, 500, 520, 700], [{ a: 3, b: 1, c: 1, d: 1, e: 1, f: 1 }, 2, 500, 520, 700]];
+  const cut = [];
+  for (const [spec, dpr, from, to, h] of cases) for (let w = from; w <= to; w += 10) {
+    const map = crewOf(spec), view = { w, h };
+    const r = C.arrangePage(map, view, { ...ARRANGE, dpr }, {});
+    const b = C.fitBounds(map, r.lay, ARRANGE, false);
+    const over = (b.right - b.left) * shownAt(map, r, view, dpr) - (w - ARRANGE.inset.left - ARRANGE.inset.right);
+    if (over > 0.5) cut.push(`${Object.values(spec).join('/')} ${dpr}x ${w}px: ${over.toFixed(0)}px too wide (${arrangement(r.plan)})`);
+  }
+  assert.deepEqual(cut, []);
+  // a frame wider than the window even one card wide stays one card wide (nothing narrower to give)
+  const one = C.planAcross(crewOf({ a: 6, b: 1 }), { w: 300 }, { ...ARRANGE, caps: { a: 3, b: 1 } });
+  assert.deepEqual(one, { lanes: [['a', 'b']], caps: { a: 1, b: 1 } });
+});
+
+// README 终端架构图: 「直到新算出的排法留出 3% 余地也放得下…才换。所以来回拖窗口差几个像素不会跳」. 2.0.2's planPage kept the
+// columns in use by score alone (PAGE_KEEP), asking no room to spare of the new choice; on a 1x screen every choice that
+// fits is scored at the same capped scale, so the keep never held over the width where a frame's extra column just fits.
+test('智能一页 does not flip a frame\'s columns on a few pixels back and forth where one more column just fits', () => {
+  const cases = [['11-3-1 (README), 1x', { a: 11, b: 3, c: 1 }, 1440, 1], ['the screenshots\' 24 sessions, 125%', { agentdeck: 15, 秋招: 3, kenke: 2, fuqing: 2, daily: 1, other: 1 }, 1872, 1.25]];
+  for (const [name, spec, w, dpr] of cases) {
+    const seen = sweep(crewOf(spec), [w, w + 4, w, w + 4, w, w + 4, w], 900, dpr).slice(1);
+    assert.equal(switches(seen), 0, `${name}: ${[...new Set(seen)].join(' <-> ')}`);
+  }
+  // a pixel at a time over that width, both ways: one change at most, and the extra column is taken with room to spare
+  const map = crewOf({ a: 11, b: 3, c: 1 });
+  for (const widths of [widthsFrom(1400, 1520), widthsFrom(1520, 1400)]) {
+    const seen = sweep(map, widths, 900, 1);
+    assert.ok(switches(seen) <= 1, `${widths[0]} -> ${widths[widths.length - 1]}: ${[...new Set(seen)].join(' / ')}`);
+  }
+});
