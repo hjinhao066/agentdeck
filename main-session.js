@@ -2556,7 +2556,8 @@
     if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
     // Same model as the sub-captain unless it names another one.
     const agent = String(message.agent || '').trim().toLowerCase();
-    if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini'].includes(agent)) throw new Error(`子会话不支持 --agent ${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
+    // Any terminal preset `new` offers; a web executor cannot open or answer children.
+    if (agent && (agent === 'chatgpt-web' || !Object.prototype.hasOwnProperty.call(window.BoardCore.AGENT_COMMANDS, agent))) throw new Error(`子会话不支持 --agent ${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
     const custom = window.BoardCore.cleanText(message.command, 1000);
     const checked = M.checkCommand(custom || (agent ? window.BoardCore.commandForAgent(agent) : sub.cmd));
     if (checked.error) throw new Error(checked.error);

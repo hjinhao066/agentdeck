@@ -122,9 +122,9 @@ test('sub-captain: receipts, ledger, sidebar and hand-back through the real boar
     const box = await fold.boundingBox();
     expect(box.width).toBeGreaterThanOrEqual(24);
     expect(box.height).toBeGreaterThanOrEqual(24);
-    const kidBox = await kids.locator('.colnav-item').first().boundingBox();
-    const subBox = await subRow.boundingBox();
-    expect(kidBox.x).toBeGreaterThan(subBox.x); // indented under the sub-captain
+    const kidDot = await kids.locator('.colnav-item .cn-dot').first().boundingBox();
+    const subDot = await subRow.locator('.cn-dot').boundingBox();
+    expect(kidDot.x).toBeGreaterThan(subDot.x + 12); // indented under the sub-captain
     for (const theme of ['light', 'dark']) {
       await page.evaluate((t) => applyTheme(t), theme);
       await page.waitForTimeout(400);
