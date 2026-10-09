@@ -2696,7 +2696,41 @@
         const waiting = s.waitlist.map((w) => `${isHigh(w) ? M.PRIORITY_MARK : ''}「${w.title}」`).join('、');
         const crew = (host.config.archived || []).filter((a) => a.captainCrew).slice(0, 10)
           .map((a) => `${a.id}「${host.columnLabel(a)}」`).join('、');
-        return { done: true, result: M.ledgerText(ledgerRows()) + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '')
+
+        // Build hierarchical ledger with indentation for sub-captain's children
+        const rows = ledgerRows();
+        const columns = host.columns().filter((c) => !c.isMain);
+        const ledgerLines = [];
+        const seen = new Set();
+
+        function addRowWithIndent(row, depth = 0) {
+          const formatted = M.ledgerText([row]);
+          const indent = '  '.repeat(depth);
+          // Add indentation to each line of the formatted row
+          return formatted.split('\n').map((line) => indent + line).join('\n');
+        }
+
+        for (const row of rows) {
+          if (seen.has(row.id)) continue;
+          seen.add(row.id);
+          const col = columns.find((c) => c.id === row.id);
+          ledgerLines.push(addRowWithIndent(row));
+
+          // Add children of sub-captain if any
+          if (col && col.subCaptain) {
+            const children = columns.filter((c) => c.parentTaskId === col.taskId);
+            for (const child of children) {
+              const childRow = rows.find((r) => r.id === child.id);
+              if (childRow && !seen.has(childRow.id)) {
+                seen.add(childRow.id);
+                ledgerLines.push(addRowWithIndent(childRow, 1));
+              }
+            }
+          }
+        }
+
+        const ledgerOutput = ledgerLines.length ? ledgerLines.join('\n') : '还没有别的会话。';
+        return { done: true, result: ledgerOutput + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '')
           + (crew ? `\n已归档的队员（tell 会先自动恢复）：${crew}` : '')
           + (waiting ? `\n排队等空位：${waiting}` : '') + batteryLine() + (history ? '\n' + history : '') };
       }
