@@ -351,6 +351,60 @@ test('leftover checkouts of killed jobs are swept at the start of the next job; 
   } finally { env.done(); }
 });
 
+// A killed job's checkout still holds its node_modules link into deps/<key>. git for Windows follows that
+// junction on `worktree remove --force` and empties the shared folder (seen on the Windows PC, git 2.53),
+// after which every job fails as if a test had. POSIX git leaves the link alone, so there a git wrapper
+// notes every `worktree remove` that still finds a node_modules link in the folder it is given.
+function linkedLeftover(env) {
+  const shared = path.join(env.root, 'deps', '0123456789abcdef', 'node_modules');
+  fs.mkdirSync(path.join(shared, 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(shared, 'pkg', 'index.js'), 'shared dependency');
+  const leftover = path.join(env.root, 'checkouts', 'killed-run');
+  git(env.hub, 'worktree', 'add', '-q', '--detach', '--force', leftover, env.shas.A);
+  fs.symlinkSync(shared, path.join(leftover, 'node_modules'), 'junction');
+  const old = new Date(Date.now() - 6 * 3600 * 1000); fs.utimesSync(leftover, old, old);
+  const log = path.join(env.root, 'removed-with-link.log');
+  const extraEnv = {};
+  if (process.platform !== 'win32') {
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    const bin = path.join(env.root, 'git-bin'); fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh
+if [ "$3" = "worktree" ] && [ "$4" = "remove" ]; then
+  for last; do :; done
+  if [ -L "$last/node_modules" ]; then echo "$last" >> "${log}"; fi
+fi
+exec "${realGit}" "$@"
+`, { mode: 0o755 });
+    extraEnv.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
+  }
+  const removedWithLink = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : []);
+  return { shared, leftover, extraEnv, removedWithLink };
+}
+test('a killed job\'s leftover checkout is swept without reaching through its node_modules link into the shared dependencies', async () => {
+  const env = setup();
+  const left = linkedLeftover(env);
+  try {
+    const job = await startJob(env, 'r1', env.shas.A, { extraEnv: left.extraEnv });
+    assert.equal(job.code, 0, job.output);
+    assert.equal(fs.existsSync(left.leftover), false, 'the leftover checkout is swept');
+    assert.ok(fs.existsSync(path.join(left.shared, 'pkg', 'index.js')), 'the shared node_modules keeps its files');
+    assert.deepEqual(left.removedWithLink(), [], 'git was handed a checkout that still links the shared node_modules');
+  } finally { try { fs.unlinkSync(path.join(left.leftover, 'node_modules')); } catch {} env.done(); }
+});
+test('a leftover checkout whose node_modules link cannot be removed is left for a later sweep, never handed to git', posix, async () => {
+  const env = setup();
+  const left = linkedLeftover(env);
+  try {
+    fs.chmodSync(left.leftover, 0o555); // the link inside cannot be unlinked
+    const job = await startJob(env, 'r1', env.shas.A, { extraEnv: left.extraEnv });
+    assert.equal(job.code, 0, job.output);
+    assert.ok(fs.existsSync(path.join(left.leftover, 'node_modules')), 'the leftover checkout and its link stay');
+    assert.ok(fs.existsSync(path.join(left.shared, 'pkg', 'index.js')), 'the shared node_modules keeps its files');
+    assert.deepEqual(left.removedWithLink(), [], 'git was handed a checkout that still links the shared node_modules');
+    assert.match(job.output, /could not unlink .*killed-run/);
+  } finally { fs.chmodSync(left.leftover, 0o755); try { fs.unlinkSync(path.join(left.leftover, 'node_modules')); } catch {} env.done(); }
+});
+
 test('--no-install reuses the most recently used complete install (there is no hub\\node_modules any more)', posix, async () => {
   const env = setup();
   try {

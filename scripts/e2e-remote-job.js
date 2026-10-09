@@ -226,19 +226,25 @@ function ensureDeps({ workDir, sha, lockfile, install, runId }) {
 }
 
 // Checkouts of jobs that were killed (their finally never ran) are left behind: sweep the old ones.
+// They still hold their node_modules link, so they go the way of a job's own checkout.
 function sweepCheckouts(workDir) {
   const base = path.join(path.dirname(workDir), 'checkouts');
   let names = [];
   try { names = fs.readdirSync(base); } catch { return; }
   for (const n of names) {
     const dir = path.join(base, n);
-    try { if (Date.now() - fs.statSync(dir).mtimeMs > 3 * 3600000) removeWorktree(workDir, base, dir); } catch {}
+    try { if (Date.now() - fs.statSync(dir).mtimeMs > 3 * 3600000) removeCheckout(workDir, dir); } catch {}
   }
 }
 
+const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
+
 function removeCheckout(workDir, checkout) {
-  // The junction goes first: removing the checkout must never reach into the shared node_modules.
-  try { fs.unlinkSync(path.join(checkout, 'node_modules')); } catch { try { fs.rmdirSync(path.join(checkout, 'node_modules')); } catch {} }
+  // The junction goes first: removing the checkout must never reach into the shared node_modules
+  // (git for Windows follows it on `worktree remove --force` and empties the folder behind it).
+  const link = path.join(checkout, 'node_modules');
+  try { fs.unlinkSync(link); } catch { try { fs.rmdirSync(link); } catch {} }
+  if (isLink(link)) { say(`could not unlink ${link}; leaving the checkout for a later sweep`); return; }
   removeWorktree(workDir, path.join(path.dirname(workDir), 'checkouts'), checkout);
 }
 
