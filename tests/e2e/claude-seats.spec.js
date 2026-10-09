@@ -345,6 +345,7 @@ test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and 
 
 
 test('sidebar flags follow Captain Relay immediately while workers retain their seat and directory', async () => {
+  test.setTimeout(150000);   // the 60 s default is less than the briefing poll below
   const captainFlag = () => page.locator('.captain-item .agent-seat-label');
   const workerFlag = page.locator('[data-col-id="seat-worker"] .agent-seat-label');
   await expect(captainFlag()).toHaveText('🇨🇳 CN');
