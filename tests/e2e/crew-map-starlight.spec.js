@@ -165,7 +165,10 @@ function assertNeat(g, ownZoom) {
   });
   expect(new Set(g.groups.filter((f) => !lanes.get(f.lane).indexOf(f)).map((f) => f.y)).size, 'every lane starts on one line').toBe(1);
   if (ownZoom) return; // a zoom the user set is theirs
-  expect(g.view.scale, 'untouched, the map stands at its own 100%: 0.7 of the drawn size').toBeCloseTo(0.7, 5);
+  // untouched: 智能一页's one page is shown as large as the page holds it (never past 100%, never under 80% of it);
+  // a map in lanes stands at its own 100%: 0.7 of the drawn size
+  if (g.plan.page) { expect(g.view.scale).toBeLessThanOrEqual(0.7 + 1e-6); expect(g.view.scale).toBeGreaterThanOrEqual(0.7 * 0.8 - 1e-6); }
+  else expect(g.view.scale, 'untouched, a map in lanes stands at its own 100%: 0.7 of the drawn size').toBeCloseTo(0.7, 5);
 }
 // the projects of the map read like lines of text, the way they are filled in
 const byRow = (g) => g.order;
@@ -266,7 +269,8 @@ test('项目框横排: frames stand left to right across the window, one or two 
   expect(g.pageFits).toBe(true);
   assertWhole(g);
   expect(g.plan.lanes).toEqual([['agentdeck']]);
-  expect(g.plan.caps.agentdeck, 'eight of ten sessions running: two cards wide in five rows, however wide the window').toBe(2);
+  expect(g.plan.page).toBe(true);
+  expect(g.plan.caps.agentdeck, 'one project of ten on its own: four cards wide, three rows (no frame long beside nothing)').toBe(4);
   for (const [w, h] of [[1440, 900], [1280, 800], [980, 700]]) for (const theme of ['dark', 'light']) {
     await open(w, h, theme); await settled();
     assertNeat(await read());
@@ -420,12 +424,12 @@ test('智能一页: one click hands arrangement and zoom back to the window, at 
   expect(g.view.scale).toBeCloseTo(auto.view.scale, 5);
   expect(g.hint).toBe('');
   await shot('map-smartpage-after-1920-dark');
-  // from then on the map follows the window again
+  // from then on the map follows the window again: 智能一页 arranges it for this page (still one page, shown a little smaller)
   await size(1440, 900); await settled();
   g = await read();
-  expect(g.view.scale).toBeCloseTo(0.7, 5);
-  expect(g.plan).not.toEqual(auto.plan);
-  assertNeat(g);
+  expect(g.plan.page).toBe(true);
+  expect(g.view.scale).toBeLessThan(auto.view.scale);
+  assertNeat(g); assertWhole(g);
   await size(1920, 1080, 'light'); await settled();
   g = await read();
   assertWhole(g);

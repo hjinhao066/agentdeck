@@ -5,16 +5,17 @@ const os = require('os');
 const path = require('path');
 
 // 终端架构图 v3, in the shape the user described: 24 sessions in 6 projects, one of them with 15.
-// Projects stand left to right, each one card wide (two while seven of its sessions run at once, never
-// wider; finished cards and work still waiting for a slot do not count); a big
-// project grows down inside its own frame and pushes nobody under it; what does not fit across goes
-// under the lane that ends highest, and the map never scrolls sideways. 智能一页 is the default and
-// follows the window; a first drag leaves it and can be taken back. A card's line of news is never a
+// 智能一页 (the default, following the window) puts every project across one row and chooses every
+// frame's columns (1 to 4) together so the whole map shows on one page as large as it can; a map too big
+// for one page stands in lanes at 100%, what does not fit across under the lane that ends highest, and
+// never scrolls sideways. A first drag leaves 智能一页 and can be taken back. A card's line of news is never a
 // CLI's update notice or a restart's own note. Real renderer, isolated userData, PTYs running only
 // stand-in TUIs. Set AGENTDECK_CREW_MAP_SHOTS to keep PNGs.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --captain-statusline`;
 const SCREEN = path.join(__dirname, 'fixtures', 'screen-agent.js');
 const shots = process.env.AGENTDECK_CREW_MAP_SHOTS;
+// Up to twenty-six stand-in terminals start with each test: on Windows (ConPTY) that alone can take a minute or more.
+test.describe.configure({ timeout: 240000 });
 let application, page, profile;
 const errors = [];
 
@@ -49,16 +50,18 @@ const CREW = [
   ['', 'Mac 磁盘清理复核', 'working', 'GPT-6.1 Sol', 'Codex', 'PROGRESS:只读核对 42 项删除清单，已核 30 项', []],
 ];
 const ORDER = ['agentdeck', '秋招', 'kenke-auto', 'fuqing-inventory', 'daily-progress', ''];
-const COLUMNS = CREW.filter((c) => c[2] !== 'waiting').length;
+const columnsIn = (cards) => cards.filter((c) => c[2] !== 'waiting').length;
 
-async function launch() {
+let crew = CREW;
+async function launch(cards = CREW) {
+  crew = cards;
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-map-across-'));
   const now = Date.now();
   const specFile = path.join(profile, 'screens.json'), screens = {};
   const command = `node "${SCREEN}" "${specFile}"`;
   const column = (id, title, extra = {}) => ({ id, title, displayTitle: title, manualTitle: true, cmd: command, cwd: profile, width: 460, role: 'manual', captainCrew: true, ...extra });
   const columns = [column('cap', '队长', { isMain: true, captainCrew: false, cmd: FAKE })], tasks = [];
-  CREW.forEach(([project, title, st, model, provider, text, screen], i) => {
+  crew.forEach(([project, title, st, model, provider, text, screen], i) => {
     const sentAt = now - (120 - i * 4) * 60_000;
     if (st === 'waiting') { tasks.push({ id: 'task-wait', colId: '', gen: 1, status: 'waiting', title, project, sentAt }); return; }
     const id = 'w' + i;
@@ -84,8 +87,8 @@ async function launch() {
   page.on('pageerror', (e) => errors.push(e.message));
   // (a busy machine can take well over five seconds to bring the page up)
   await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart), { timeout: 30000 }).toBe(false);
-  await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 30000 }).toBe(COLUMNS + 1);
-  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code|OpenAI Codex/.test(t.lastScreen || '')).length), { timeout: 60000 }).toBe(COLUMNS + 1);
+  await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 30000 }).toBe(columnsIn(crew) + 1);
+  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code|OpenAI Codex/.test(t.lastScreen || '')).length), { timeout: 150000 }).toBe(columnsIn(crew) + 1);
 }
 test.afterEach(async () => {
   if (application) await closeElectron(application);
@@ -105,7 +108,7 @@ async function open(width, height, theme) {
   if (await page.locator('#crewMap').isVisible()) await page.locator('#boardViewBtn').click();
   await page.locator('#boardViewBtn').click();
   await expect(page.locator('#crewMap')).toBeVisible();
-  await expect(page.locator('.cm-node:not(.kind-captain)')).toHaveCount(CREW.length);
+  await expect(page.locator('.cm-node:not(.kind-captain)')).toHaveCount(crew.length);
 }
 // a glide has landed: the view's own (cm-smooth) and every frame and card's
 const settled = () => expect.poll(() => page.evaluate(() => !document.querySelector('.cm-canvas.cm-smooth') && ![...document.querySelectorAll('.cm-node, .cm-pane, .cm-project, .cm-edges')].some((n) => n.getAnimations().some((a) => a.effect && Number.isFinite(a.effect.getComputedTiming().iterations) && a.playState === 'running')))).toBe(true);
@@ -165,24 +168,27 @@ const linesClear = () => page.evaluate(() => {
   return bad;
 });
 
-test('24 sessions in 6 projects: left to right, one card wide, the big one two wide growing down beside the rest; three widths, both themes', async () => {
+test('24 sessions in 6 projects: 智能一页 puts them on one page where it can, agentdeck three wide; in lanes at 100% where it cannot; three widths, both themes', async () => {
   await launch();
   for (const [w, h] of [[1920, 1080], [1440, 900], [1024, 768]]) for (const theme of ['dark', 'light']) {
     await open(w, h, theme); await settled();
     const g = await read();
-    expect(g.view.scale, `${w}: at the map's own 100%`).toBeCloseTo(0.7, 5);
-    // one card wide; fifteen sessions two wide, never more; the rest of the big project goes down in its own frame
-    expect(g.plan.caps).toEqual({ agentdeck: 2, 秋招: 1, 'kenke-auto': 1, 'fuqing-inventory': 1, 'daily-progress': 1, '': 1 });
+    // 1920: one page, shown as large as it holds (a little under 100%); smaller windows cannot hold it on one page readably
+    expect(g.plan.page, `${w}: on one page`).toBe(w === 1920);
+    if (g.plan.page) { expect(g.view.scale).toBeLessThan(0.7); expect(g.view.scale).toBeGreaterThanOrEqual(0.7 * 0.8 - 1e-6); }
+    else expect(g.view.scale, `${w}: in lanes at the map's own 100%`).toBeCloseTo(0.7, 5);
+    // fifteen cards three wide, five rows (two wide would leave it twice as long as the rest); the small ones one wide
+    expect(g.plan.caps).toEqual({ agentdeck: 3, 秋招: 1, 'kenke-auto': 1, 'fuqing-inventory': 1, 'daily-progress': 1, '': 1 });
     const wide = (key) => new Set(g.nodes.filter((n) => n.project === key).map((n) => n.x)).size;
-    expect(ORDER.map(wide), `${w}: cards abreast in each frame`).toEqual([2, 1, 1, 1, 1, 1]);
-    expect(new Set(g.nodes.filter((n) => n.project === 'agentdeck').map((n) => n.y)).size, 'fifteen cards: eight rows').toBe(8);
+    expect(ORDER.map(wide), `${w}: cards abreast in each frame`).toEqual([3, 1, 1, 1, 1, 1]);
+    expect(new Set(g.nodes.filter((n) => n.project === 'agentdeck').map((n) => n.y)).size, 'fifteen cards: five rows').toBe(5);
     // read like text, the projects stand in their own order; the first ones across the top on one line
     expect(g.order, `${w}: in order, from the left`).toEqual(ORDER);
     const tops = g.plan.lanes.map((lane) => g.groups.find((f) => f.key === lane[0]).y);
     expect(new Set(tops).size, `${w}: the first row on one line`).toBe(1);
     expect(g.plan.lanes.map((lane) => lane[0]), `${w}: as many abreast as the window holds, in order`).toEqual(ORDER.slice(0, g.plan.lanes.length));
-    // where the window holds more than the big project's lane, nothing is pushed under it
-    if (w >= 1440) expect(g.plan.lanes.find((lane) => lane.includes('agentdeck'))).toEqual(['agentdeck']);
+    // on one page every project stands in a lane of its own, all on one line
+    if (g.plan.page) expect(g.plan.lanes).toEqual(ORDER.map((key) => [key]));
     // no frame or card on another, every card inside its own frame, nothing beyond the sides, no line through another frame
     g.groups.forEach((a, i) => g.groups.slice(i + 1).forEach((b) => expect(apart(a, b), `${a.key}/${b.key}`).toBe(true)));
     g.nodes.forEach((a, i) => g.nodes.slice(i + 1).forEach((b) => expect(apart(a, b), `${a.id}/${b.id}`).toBe(true)));
@@ -190,7 +196,7 @@ test('24 sessions in 6 projects: left to right, one card wide, the big one two w
     for (const f of g.frames) { expect(f.x, `${w}: ${f.key} left`).toBeGreaterThanOrEqual(g.vp.x + 8 - 0.5); expect(f.right, `${w}: ${f.key} right`).toBeLessThanOrEqual(g.vp.right - 8 + 0.5); }
     expect(await linesClear()).toEqual([]);
     // 1920x1080 holds all of it: every card whole on one page
-    if (w === 1920) {
+    if (g.plan.page) {
       expect(g.pageFits).toBe(true);
       for (const c of g.cards) { expect(c.y, c.id).toBeGreaterThanOrEqual(g.vp.y); expect(c.bottom, c.id).toBeLessThanOrEqual(g.vp.bottom); }
     }
@@ -206,21 +212,31 @@ test('24 sessions in 6 projects: left to right, one card wide, the big one two w
   expect(errors).toEqual([]);
 });
 
-test('a project is two cards wide only while seven of its sessions run at once; finished work and work waiting for a slot do not count', async () => {
-  await launch();
-  await open(1920, 1080, 'dark'); await settled();
-  const wide = () => page.evaluate(() => ({ caps: CrewMap.plan().caps.agentdeck, cols: new Set([...CrewMap.layout().nodes.values()].filter((b) => b.project === 'agentdeck').map((b) => b.x)).size,
-    running: CrewMap.lastMap().nodes.filter((n) => n.project === 'agentdeck' && CrewMapCore.isRunning(n)).length, cards: CrewMap.lastMap().nodes.filter((n) => n.project === 'agentdeck').length }));
-  const set = (ids, status) => page.evaluate(([list, st]) => { list.forEach((id) => { const t = MainSession.state().tasks.find((x) => x.colId === id); t.status = st; t.receipt = st === 'done' ? { summary: '做完了', files: [], explicit: true } : null; }); CrewMap.refresh(); }, [ids, status]);
-  // nine at work, one asking 队长, one starting: eleven of its fifteen cards are running
-  expect(await wide()).toEqual({ caps: 2, cols: 2, running: 11, cards: 15 });
-  // five of them finish: six running, still fifteen cards (and the one waiting for a slot): one card wide
-  await set(['w0', 'w1', 'w3', 'w6', 'w7'], 'done'); await settled();
-  await expect.poll(wide).toEqual({ caps: 1, cols: 1, running: 6, cards: 15 });
-  await shot('across-threshold-6-running-1920-dark');
-  // one starts again: seven running, two cards wide
-  await set(['w0'], 'working'); await settled();
-  await expect.poll(wide).toEqual({ caps: 2, cols: 2, running: 7, cards: 15 });
+// 智能一页's choice in three situations, each a picture: the user's 2.0.0 map on a 14-inch MacBook,
+// six small projects, one project of twenty beside small ones.
+const sessionsOf = (spec) => Object.entries(spec).flatMap(([project, n]) => Array.from({ length: n }, (_, i) => [project, `${project} 第 ${i + 1} 件活`, 'working', 'Opus 5.5', 'Claude', null, [`⏺ 第 ${i + 1} 件活做到一半`]]));
+for (const [name, spec, [w, h], caps] of [
+  ['the user\'s 2.0.0 map (11 / 3 / 1) on a 14-inch MacBook: agentdeck three wide', { agentdeck: 11, 秋招: 3, skills: 1 }, [1512, 982], { agentdeck: 3, 秋招: 1, skills: 1 }],
+  ['six projects of one or two cards: every frame one wide', { alpha: 2, beta: 1, gamma: 2, delta: 1, epsilon: 2, zeta: 1 }, [1440, 900], { alpha: 1, beta: 1, gamma: 1, delta: 1, epsilon: 1, zeta: 1 }],
+  ['one project of twenty beside three small ones: it goes four wide', { big: 20, s1: 2, s2: 1, s3: 3 }, [1920, 1080], { big: 4, s1: 1, s2: 1, s3: 1 }],
+]) test(`智能一页 on a real page: ${name}`, async () => {
+  await launch(sessionsOf(spec));
+  await open(w, h, 'dark'); await settled();
+  const g = await read();
+  expect(g.plan.page).toBe(true);
+  expect(g.pageFits).toBe(true);
+  expect(g.plan.caps).toEqual(caps);
+  expect(g.plan.lanes).toEqual(Object.keys(spec).map((key) => [key]));
+  // the whole map on the page: every card whole inside the viewport, nothing past its sides, no line through another frame
+  for (const c of g.cards) { expect(c.y, c.id).toBeGreaterThanOrEqual(g.vp.y - 0.5); expect(c.bottom, c.id).toBeLessThanOrEqual(g.vp.bottom + 0.5); expect(c.x, c.id).toBeGreaterThanOrEqual(g.vp.x - 0.5); expect(c.right, c.id).toBeLessThanOrEqual(g.vp.right + 0.5); }
+  expect(g.view.scale).toBeLessThanOrEqual(0.7 + 1e-6);
+  expect(g.view.scale).toBeGreaterThanOrEqual(0.7 * 0.8 - 1e-6);
+  expect(await linesClear()).toEqual([]);
+  await shot(`page-${Object.values(spec).join('-')}-${w}x${h}-dark`);
+  // the same map in light
+  await page.evaluate(() => applyTheme('light')); await settled();
+  expect((await read()).plan.caps).toEqual(caps);
+  await shot(`page-${Object.values(spec).join('-')}-${w}x${h}-light`);
   expect(errors).toEqual([]);
 });
 

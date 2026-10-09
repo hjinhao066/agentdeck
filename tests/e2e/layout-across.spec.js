@@ -134,7 +134,7 @@ const readMap = () => page.evaluate(() => {
     frames: [...document.querySelectorAll('.cm-pane')].map((n) => ({ key: n.dataset.project, ...rect(n) })), captain: rect(document.querySelector('.cm-node.kind-captain')),
     cardPx: document.querySelector('.cm-node:not(.kind-captain)').getBoundingClientRect().width };
 });
-// lanes at 1920, 1440 and 980 wide windows: every frame here is one card wide (fewer than seven sessions running), so as many as the width holds
+// lanes at 1920, 1440 and 980 wide windows (智能一页: one page where it fits, else lanes at 100%, as many as the width holds)
 const LANES = { 1: [1, 1, 1], 4: [4, 4, 2], 9: [6, 4, 2] };
 
 for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构图: ${label} 个项目 stand across the window at 100%, as many abreast as it holds, the rest under them`, async () => {
@@ -150,7 +150,8 @@ for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构
     expect(g.cardPx, `${name}: a card is 196px wide on screen (what 70% used to show)`).toBeCloseTo(196, 0);
     expect(g.plan.lanes.length, `${name}: lanes across`).toBe(LANES[label][i]);
     expect(g.order, `${name}: projects fill the window from the left, in order, read like text`).toEqual(keys);
-    expect(Object.values(g.plan.caps).every((c) => c === 1), `${name}: fewer than seven sessions running, one card wide`).toBe(true);
+    // 智能一页's columns: a project alone with three cards goes two wide (two rows, not three); among several, small frames stay one wide
+    expect(g.plan.caps, `${name}: columns`).toEqual(Object.fromEntries(keys.map((k) => [k, label === '1' ? 2 : 1])));
     // the first row stands on one line; every later frame is close under the one above it in its lane
     const lanes = g.plan.lanes.map((lane) => lane.map((key) => g.groups.find((f) => f.key === key)));
     expect(new Set(lanes.map((lane) => lane[0].y)).size, `${name}: the first row on one line`).toBe(1);

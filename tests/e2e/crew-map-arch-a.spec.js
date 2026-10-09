@@ -106,8 +106,8 @@ test('night and day: the canvas palette, the grid that shows the whole map, fini
     expect(g.canvas).toBe(theme === 'dark' ? 'rgb(15, 15, 18)' : 'rgb(243, 243, 245)');
     expect(g.card).toBe(theme === 'dark' ? 'rgb(26, 26, 31)' : 'rgb(255, 255, 255)');
     if (theme === 'light') expect(g.sock[0]).toBe('rgb(255, 241, 244)');
-    // seven sessions running at once (and one failed): the project is two cards wide (PROJECT_TWO_COLUMNS_AT), four rows, never wider
-    expect(g.cols).toBe(2);
+    // eight sessions in one project: 智能一页 makes it four cards wide, two rows, on one page at 100%
+    expect(g.cols).toBe(4);
     // The whole map shows above the tray: 队长, every card and the project's frame keep the
     // fit's margin (its 8px inset + the 16px the map carries around itself) from every edge
     // of the viewport, the tray sits under it; no two cards overlapping, no text past its card
@@ -149,8 +149,10 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
     return { vp: rect(document.querySelector('.cm-viewport')), tray: rect(document.querySelector('.cm-tray')), cap: rect(document.querySelector('.cm-node.kind-captain')), scale: CrewMap.view().scale,
       pane: rect(document.querySelector('.cm-pane')), card: Object.fromEntries([...document.querySelectorAll('.cm-node:not(.kind-captain)')].map((n) => [n.dataset.nodeId, rect(n)])) };
   });
-  // 1280x560 cannot show eight cards whole at 100%: two wide, four rows (no sideways scrolling), a later row cut by the tray's edge.
-  await open(1280, 560, 'dark'); await settled();
+  // 1280x500 cannot show the map on one page even at 80%: it stands at 100% in lanes, four wide and two rows
+  // (no sideways scrolling), the second row cut by the tray's edge. (At 1280x560 智能一页 shows it all at 89%.)
+  const H0 = 500;
+  await open(1280, H0, 'dark'); await settled();
   const base = await read();
   expect(base.scale).toBeCloseTo(0.7, 5);
   expect(base.card.w6.y, 'two rows').toBeGreaterThan(base.card.w0.bottom);
@@ -161,7 +163,7 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
   // plainly cut by 24px or more). (Where the map settles depends on every row near the edge, not
   // only the first: at 560 another row may already have moved it.)
   const flush = (gap) => gap < 16 * 0.7 - 0.5 && gap > -24 * 0.7 + 0.5;
-  const height = (nudge) => 560 - Math.round(base.vp.bottom - (base.card.w0.bottom + nudge));
+  const height = (nudge) => H0 - Math.round(base.vp.bottom - (base.card.w0.bottom + nudge));
   const seen = { whole: 0, cut: 0 };
   for (const h of new Set([height(5), height(-5), ...Array.from({ length: 17 }, (_, i) => height(-32 + i * 4))])) {
     await open(1280, h, 'dark'); await settled();
@@ -175,7 +177,7 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
   }
   expect(seen.whole && seen.cut, 'the first row was seen both whole and cut').toBeTruthy();
   // scrolled to the end, the last card and its project's frame rest above the tray with the fit's margin
-  await open(1280, 560, 'dark'); await settled();
+  await open(1280, H0, 'dark'); await settled();
   const edge = 8 + 16 * 0.7;
   await page.mouse.move(base.vp.x + base.vp.width / 2, base.vp.y + 200);
   await expect.poll(async () => {

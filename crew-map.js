@@ -997,5 +997,5 @@
     setMode(host.config.crewMap.mode);
   }
 
-  window.CrewMap = { init, render, refresh, fit, relayout: tidy, tidy, page, undo: undoArrange, plan: () => plan && { lanes: plan.lanes.map((l) => l.slice()), caps: { ...plan.caps }, tight: !!plan.tight }, pageFits: () => pageFits, canUndo: () => !!undo, mode: () => mode, setMode, setShowArchived, setShowReturn, lastMap: () => lastMap, view: () => view && { ...view }, userMoved: () => userView, layout: () => lay };
+  window.CrewMap = { init, render, refresh, fit, relayout: tidy, tidy, page, undo: undoArrange, plan: () => plan && { lanes: plan.lanes.map((l) => l.slice()), caps: { ...plan.caps }, tight: !!plan.tight, page: !!plan.page }, pageFits: () => pageFits, canUndo: () => !!undo, mode: () => mode, setMode, setShowArchived, setShowReturn, lastMap: () => lastMap, view: () => view && { ...view }, userMoved: () => userView, layout: () => lay };
 })();
