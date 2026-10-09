@@ -24,6 +24,8 @@ const crew = [
   ['hermes-quality', '定时任务质量复核', 'done', '已完成并通过验证。'],
   ['hermes-quality', '邮件日报复测', 'failed', '复测未通过：邮箱授权过期，需要重新授权后再跑。'],
   ['opencli', '命令行封装整理', 'done', '已完成并通过验证。'],
+  // (last in the list so the ids above stay put) seven of agentdeck's eight sessions run at once: two cards wide
+  ['agentdeck', '侧栏额度深色修正', 'working', '深色下额度条对比度不足，正在换成分段色。'],
 ];
 
 async function launch() {
@@ -82,7 +84,7 @@ test('night and day: the canvas palette, the grid that shows the whole map, fini
   for (const [width, height] of [[1920, 1080], [1440, 900]]) for (const theme of ['dark', 'light']) {
     await open(width, height, theme);
     await expect(page.locator('.cm-project')).toHaveCount(1);
-    await expect(nodes()).toHaveCount(7);
+    await expect(nodes()).toHaveCount(8);
     const g = await page.evaluate(() => {
       const rect = (n) => { const r = n.getBoundingClientRect(); return { id: n.dataset.nodeId, x: r.x, y: r.y, right: r.right, bottom: r.bottom }; };
       const css = (sel, prop) => getComputedStyle(document.querySelector(sel))[prop];
@@ -104,7 +106,7 @@ test('night and day: the canvas palette, the grid that shows the whole map, fini
     expect(g.canvas).toBe(theme === 'dark' ? 'rgb(15, 15, 18)' : 'rgb(243, 243, 245)');
     expect(g.card).toBe(theme === 'dark' ? 'rgb(26, 26, 31)' : 'rgb(255, 255, 255)');
     if (theme === 'light') expect(g.sock[0]).toBe('rgb(255, 241, 244)');
-    // seven sessions: the project is two cards wide (PROJECT_TWO_COLUMNS_AT), four rows, never wider
+    // seven sessions running at once (and one failed): the project is two cards wide (PROJECT_TWO_COLUMNS_AT), four rows, never wider
     expect(g.cols).toBe(2);
     // The whole map shows above the tray: 队长, every card and the project's frame keep the
     // fit's margin (its 8px inset + the 16px the map carries around itself) from every edge
@@ -147,7 +149,7 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
     return { vp: rect(document.querySelector('.cm-viewport')), tray: rect(document.querySelector('.cm-tray')), cap: rect(document.querySelector('.cm-node.kind-captain')), scale: CrewMap.view().scale,
       pane: rect(document.querySelector('.cm-pane')), card: Object.fromEntries([...document.querySelectorAll('.cm-node:not(.kind-captain)')].map((n) => [n.dataset.nodeId, rect(n)])) };
   });
-  // 1280x560 cannot show seven cards whole at 100%: two wide, four rows (no sideways scrolling), a later row cut by the tray's edge.
+  // 1280x560 cannot show eight cards whole at 100%: two wide, four rows (no sideways scrolling), a later row cut by the tray's edge.
   await open(1280, 560, 'dark'); await settled();
   const base = await read();
   expect(base.scale).toBeCloseTo(0.7, 5);
@@ -232,7 +234,7 @@ test('the tray opens a project onto the canvas, closes it again, and fits smooth
   await chip.click();
   await expect(chip).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.cm-project[data-project="hermes-quality"]')).toBeVisible();
-  await expect(page.locator('.cm-node')).toHaveCount(1 + 7 + 2);
+  await expect(page.locator('.cm-node')).toHaveCount(1 + 8 + 2);
   expect(await page.evaluate(() => config.crewMap.collapsedProjects['hermes-quality'])).toBe(false);
   const after = await page.evaluate(() => CrewMap.view());
   expect(after.scale).toBeLessThan(before.scale + 1e-6);

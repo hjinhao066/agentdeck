@@ -87,7 +87,7 @@ test('state changes show up on the next status tick', async () => {
 });
 
 test('a canvas: cards drag and stay put inside their own frame, the view pans and zooms, all kept in config', async () => {
-  // 代码审查's project is one card wide (fewer than seven sessions): the card moves a little and never leaves its frame
+  // 代码审查's project is one card wide (fewer than seven sessions running): the card moves a little and never leaves its frame
   const card = page.locator('.cm-node[data-node-id="c2003"]');
   const before = await card.evaluate((n) => [n.offsetLeft, n.offsetTop]);
   const box = await card.boundingBox();

@@ -5,7 +5,8 @@ const os = require('os');
 const path = require('path');
 
 // 终端架构图 v3, in the shape the user described: 24 sessions in 6 projects, one of them with 15.
-// Projects stand left to right, each one card wide (two from seven sessions on, never wider); a big
+// Projects stand left to right, each one card wide (two while seven of its sessions run at once, never
+// wider; finished cards and work still waiting for a slot do not count); a big
 // project grows down inside its own frame and pushes nobody under it; what does not fit across goes
 // under the lane that ends highest, and the map never scrolls sideways. 智能一页 is the default and
 // follows the window; a first drag leaves it and can be taken back. A card's line of news is never a
@@ -81,7 +82,8 @@ async function launch() {
   });
   page = await application.firstWindow(); errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
-  await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart)).toBe(false);
+  // (a busy machine can take well over five seconds to bring the page up)
+  await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart), { timeout: 30000 }).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 30000 }).toBe(COLUMNS + 1);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code|OpenAI Codex/.test(t.lastScreen || '')).length), { timeout: 60000 }).toBe(COLUMNS + 1);
 }
@@ -201,6 +203,24 @@ test('24 sessions in 6 projects: left to right, one card wide, the big one two w
   expect(g.plan.lanes).toEqual(ORDER.map((key) => [key]));
   await shot('across-1920x1080-dark-sidebar-folded');
   await page.locator('#navExpandBtn').click();
+  expect(errors).toEqual([]);
+});
+
+test('a project is two cards wide only while seven of its sessions run at once; finished work and work waiting for a slot do not count', async () => {
+  await launch();
+  await open(1920, 1080, 'dark'); await settled();
+  const wide = () => page.evaluate(() => ({ caps: CrewMap.plan().caps.agentdeck, cols: new Set([...CrewMap.layout().nodes.values()].filter((b) => b.project === 'agentdeck').map((b) => b.x)).size,
+    running: CrewMap.lastMap().nodes.filter((n) => n.project === 'agentdeck' && CrewMapCore.isRunning(n)).length, cards: CrewMap.lastMap().nodes.filter((n) => n.project === 'agentdeck').length }));
+  const set = (ids, status) => page.evaluate(([list, st]) => { list.forEach((id) => { const t = MainSession.state().tasks.find((x) => x.colId === id); t.status = st; t.receipt = st === 'done' ? { summary: '做完了', files: [], explicit: true } : null; }); CrewMap.refresh(); }, [ids, status]);
+  // nine at work, one asking 队长, one starting: eleven of its fifteen cards are running
+  expect(await wide()).toEqual({ caps: 2, cols: 2, running: 11, cards: 15 });
+  // five of them finish: six running, still fifteen cards (and the one waiting for a slot): one card wide
+  await set(['w0', 'w1', 'w3', 'w6', 'w7'], 'done'); await settled();
+  await expect.poll(wide).toEqual({ caps: 1, cols: 1, running: 6, cards: 15 });
+  await shot('across-threshold-6-running-1920-dark');
+  // one starts again: seven running, two cards wide
+  await set(['w0'], 'working'); await settled();
+  await expect.poll(wide).toEqual({ caps: 2, cols: 2, running: 7, cards: 15 });
   expect(errors).toEqual([]);
 });
 

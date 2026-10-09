@@ -12,11 +12,16 @@
   const STATUS_LABEL = { working: '干活中', input: '待补充', queued: '排队', done: '已完成', failed: '失败', stopped: '已停下', idle: '空闲' };
   const ACTIVE = ['working', 'input', 'queued'];
   const MAX_LINE = 140;
-  // A project's frame is one card wide; with this many sessions on the map or more it is two
-  // cards wide, and never wider: the rest of a big project goes down inside its own frame.
+  // A project's frame is one card wide; with this many of its sessions running at once (同时在跑)
+  // or more it is two cards wide, and never wider: the rest of a big project goes down inside its own frame.
   const PROJECT_TWO_COLUMNS_AT = 7;
   const PROJECT_MAX_COLUMNS = 2;
-  const projectColumns = (sessions, at = PROJECT_TWO_COLUMNS_AT) => (sessions >= at ? PROJECT_MAX_COLUMNS : 1);
+  const projectColumns = (running, at = PROJECT_TWO_COLUMNS_AT) => (running >= at ? PROJECT_MAX_COLUMNS : 1);
+  const SLOT_WAIT = '等空位';
+  // Running (在跑): a session with a terminal that has not finished its work: 干活中, 待补充 (waiting on an
+  // answer) or queued until its terminal is ready. Finished, failed, stopped, idle and archived sessions do
+  // not count, nor does work still waiting for a slot to open (no terminal is working on it yet).
+  const isRunning = (n) => !!n && n.kind !== 'waiting' && !n.archived && ACTIVE.includes(n.status) && n.detail !== SLOT_WAIT;
 
   const oneLine = (s, max = MAX_LINE) => {
     const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
@@ -32,7 +37,7 @@
     if (term && term.alive && term.state === 'input') return { status: 'input', detail: '停在确认' };
     if (!task) return { status: term && term.state === 'done' ? 'done' : 'idle', detail: '' };
     switch (task.status) {
-      case 'waiting': return { status: 'queued', detail: '等空位' };
+      case 'waiting': return { status: 'queued', detail: SLOT_WAIT };
       case 'queued': return { status: 'queued', detail: '等终端就绪' };
       case 'working': return { status: 'working', detail: '' };
       case 'input': return { status: 'input', detail: '停在确认' };
@@ -329,7 +334,7 @@
     // tally need); the cards then stand centred in it, `inset` in from where they would start.
     const cardsW = cols * o.nodeW + (cols - 1) * o.gapX + 2 * o.padX;
     const w = Math.max(collapsed ? 320 : cardsW, Math.ceil((o.headW && o.headW[p.key]) || 0));
-    return { p, collapsed, cols, rows, w, sessions: nodes.length, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), h: collapsed ? o.headH + 4 : o.headH + top + o.nodeH + o.padBottom };
+    return { p, collapsed, cols, rows, w, running: nodes.filter(isRunning).length, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), h: collapsed ? o.headH + 4 : o.headH + top + o.nodeH + o.padBottom };
   }
   // headH: the frame's title strip, above its first row of cards
   const LAYOUT = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, padX: 44, padBottom: 28, pad: 40, headH: 52, fold: false, collapsedProjects: {}, columnsPerProject: Infinity, grid: false, center: false, tray: false, lane: 7 };
@@ -419,7 +424,8 @@
 
   // Which lane each project stands in and how many cards wide its frame is, for a window size.w
   // wide (in the canvas's own units, at the scale the map is shown at). A frame is one card wide,
-  // two from opts.twoColumnsAt sessions on (PROJECT_TWO_COLUMNS_AT), never wider. The projects
+  // two once opts.twoColumnsAt of its sessions run at once (PROJECT_TWO_COLUMNS_AT, isRunning: finished
+  // cards and work still waiting for a slot do not count), never wider. The projects
   // stand across the top in their order, as many abreast as the width holds, one lane each. Every
   // project after them goes under the lane that ends highest (of lanes ending within BAND of the
   // highest, the leftmost): the width is used before the height, and a big project grows down in
@@ -439,8 +445,8 @@
     const availW = Math.max(1, size.w) - 2 * o.pad;
     const sized = new Map();
     const at = (p, c) => { const k = c + '\u0001' + p.key; if (!sized.has(k)) sized.set(k, frame(p, o, shown, c)); return sized.get(k); };
-    // two cards wide from the threshold on, unless the window cannot hold even one such frame
-    const caps = new Map(projects.map((p) => { const c = projectColumns(at(p, 1).sessions, o.twoColumnsAt); return [p.key, c > 1 && at(p, c).w <= availW ? c : 1]; }));
+    // two cards wide once that many of its sessions run at once, unless the window cannot hold even one such frame
+    const caps = new Map(projects.map((p) => { const c = projectColumns(at(p, 1).running, o.twoColumnsAt); return [p.key, c > 1 && at(p, c).w <= availW ? c : 1]; }));
     const fr = (p) => at(p, caps.get(p.key));
     const height = (lane) => lane.reduce((h, p) => h + fr(p).h, 0) + (lane.length - 1) * o.clusterGap;
     // the lanes' width the way layout() lays them
@@ -769,5 +775,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, PROJECT_TWO_COLUMNS_AT, PROJECT_MAX_COLUMNS, projectColumns, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, PROJECT_TWO_COLUMNS_AT, PROJECT_MAX_COLUMNS, projectColumns, isRunning, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
 });

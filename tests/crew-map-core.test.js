@@ -750,9 +750,57 @@ test('planAcross: a frame is one card wide, two from PROJECT_TWO_COLUMNS_AT sess
   // a window that cannot hold a frame two cards wide gets it one card wide, never wider than itself
   assert.deepEqual(C.planAcross(crewOf({ big: 9 }), { w: 600 }, ROOM).caps, { big: 1 });
   assert.deepEqual(C.planAcross(crewOf({ big: 9 }), { w: 700 }, ROOM).caps, { big: 2 });
-  // the threshold counts the sessions on the map in that frame, reviewers included
+  // the threshold counts the sessions running in that frame, reviewers included
   const reviewed = C.buildCrewMap({ captain, tasks: [], columns: [...Array.from({ length: 6 }, (_, i) => col('w' + i, 'w', { project: 'p', state: 'working' })), col('r', 'r', { project: 'p', state: 'working', reviews: ['w0'] })] });
   assert.deepEqual(C.planAcross(reviewed, { w: 3000 }, ROOM).caps, { p: 2 });
+});
+
+// One project 'p' from [task status, how many]: a session (its own terminal) per task, except work still
+// waiting for a slot, which has no terminal yet ('waiting' with no column: a 等空位 card).
+function project(spec, opts = {}) {
+  const columns = [], tasks = [];
+  spec.forEach(([status, n]) => { for (let i = 0; i < n; i++) {
+    const id = status + i;
+    if (status === 'waiting') { tasks.push(task('t-' + id, '', 'waiting', 10, { project: 'p', title: id })); continue; }
+    columns.push(col(id, id, { project: 'p', state: 'plain' }));
+    tasks.push(task('t-' + id, id, status, 10, { project: 'p', receipt: status === 'done' ? { summary: '好了' } : status === 'failed' ? { failed: '坏了' } : null }));
+  } });
+  return C.buildCrewMap({ captain, columns, tasks, ...opts });
+}
+const capsOf = (spec, opts) => C.planAcross(project(spec, opts), { w: 3000 }, ROOM).caps.p;
+
+test('a frame turns two cards wide when seven of its sessions run at once (同时在跑), not when seven cards are on the map', () => {
+  // seven at work: two cards wide
+  assert.equal(capsOf([['working', 7]]), 2);
+  // finished cards do not count, whichever side of the threshold they leave the frame
+  assert.equal(capsOf([['working', 1], ['done', 6]]), 1, '1 working + 6 done');
+  assert.equal(capsOf([['working', 6], ['done', 1]]), 1, '6 working + 1 done');
+  assert.equal(capsOf([['working', 7], ['done', 5]]), 2, '7 working + 5 done');
+  // work still waiting for a slot has no terminal yet: one real terminal is one session running
+  const waiting = project([['working', 1], ['waiting', 6]]);
+  assert.deepEqual(waiting.nodes.map((n) => n.kind).sort(), ['waiting', 'waiting', 'waiting', 'waiting', 'waiting', 'waiting', 'worker']);
+  assert.equal(capsOf([['working', 1], ['waiting', 6]]), 1, '1 working + 6 waiting for a slot');
+  assert.equal(capsOf([['working', 6], ['waiting', 3]]), 1, '6 working + 3 waiting for a slot');
+  // a session waiting on an answer (待补充) or for its terminal to be ready is under way: it counts
+  assert.equal(capsOf([['working', 4], ['asking', 2], ['queued', 1]]), 2, '4 working + 2 asking + 1 starting');
+  assert.equal(capsOf([['working', 5], ['input', 2]]), 2, '5 working + 2 at a prompt');
+  // ended work does not: failed, stopped without a receipt
+  assert.equal(capsOf([['working', 6], ['failed', 1]]), 1, '6 working + 1 failed');
+  assert.equal(capsOf([['working', 6], ['stopped', 2]]), 1, '6 working + 2 stopped');
+  // archived history shown on request is history, not work
+  const shown = project([['working', 6]]);
+  const withHistory = C.buildCrewMap({ captain, tasks: shown.nodes.map((n) => task('t-' + n.id, n.id, 'working', 10, { project: 'p' })),
+    columns: shown.nodes.map((n) => col(n.id, n.id, { project: 'p', state: 'plain' })), showArchived: true,
+    archived: [{ id: 'old', title: 'old', project: 'p', lastReceipt: { summary: '早就做完了', explicit: true }, captainCrew: true }] });
+  assert.ok(withHistory.nodes.some((n) => n.archived));
+  assert.equal(C.planAcross(withHistory, { w: 3000 }, ROOM).caps.p, 1, '6 working + 1 archived');
+  // what counts, one card at a time
+  const kinds = project([['working', 1], ['asking', 1], ['queued', 1], ['done', 1], ['failed', 1], ['stopped', 1], ['waiting', 1]]);
+  assert.deepEqual(Object.fromEntries(kinds.nodes.map((n) => [n.id.replace(/^wait:t-/, ''), C.isRunning(n)])),
+    { working0: true, asking0: true, queued0: true, done0: false, failed0: false, stopped0: false, waiting0: false });
+  // the frame follows the work: one more starts, it widens; one finishes, it narrows again
+  assert.equal(capsOf([['working', 6], ['queued', 1]]), 2);
+  assert.equal(capsOf([['working', 6], ['done', 1]]), 1);
 });
 
 test('planAcross: projects stand left to right, as many abreast as the width holds, the rest under the lane that ends highest', () => {

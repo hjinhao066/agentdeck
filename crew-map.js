@@ -9,8 +9,9 @@
 // - Where things stand. Untouched (智能一页, the default), the map arranges
 //   itself for the window and again whenever the window changes: project
 //   frames left to right, as many abreast as its width holds, each one card
-//   wide (two from CrewMapCore.PROJECT_TWO_COLUMNS_AT sessions on) and growing
-//   down; the rest go under the lane that ends highest (CrewMapCore.planAcross).
+//   wide (two while CrewMapCore.PROJECT_TWO_COLUMNS_AT of its sessions run at
+//   once, CrewMapCore.isRunning) and growing down; the rest go under the lane
+//   that ends highest (CrewMapCore.planAcross).
 //   Once the user drags a card or a frame, that plan is kept under their
 //   moves until they tidy or go back to 智能一页, so a window resize never
 //   pulls the ground from under a hand-placed map.

@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 
 // 终端架构图: project frames left to right across the window, as many abreast as it
-// holds, each one card wide (two from seven sessions on), the rest under the lane that
+// holds, each one card wide (two while seven of its sessions run at once), the rest under the lane that
 // ends highest (项目框横排), 智能一页 (the arrangement for this window's width,
 // at the map's own 100%), 一键整理 (hand-dragged frames and cards back on the grid,
 // animated, with undo), and the look (the dot grid, quiet cards, lit wiring, nothing
@@ -207,7 +207,7 @@ test('项目框横排: frames stand left to right across the window, one or two 
   assertWhole(g);
   expect(g.plan.lanes, 'all four abreast').toEqual([['agentdeck'], ['hermes-savings'], ['type4me-windows'], ['vps-ops']]);
   expect(new Set(g.groups.map((f) => f.y)).size, 'one row: every frame starts on the same line').toBe(1);
-  expect(g.plan.caps, 'ten sessions: two cards wide (never more); fewer than seven: one').toEqual({ agentdeck: 2, 'hermes-savings': 1, 'type4me-windows': 1, 'vps-ops': 1 });
+  expect(g.plan.caps, 'eight of ten sessions running: two cards wide (never more); fewer than seven running: one').toEqual({ agentdeck: 2, 'hermes-savings': 1, 'type4me-windows': 1, 'vps-ops': 1 });
   await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');
   expect(await linesClear()).toEqual([]);
   // the same seventeen cards one under another, the way it was, would need about twice the height
@@ -266,7 +266,7 @@ test('项目框横排: frames stand left to right across the window, one or two 
   expect(g.pageFits).toBe(true);
   assertWhole(g);
   expect(g.plan.lanes).toEqual([['agentdeck']]);
-  expect(g.plan.caps.agentdeck, 'ten sessions: two cards wide in five rows, however wide the window').toBe(2);
+  expect(g.plan.caps.agentdeck, 'eight of ten sessions running: two cards wide in five rows, however wide the window').toBe(2);
   for (const [w, h] of [[1440, 900], [1280, 800], [980, 700]]) for (const theme of ['dark', 'light']) {
     await open(w, h, theme); await settled();
     assertNeat(await read());
