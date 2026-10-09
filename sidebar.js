@@ -99,7 +99,7 @@
     todoCount = el('span', 'nav-row-count');
     todo.appendChild(todoCount);
     setTodoCount(todoOpen);
-    todo.title = `待办：你自己要做的事，打一句话回车就存（在 AgentDeck 里按 ${window.TodoUI ? window.TodoUI.shortcutLabel() : '⌘T'} 速记）`;
+    todo.title = todoTitle();
     topEl.append(
       navRow('new', 'newChat', '新对话', '⌘N', () => host.addAndFocusColumn()),
       captain,
@@ -112,6 +112,7 @@
       navRow('skills', 'skills', 'Skills', '', () => host.togglePage('skills')),
     );
   }
+  function todoTitle() { return `待办：你自己要做的事，打一句话回车就存（在 AgentDeck 里按 ${window.TodoUI.shortcutLabel()} 速记）`; }
   function setTodoCount(n) {
     todoOpen = n || 0;
     if (!todoCount) return;
@@ -772,5 +773,5 @@
     listEl.addEventListener('scroll', closeMenu, { passive: true });
   }
 
-  window.Sidebar = { init, render, markPage, setTodoCount, refreshTimes, touchTime, createFolder, closeMenu, openMenu, ago, refreshCrew };
+  window.Sidebar = { init, render, markPage, setTodoCount, todoTitle, refreshTimes, touchTime, createFolder, closeMenu, openMenu, ago, refreshCrew };
 })();

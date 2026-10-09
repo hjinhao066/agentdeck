@@ -1,6 +1,6 @@
 // 随手记待办 on the desktop: the 待办 page (one of the pages that cover the
-// deck, opened from the sidebar) and the quick-capture bar (⌘T on a Mac,
-// Ctrl+Shift+T on Windows) that records one line without leaving the terminal.
+// deck, opened from the sidebar) and the quick-capture box (⌘⇧N on a Mac,
+// Ctrl+Shift+N on Windows, changeable in 设置) that records a line from anywhere.
 // Data lives in the main process (todo-store.js); this file only asks for it
 // through the fixed `deck.todos` bridge.
 (function () {
@@ -13,10 +13,11 @@
   let doneOpen = false;
   let undo = null;                // { item, timer } after a delete
   let pendingRender = false;
-  let quick = null;               // quick-capture bar elements
+  let quick = null;               // quick-capture box elements
   let quickReturn = null;         // element to give focus back to
 
   const TEXT_MAX = 500;
+  const FRESH_MS = 1600;
   function el(tag, cls, text) {
     const n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -32,7 +33,8 @@
   }
   // The sidebar asks for the shortcut's name before init, so fall back to the browser's own answer.
   const isMac = () => (host ? host.platform === 'darwin' : /^Mac/.test(navigator.platform));
-  const shortcutLabel = () => isMac() ? '⌘T' : 'Ctrl+Shift+T';
+  const shortcutLabel = () => window.TodoShortcutCore.label(host && host.config.todoShortcut, isMac());
+  const subtitle = () => `脑子里冒出来的事，先记在这里。在 AgentDeck 里任何地方按 ${shortcutLabel()} 都能速记一条；手机总台也能记、能勾。`;
   // Enter while an input method is still composing picks a candidate; it never saves.
   const composing = (e) => e.isComposing || e.keyCode === 229;
   const openCount = () => items.filter((t) => !t.done).length;
@@ -61,6 +63,7 @@
     } catch (_) { /* Keep what is shown; the next change or page open asks again. */ }
     window.Sidebar.setTodoCount(openCount());
     redraw();
+    drawQuick();
   }
   async function write(op, input) {
     const answer = await window.deck.todos(op, input);
@@ -87,7 +90,7 @@
   // ---- page ----
   function render(frame, h) {
     host = h || host;
-    const body = frame('待办', `脑子里冒出来的事，先记在这里。在 AgentDeck 里任何地方按 ${shortcutLabel()} 都能速记一条；手机总台也能记、能勾。`);
+    const body = frame('待办', subtitle());
     body.parentElement.classList.add('page-todo');
     const form = el('form', 'todo-add');
     form.setAttribute('aria-label', '记一条待办');
@@ -225,6 +228,7 @@
     li.append(check, main, when, actions);
     return li;
   }
+  // Used by the page and the quick-capture box alike.
   async function toggleDone(t, li) {
     if (li.classList.contains('is-leaving')) return;
     const done = !t.done;
@@ -234,8 +238,11 @@
     try {
       await write('update', { id: t.id, done });
       // Let the tick show before the row moves to the other list.
-      setTimeout(() => { if (!editing) drawList(); else pendingRender = true; }, 380);
-    } catch (err) { li.classList.remove('is-leaving'); li.classList.toggle('is-done', t.done); showError(friendly(err)); }
+      setTimeout(() => { if (!editing) drawList(); else pendingRender = true; drawQuick(); }, 380);
+    } catch (err) {
+      li.classList.remove('is-leaving'); li.classList.toggle('is-done', t.done);
+      if (quick && quick.list.contains(li)) quick.status.textContent = friendly(err); else showError(friendly(err));
+    }
   }
   function editor(t) {
     const input = el('input', 'todo-edit');
@@ -293,86 +300,230 @@
     undo = { timer: setTimeout(() => { toast.hidden = true; }, 6000) };
   }
 
-  // ---- quick capture (⌘T / Ctrl+Shift+T) ----
+  // ---- quick capture (⌘⇧N / Ctrl+Shift+N, changeable in 设置) ----
+  // A modal in the middle of the window: the input takes the cursor, Enter saves
+  // and stays open for the next line (the new row lands on top of the list
+  // underneath), and Esc, × or a click outside closes it.
   function buildQuick() {
-    const wrap = el('div', 'todo-quick');
-    wrap.id = 'todoQuick';
-    wrap.hidden = true;
-    wrap.setAttribute('role', 'dialog');
-    wrap.setAttribute('aria-label', '速记一条待办');
+    const dlg = el('dialog', 'todo-quick');
+    dlg.id = 'todoQuick';
+    dlg.setAttribute('aria-labelledby', 'todoQuickTitle');
+    const panel = el('div', 'todo-quick-panel');
+    const head = el('div', 'todo-quick-head');
+    const title = el('h2', 'todo-quick-title', '速记待办');
+    title.id = 'todoQuickTitle';
+    const hint = el('span', 'todo-quick-hint');
+    hint.append(el('kbd', null, '↵'), ' 记下', el('kbd', null, 'Esc'), ' 关闭');
+    const close = iconButton('close', '关闭（Esc）', () => closeQuick(true), 'todo-quick-close');
+    close.setAttribute('aria-label', '关闭速记');
+    head.append(title, hint, close);
     const form = el('form', 'todo-quick-form');
-    const ico = el('span', 'todo-quick-ico');
-    ico.setAttribute('aria-hidden', 'true');
-    ico.innerHTML = svg('todo');
+    form.setAttribute('aria-label', '速记一条待办');
+    const ring = el('span', 'todo-add-ring');
+    ring.setAttribute('aria-hidden', 'true');
     const input = el('input', 'todo-quick-input');
     input.type = 'text'; input.maxLength = TEXT_MAX; input.autocomplete = 'off'; input.spellcheck = false;
-    input.placeholder = '速记一条待办，回车存下';
+    input.placeholder = '记一件事，回车存下';
     input.setAttribute('aria-label', '速记一条待办');
-    const hint = el('span', 'todo-quick-hint');
-    hint.append(el('kbd', null, '↵'), ' 存下  ', el('kbd', null, 'Esc'), ' 取消');
+    const add = iconButton('plus', '记下这条待办（回车）', () => form.requestSubmit(), 'todo-quick-add');
+    add.type = 'submit';
+    add.disabled = true;
+    form.append(ring, input, add);
     const status = el('p', 'todo-quick-status');
     status.setAttribute('role', 'status');
-    form.append(ico, input, hint);
-    wrap.append(form, status);
-    document.body.appendChild(wrap);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && composing(e)) { e.preventDefault(); return; }
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); input.value = ''; closeQuick(); }
-    });
-    input.addEventListener('input', () => { status.textContent = ''; wrap.classList.remove('is-error'); });
+    const list = el('div', 'todo-quick-list');
+    panel.append(head, form, status, list);
+    dlg.appendChild(panel);
+    document.body.appendChild(dlg);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && composing(e)) e.preventDefault(); });
+    input.addEventListener('input', () => { status.textContent = ''; add.disabled = !input.value.trim(); });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (!input.value.trim() || wrap.classList.contains('is-saving')) return;
-      wrap.classList.add('is-saving');
+      if (!input.value.trim() || dlg.classList.contains('is-saving')) return;
+      dlg.classList.add('is-saving');
+      add.disabled = true;
       try {
-        await write('add', { text: input.value });
+        const item = await write('add', { text: input.value });
         input.value = '';
-        wrap.classList.add('is-saved');
-        status.textContent = '已记下';
+        status.textContent = '';
+        quick.fresh = item ? { id: item.id, at: Date.now() } : null;
         redraw();
-        setTimeout(closeQuick, 650);
-      } catch (err) { wrap.classList.add('is-error'); status.textContent = friendly(err); }
-      finally { wrap.classList.remove('is-saving'); }
+        drawQuick();
+      } catch (err) { status.textContent = friendly(err); add.disabled = false; }
+      finally { dlg.classList.remove('is-saving'); input.focus(); }
     });
-    // Clicking anywhere else only puts the bar away: the draft waits for the next shortcut. Esc throws it away.
-    document.addEventListener('pointerdown', (e) => { if (!wrap.hidden && !wrap.contains(e.target)) closeQuick(true); }, true);
-    quick = { wrap, input, status };
+    // Esc (the dialog's own cancel) throws the draft away, like ×.
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); closeQuick(true); });
+    // The panel fills the dialog box, so a click that lands on the dialog itself is on the dimmed outside.
+    // It only puts the box away: the words wait for the next shortcut. Closing on the click (pressed and
+    // released outside) keeps that click from reaching whatever sits underneath, and a text selection
+    // dragged out of the input does not count.
+    let downOutside = false;
+    dlg.addEventListener('pointerdown', (e) => { downOutside = e.target === dlg; if (downOutside) e.preventDefault(); });
+    dlg.addEventListener('click', (e) => { if (e.target === dlg && downOutside) closeQuick(false); downOutside = false; });
+    quick = { dlg, input, add, status, list, fresh: null };
+  }
+  function quickOpen() { return !!(quick && quick.dlg.open); }
+  function drawQuick() {
+    if (!quickOpen()) return;
+    const { list } = quick;
+    const keep = document.activeElement && list.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
+    list.textContent = '';
+    if (!loaded) { list.appendChild(el('p', 'todo-quick-empty', '正在读取…')); return; }
+    const open = items.filter((t) => !t.done), done = items.filter((t) => t.done);
+    if (!open.length && !done.length) { list.appendChild(el('p', 'todo-quick-empty', '还没有待办，记下第一条吧。')); return; }
+    for (const [name, group] of [['未完成', open], ['已完成', done]]) {
+      if (!group.length) continue;
+      const head = el('div', 'todo-section');
+      head.append(el('span', 'todo-section-label', name), el('span', 'todo-section-count', String(group.length)));
+      const ul = el('ul', 'todo-list' + (name === '已完成' ? ' todo-list-done' : ''));
+      ul.setAttribute('aria-label', name + '的待办');
+      group.forEach((t) => ul.appendChild(quickRow(t)));
+      list.append(head, ul);
+    }
+    if (keep) { const again = list.querySelector(`[data-focus-key="${CSS.escape(keep)}"]`); if (again) again.focus(); }
+  }
+  function quickRow(t) {
+    const li = el('li', 'todo-row' + (t.done ? ' is-done' : ''));
+    li.dataset.id = t.id;
+    // The line just saved glows once; a redraw meanwhile (the change echoing back) picks the glow up where it was.
+    const age = quick.fresh && quick.fresh.id === t.id ? Date.now() - quick.fresh.at : Infinity;
+    if (age < FRESH_MS) { li.classList.add('is-new'); li.style.animationDelay = -age + 'ms'; }
+    const check = el('button', 'todo-check');
+    check.type = 'button';
+    check.dataset.focusKey = 'check:' + t.id;
+    check.setAttribute('role', 'checkbox');
+    check.setAttribute('aria-checked', String(!!t.done));
+    const name = t.done ? '标为未完成' : '勾掉（标为完成）';
+    check.title = name; check.setAttribute('aria-label', `${name}：${t.text}`);
+    check.innerHTML = svg('check');
+    check.addEventListener('click', () => toggleDone(t, li));
+    const main = el('div', 'todo-main');
+    main.appendChild(el('span', 'todo-text', t.text));
+    const when = el('time', 'todo-when', t.done ? '完成于 ' + ago(t.doneAt || t.updated) : ago(t.created));
+    when.dateTime = t.done ? (t.doneAt || t.updated) : t.created;
+    when.title = (t.done ? '完成于 ' + fullTime(t.doneAt || t.updated) + ' · ' : '') + '记于 ' + fullTime(t.created);
+    li.append(check, main, when);
+    return li;
   }
   function openQuick() {
-    // The page is open: its own input is the quickest place.
-    if (visible()) { page.input.focus(); page.input.select(); return; }
     if (!quick) buildQuick();
-    if (!quick.wrap.hidden) { quick.input.focus(); return; }
+    if (quickOpen()) { quick.input.focus(); return; }
     quickReturn = document.activeElement;
-    quick.wrap.classList.remove('is-saved', 'is-error');
     quick.status.textContent = '';
-    quick.wrap.hidden = false;
+    quick.add.disabled = !quick.input.value.trim();
+    quick.dlg.showModal();
+    drawQuick();
     quick.input.focus();
+    if (!loaded) refresh();
   }
-  function closeQuick(byPointer) {
-    if (!quick || quick.wrap.hidden) return;
-    quick.wrap.hidden = true;
-    quick.wrap.classList.remove('is-saved');
+  // `discard` (Esc, ×) throws the draft away; a click outside keeps it for next time.
+  function closeQuick(discard) {
+    if (!quickOpen()) return;
+    if (discard) quick.input.value = '';
+    quick.dlg.close();
+    quick.list.textContent = '';
     const back = quickReturn;
     quickReturn = null;
-    if (!byPointer && back && back.isConnected && typeof back.focus === 'function') back.focus();
+    if (back && back.isConnected && typeof back.focus === 'function') back.focus();
   }
-  function isShortcut(e) {
-    if (e.type !== 'keydown' || e.altKey || e.repeat) return false;
-    if (!(e.key === 't' || e.key === 'T' || e.code === 'KeyT')) return false;
-    return isMac() ? (e.metaKey && !e.ctrlKey && !e.shiftKey) : (e.ctrlKey && e.shiftKey && !e.metaKey);
+
+  // ---- the shortcut and its row in 设置 ----
+  const combo = () => window.TodoShortcutCore.normalize(host && host.config.todoShortcut);
+  function applyShortcut() {
+    const label = shortcutLabel();
+    const help = document.getElementById('helpTodoKey');
+    if (help) help.textContent = label;
+    const nav = document.getElementById('todoBtn');
+    if (nav) nav.title = window.Sidebar.todoTitle();
+    if (page && page.list.isConnected) {
+      const sub = page.list.closest('.page-todo') && page.list.closest('.page-todo').querySelector('.page-titles p');
+      if (sub) sub.textContent = subtitle();
+      page.list.querySelectorAll('.todo-empty kbd').forEach((k) => { k.textContent = label; });
+    }
+    const btn = document.getElementById('todoShortcutBtn');
+    if (btn && !recording) btn.textContent = label;
+    const reset = document.getElementById('todoShortcutReset');
+    if (reset) reset.hidden = combo() === window.TodoShortcutCore.DEFAULT;
+  }
+  let recording = null;            // the window keydown listener while 设置 waits for new keys
+  function shortcutNote(text, warn) {
+    const note = document.getElementById('todoShortcutNote');
+    if (!note) return;
+    note.textContent = text || defaultNote();
+    note.classList.toggle('is-warn', !!warn);
+  }
+  function defaultNote() {
+    return isMac()
+      ? '点一下，再按想用的组合键（带 ⌘）。按了没反应，多半是别的软件占了这个键（比如 Topit 占了 ⌘T），换一个就好。'
+      : '点一下，再按想用的组合键（Ctrl 加 Shift 或 Alt，再加一个字母或数字）。';
+  }
+  function stopRecording() {
+    if (!recording) return;
+    window.removeEventListener('keydown', recording, true);
+    recording = null;
+    const btn = document.getElementById('todoShortcutBtn');
+    btn.classList.remove('is-recording');
+    btn.setAttribute('aria-pressed', 'false');
+    applyShortcut();
+  }
+  function setShortcut(next) {
+    host.config.todoShortcut = window.TodoShortcutCore.normalize(next);
+    host.saveConfig();
+    stopRecording();
+    applyShortcut();
+  }
+  function startRecording() {
+    const C = window.TodoShortcutCore;
+    const btn = document.getElementById('todoShortcutBtn');
+    if (recording) { stopRecording(); shortcutNote(); return; }
+    btn.classList.add('is-recording');
+    btn.setAttribute('aria-pressed', 'true');
+    btn.textContent = '请按新的组合键…';
+    shortcutNote(isMac() ? '按住 ⌘（可再加 ⇧ 或 ⌥），再按一个字母或数字；Esc 取消。' : '按住 Ctrl 加 Shift 或 Alt，再按一个字母或数字；Esc 取消。');
+    // Window capture: ahead of AgentDeck's own ⌘ shortcuts, so ⌘N here never opens a new 对话.
+    recording = (e) => {
+      if (['Meta', 'Control', 'Shift', 'Alt', 'CapsLock'].includes(e.key)) return;
+      if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey) { stopRecording(); shortcutNote(); return; }
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey) { stopRecording(); shortcutNote(); return; }
+      const next = C.fromEvent(e, isMac());
+      const why = C.problem(next, isMac());
+      if (why) { shortcutNote(why, true); return; }
+      setShortcut(next);
+      shortcutNote(`已改成 ${shortcutLabel()}，在 AgentDeck 里任何地方按它就能速记。`);
+    };
+    window.addEventListener('keydown', recording, true);
+  }
+  function initSettings() {
+    const btn = document.getElementById('todoShortcutBtn');
+    if (!btn) return;
+    btn.addEventListener('click', startRecording);
+    btn.addEventListener('blur', () => { if (recording) { stopRecording(); shortcutNote(); } });
+    const reset = document.getElementById('todoShortcutReset');
+    reset.innerHTML = svg('reset');
+    const name = `恢复默认（${window.TodoShortcutCore.label(window.TodoShortcutCore.DEFAULT, isMac())}）`;
+    reset.title = name; reset.setAttribute('aria-label', name);
+    reset.addEventListener('click', () => { setShortcut(window.TodoShortcutCore.DEFAULT); shortcutNote(`已恢复成 ${shortcutLabel()}。`); btn.focus(); });
+    document.getElementById('notificationSettings').addEventListener('close', () => { stopRecording(); shortcutNote(); });
+    shortcutNote();
   }
 
   function init(h) {
     host = h;
-    // Capture phase, before a terminal or composer sees the keys.
-    document.addEventListener('keydown', (e) => {
-      if (!isShortcut(e) || document.querySelector('dialog[open]')) return;
-      e.preventDefault(); e.stopPropagation();
+    // Window capture: before a terminal, a composer or AgentDeck's own ⌘ keys
+    // (⌘⇧N would otherwise also count as ⌘N, 新对话) see the keys.
+    window.addEventListener('keydown', (e) => {
+      if (recording || !window.TodoShortcutCore.matches(e, combo(), isMac())) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      // Another dialog is up: the keys are used up here, so they never count as anything else.
+      if (!quickOpen() && document.querySelector('dialog[open]')) return;
       openQuick();
     }, true);
     window.deck.onTodosChanged(() => refresh());
-    window.addEventListener('focus', () => { if (visible()) refresh(); });
+    window.addEventListener('focus', () => { if (visible() || quickOpen()) refresh(); });
+    initSettings();
+    applyShortcut();
     refresh();
   }
 
