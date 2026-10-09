@@ -383,12 +383,18 @@ class TaskStore {
         if (input.worktree) { card.worktree = Worktree.normalizeRecord(input.worktree); touch(card); }
         return { card, notices: [] };
       }
-      if (this.activeAttempt(card)) throw new Error('Card already has an active execution or verification session.');
       if (input.assignee === null || typeof input.assignee !== 'object' || typeof input.assignee.agent !== 'string' || typeof input.assignee.model !== 'string') throw new Error('assignee requires agent and model.');
       const explicitReview = Array.isArray(input.reviews) && input.reviews.length > 0;
       if (explicitReview && input.review_round !== (card.review_round || 0)) throw new Error('这张卡片已经不在这一轮待验收了，审查会话没有开。');
       if (explicitReview && card.exec_receipt && !input.reviews.includes(card.exec_receipt.session_id)) throw new Error('--reviews must include the original execution session.');
       const review = explicitReview || card.status === 'review';
+      // When reworking/supplementing (binding a new execution without explicit review), clear any leftover review_session
+      const hadReviewSession = card.review_session === true && !explicitReview && card.status === 'review';
+      if (hadReviewSession) {
+        card.review_session = false;
+        card.attempt_closed = true;
+      }
+      if (this.activeAttempt(card)) throw new Error('Card already has an active execution or verification session.');
       if (explicitReview) {
         if (!card.exec_receipt) {
           if (!input.exec_receipt || !input.reviews.includes(input.exec_receipt.session_id)) throw new Error('Review requires the original execution receipt.');
@@ -401,7 +407,7 @@ class TaskStore {
       if (card.dispatch_wait && card.latest_receipt === card.dispatch_wait) card.latest_receipt = '';
       if (input.worktree) card.worktree = Worktree.normalizeRecord(input.worktree);
       Object.assign(card, { session_id: input.session_id, session_host: os.hostname(), session_bound_at: Date.now(), attempt_id: input.attempt_id, assignee: input.assignee,
-        review_session: review, review_verdict: explicitReview, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
+        review_session: hadReviewSession ? false : review, review_verdict: explicitReview, attempt_closed: hadReviewSession ? true : false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
       card.flag = null;
       if (card.dispatch_claim) card.dispatch_claim.delivered = true;
       if (review && card.review_claim) card.review_claim.delivered = true;
