@@ -89,7 +89,7 @@ test.afterAll(async () => {
 test('Captain CLI dispatches web sessions, peek tracks waiting, cooldown serializes requests, and receipts close the board attempt', async () => {
   const card = JSON.parse(await command(['task', 'add', '--project', 'web-e2e', '--title', 'Public web research', '--verify'])).card;
   const first = await create('Web research first', 'FIRST', card.id);
-  await page.getByRole('button', { name: '展开队员列表', exact: true }).click();
+  await expect(page.getByRole('button', { name: '收起队员列表', exact: true })).toHaveAttribute('aria-expanded', 'true');
   await expect.poll(() => events().some((e) => e.event === 'begin' && e.scenario === 'FIRST'), { timeout: 15000 }).toBe(true);
   expect((await task(first)).status).toBe('working');
   const ledger = await command(['ledger']);

@@ -122,7 +122,7 @@ let config = {
   quotaWarmup: QuotaWarmupCore.normalizeSettings(),
 
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
-  folders: [], archived: [], schedules: [], navArchivedOpen: false, crewModelsCollapsed: [], artifactsCollapsed: [],
+  folders: [], archived: [], schedules: [], navArchivedOpen: false, crewOpen: true, crewModelsCollapsed: [], artifactsCollapsed: [],
   captainTokenSaver: MainCore.tokenSaverSettings(),
   concurrencyCap: MainCore.concurrencyCap(), captainHandoffOverview: MainCore.handoffBudget(),
   batteryMode: BatteryCore.MODE_DEFAULT, batteryConcurrency: BatteryCore.CAP_DEFAULT,
@@ -168,7 +168,7 @@ if (saved) {
   }));
   if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
   config.navArchivedOpen = !!saved.navArchivedOpen;
-  config.crewModelsCollapsed = SidebarCore.normalizeCollapsedModels(saved.crewModelsCollapsed);
+  // crewOpen and crewModelsCollapsed are not restored: the crew list opens fully at every launch.
   config.resumeOnRestart = window.RestartResume.resumeEnabled(saved);
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
@@ -3903,6 +3903,20 @@ const deckHost = {
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
+// The Captain's crew list opens fully at launch and again the first time the window is
+// used on a new day; a fold made in between holds until then.
+let crewFoldDay = SidebarCore.localDay(Date.now());
+function openCrewOnNewDay() {
+  const today = SidebarCore.localDay(Date.now());
+  if (today === crewFoldDay) return;
+  crewFoldDay = today;
+  if (config.crewOpen && !config.crewModelsCollapsed.length) return;
+  config.crewOpen = true;
+  config.crewModelsCollapsed = [];
+  Sidebar.render();
+}
+window.addEventListener('focus', openCrewOnNewDay);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) openCrewOnNewDay(); });
 AttentionUI.init(deckHost);
 MainSession.init(deckHost);
 window.deck.onParkForRestart(async (sessions) => {

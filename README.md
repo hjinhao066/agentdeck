@@ -99,8 +99,12 @@ the middle:
   deck columns until you open one.
   The 队长 row is pinned: clicking it selects the Captain and shows its saved
   conversation; it cannot be dragged, put in a folder, archived or deleted from the list.
-  Sessions the 队长 opens with `new` run in the background: the arrow at the far
-  left of its row unfolds the indented list without selecting the Captain.
+  Sessions the 队长 opens with `new` run in the background: the indented list
+  under its row (each model group included) is open by default, so every member
+  and its task show at once. The arrow at the far left of its row, and the arrow
+  on each model header, fold it without selecting the Captain; a fold you make
+  holds for that run and that day, and the list opens fully again at the next
+  launch and the first time the window is used on a new day.
   Clicking the Captain row still opens its conversation. Muted counts below it
   stay visible even when folded (干活中 / 停在确认 / 完成 / 失败 / 排队).
   The list shows
