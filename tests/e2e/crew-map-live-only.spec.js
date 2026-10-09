@@ -64,7 +64,8 @@ test.beforeAll(async () => {
   page.on('dialog', (d) => d.accept());
   await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart)).toBe(false);
   await expect.poll(() => page.evaluate(() => config.perpetualCaptain && config.perpetualCaptain.enabled)).toBe(false);
-  await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(11);
+  // (eleven terminals: a busy Windows PC can take well over five seconds to start them)
+  await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 30000 }).toBe(11);
   // a 2x screen, as on the MacBook these layouts were made on (see fixtures/screen-density)
   await emulateScreen(page, 0, 0, 2);
 });

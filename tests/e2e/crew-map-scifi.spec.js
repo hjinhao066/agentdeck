@@ -64,6 +64,10 @@ async function open(width, height, theme) {
   if (await page.locator('#crewMap').isVisible()) await page.locator('#boardViewBtn').click();
   await page.locator('#boardViewBtn').click();
   await expect(page.locator('.cm-node')).toHaveCount(crew.length + 1);
+  // the sessions' first status tick after the map opens can still rebuild it: read once no card has been replaced
+  // for longer than a tick (1.5s)
+  await page.evaluate(() => { window.rebuiltAt = performance.now(); new MutationObserver(() => { window.rebuiltAt = performance.now(); }).observe(document.querySelector('.cm-nodes'), { childList: true }); });
+  await expect.poll(() => page.evaluate(() => performance.now() - window.rebuiltAt), { timeout: 20000 }).toBeGreaterThan(1600);
 }
 async function shot(name) {
   if (!shots) return;
