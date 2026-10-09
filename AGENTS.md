@@ -11,6 +11,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
    platforms share this repository; do not create divergent Windows/Mac copies.
 3. Implement the complete change and add regression tests for meaningful bugs.
    Feature branches run `npm test` plus the E2E specs that cover the change.
+   When running E2E locally on a loaded Mac, use `node scripts/e2e-auto.js tests/e2e/spec.js`
+   to auto-route specs: Mac-only specs run locally via queue, cross-platform specs
+   route to Windows if online, otherwise fall back to local queue.
    A patch release runs `npm test` and `npm run test:smoke` (see README 发版流程).
    Full `npm run test:e2e` runs overnight or on another machine. Run `npm audit`
    before packaging. Run the packaged E2E suite when runtime, preload, native

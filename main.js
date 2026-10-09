@@ -954,7 +954,17 @@ app.whenReady().then(async () => {
   const feedHome = tudArg ? path.join(app.getPath('userData'), 'schedule-home') : HOME;
   registerScheduleFeedIpc({ handleMain, dir: path.join(feedHome, '.agents', 'schedules'), home: feedHome, userData: app.getPath('userData'), env: ENV });
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
-  const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
+  // Cache config.json by mtime to avoid repeated full-file parses on every idle report/keypress
+  let cachedConfigData = null, cachedConfigMtime = null;
+  const seatConfig = () => {
+    try {
+      const stat = fs.statSync(configPath);
+      if (cachedConfigData && cachedConfigMtime === stat.mtimeMs) return cachedConfigData;
+      cachedConfigData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      cachedConfigMtime = stat.mtimeMs;
+      return cachedConfigData;
+    } catch (_) { return {}; }
+  };
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, env: ENV, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
