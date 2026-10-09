@@ -1,28 +1,18 @@
 {
   "schema": 1,
-  "updated": "2026-10-08",
+  "updated": "2026-10-09",
   "upcoming": [
-    {
-      "version": "2.0.2",
-      "status": "doing",
-      "title": "2.0.1 之后的第二批",
-      "note": "这几件 2.0.1 合并时还没做完，做完、验收后合成第二批一起打包。",
-      "items": [
-        { "text": "Claude 席位识别修好", "state": "doing" },
-        { "text": "架构图重做", "state": "doing" },
-        { "text": "每日进展改成卡片", "state": "doing" },
-        { "text": "Windows 上给 Codex 粘贴文字的问题修好", "state": "doing" },
-        { "text": "Windows 收尾：修好遗留的测试失败", "state": "doing" },
-        { "text": "三台设备走一遍「随手记 → @ai → 交出东西 → 待我处理」，结果一致，再观察一周", "state": "planned" },
-        { "text": "雷达：修好两个坏掉的搜索源，改成每周跑一次，不再推荐已经有的功能", "state": "pending", "suggestion": "建议都做，只改雷达不动 AgentDeck" }
-      ]
-    },
     {
       "version": "2.1",
       "status": "planned",
       "title": "加几件看得见的小东西",
       "note": "路线图建议的排法，开工前会再跟你确认。",
       "items": [
+        { "text": "每日进展改成卡片", "state": "doing" },
+        { "text": "Windows 上给 Codex 粘贴文字的问题修好", "state": "doing" },
+        { "text": "Windows 收尾：修好遗留的测试失败", "state": "doing" },
+        { "text": "三台设备走一遍「随手记 → @ai → 交出东西 → 待我处理」，结果一致，再观察一周", "state": "planned" },
+        { "text": "雷达：修好两个坏掉的搜索源，改成每周跑一次，不再推荐已经有的功能", "state": "pending", "suggestion": "建议都做，只改雷达不动 AgentDeck" },
         { "text": "「讨论一下」的结果卡：先看结论，再展开分歧", "state": "planned" },
         { "text": "介绍短片和朋友圈文案", "state": "pending", "suggestion": "等你说做再做" }
       ]
@@ -40,6 +30,19 @@
     }
   ],
   "released": [
+    {
+      "version": "2.0.2",
+      "date": "2026-10-09",
+      "title": "小队长、按账号认席位、架构图一页看全",
+      "items": [
+        "看板写锁卡住能自动收回；手机发消息 15 秒没连上会提示重试，重发也不会多出一条",
+        "两机同步第一次上传不再卡死、打开黑屏；board-cli 写错参数直接报错，不再悄悄忽略",
+        "队长能开小队长分层管一摊活；空闲收起不杀后台任务，tell 不被后台压住，旧审查员真的停下",
+        "恢复会话只回原来的账号，不再误报「未登录」；席位按实际登录账号显示，--seat 可写账号名",
+        "自动测试能分到 Windows 跑，Mac 不再被挤满；带日期的模型名显示成「Sonnet 4」",
+        "终端架构图智能一页：项目横排、自动定列数铺满屏幕，字不会太小，卡片显示账号和小队长"
+      ]
+    },
     {
       "version": "2.0.1",
       "date": "2026-10-08",
