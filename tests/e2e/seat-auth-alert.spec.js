@@ -13,6 +13,10 @@ async function launch(barkNow) {
   page = await application.firstWindow();
   await expect(page.locator('.column')).toHaveCount(2);
   await expect.poll(() => application.evaluate(({ app }) => typeof app.testSeatAuthObserve)).toBe('function');
+  // The leftmost terminal takes the keyboard once, when it finishes mounting ("focus leftmost on
+  // boot" in renderer.js). On a slow machine that lands seconds after the window opens, and took
+  // the focus back from the copy button a test had just focused. Let it happen first.
+  await expect.poll(() => page.evaluate(() => typeof focusedId === 'string' && !!focusedId), { timeout: 20000 }).toBe(true);
 }
 async function observe(events) {
   await application.evaluate(({ app }, events) => {
