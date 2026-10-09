@@ -608,13 +608,13 @@ class MobileWebServer {
       try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
       const images = body.images === undefined ? [] : body.images;
       if (!Array.isArray(images) || images.length > IMAGE_LIMITS.perMessage || new Set(images).size !== images.length || images.some((id) => typeof id !== 'string' || !IMAGE_ID.test(id))) return this.json(res, 400, { error: `Images must be at most ${IMAGE_LIMITS.perMessage} uploaded image ids.` });
-      if (Object.keys(body).some((key) => key !== 'message' && key !== 'images') || typeof body.message !== 'string' || !(body.message.trim() || images.length) || body.message.length > 8000 || /\x00/.test(body.message)) return this.json(res, 400, { error: 'Message required (maximum 8000 characters).' });
+      if (Object.keys(body).some((key) => !['message', 'images', 'deduplicationKey'].includes(key)) || typeof body.message !== 'string' || !(body.message.trim() || images.length) || body.message.length > 8000 || /\x00/.test(body.message)) return this.json(res, 400, { error: 'Message required (maximum 8000 characters).' });
       const files = await Promise.all(images.map((id) => this.imageFile(id)));
       if (files.includes(null)) return this.json(res, 400, { error: 'Image not found. Upload it again.' });
       // Body uploads can outlive desktop revocation. Resolve the current device
       // and CSRF secret again immediately before queuing a command.
       if (!this.writeCredential(req, res, prefixed)) return;
-      await this.sources.sendCaptain(body.message, files);
+      await this.sources.sendCaptain(body.message, files, body.deduplicationKey);
       return this.json(res, 200, { queued: true });
     }
     // 待我处理: the same login, Origin, Fetch Metadata and CSRF checks as a

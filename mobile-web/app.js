@@ -1179,7 +1179,9 @@
     sending = true; sendStatus('正在发送…', true);
     renderCaptain(); toBottom($('captain-turns'));
     try {
-      const result = await api('/api/captain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item.images.length ? { message: item.text, images: item.images } : { message: item.text }) });
+      const payload = { message: item.text, deduplicationKey: item.deduplicationKey };
+      if (item.images.length) payload.images = item.images;
+      const result = await api('/api/captain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (!result.queued) throw new Error('消息未加入队列。');
       item.state = 'sent';
       sendStatus(item.forWorker ? '已转给队长，等待处理。' : '已排队，等待队长处理。');
@@ -1218,7 +1220,8 @@
       return;
     }
     repeatAsked = null;
-    const item = { id: ++outboxId, text, draft, images, thumbs: attachments.map((a) => a.thumb), forWorker, state: 'sending', reason: '', known: [], at: now };
+    const deduplicationKey = 'msg-' + Math.random().toString(36).slice(2, 18) + Math.random().toString(36).slice(2, 10);
+    const item = { id: ++outboxId, deduplicationKey, text, draft, images, thumbs: attachments.map((a) => a.thumb), forWorker, state: 'sending', reason: '', known: [], at: now };
     outbox.push(item);
     $('message').value = ''; fitComposer(); attachments = []; renderAttachments();
     deliver(item);

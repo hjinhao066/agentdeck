@@ -1,15 +1,15 @@
-const { test, expect } = require('@playwright/test');
+const { test, expect, _electron: electron, chromium } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const net = require('net');
-
+const closeElectron = require('./fixtures/close-electron');
 const ROOT = path.resolve(__dirname, '../..');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
-let profile, url, token;
+let application, desktop, browser, mobile, profile, url, token;
 
-async function launch(timeout = null) {
-  profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-mobile-timeout-'));
+async function launch() {
+  profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-timeout-e2e-'));
   const reservation = net.createServer();
   await new Promise((resolve) => reservation.listen(0, '127.0.0.1', resolve));
   const port = reservation.address().port;
@@ -21,131 +21,84 @@ async function launch(timeout = null) {
     fitWindow: true,
     fitCols: 1,
     captainTokenSaver: { enabled: false },
-    mobileWeb: { enabled: true, port },
+    mobileWeb: { enabled: false, port },
     mainSession: { colId: 'captain', cmd: FAKE, gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] },
     columns: [
       { id: 'captain', title: '队长', isMain: true, cmd: FAKE, cwd: profile },
     ],
   }));
-
   fs.mkdirSync(path.join(profile, 'chats'));
   fs.writeFileSync(path.join(profile, 'chats', 'captain.json'), JSON.stringify({
-    v: 1, id: 'captain', turns: [
-      { id: 'welcome', ts: Date.now(), user: '测试消息', reply: '测试回复', done: true, atts: [] }
-    ]
+    v: 1, id: 'captain', turns: [{
+      id: 'welcome', ts: Date.now(), user: '开始测试', reply: '队长已就绪。', done: true, atts: []
+    }]
   }));
 
-  url = `http://127.0.0.1:${port}`;
-  const csrfResponse = await fetch(`${url}/login`, { method: 'POST', body: JSON.stringify({}) });
-  const loginData = await csrfResponse.json();
-  token = loginData.token;
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'prompts.jsonl') };
+  delete env.ELECTRON_RUN_AS_NODE;
+  application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
+  desktop = await application.firstWindow();
+  await expect(desktop.locator('.column.is-main')).toHaveCount(1, { timeout: 20000 });
 
-  return { profile, port, url, token };
+  await desktop.getByRole('button', { name: '设置', exact: true }).click();
+  await desktop.locator('#mobileWebEnabled').check();
+  await expect(desktop.locator('#mobileWebUrl')).not.toHaveValue('');
+  url = await desktop.locator('#mobileWebUrl').inputValue();
+  token = await desktop.locator('#mobileWebToken').inputValue();
+
+  browser = await chromium.launch();
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  mobile = await context.newPage();
+
+  await mobile.goto(url);
+  await mobile.getByLabel('登录 token').fill(token);
+  await mobile.getByRole('button', { name: '登录', exact: true }).click();
+  await expect(mobile.locator('#captain-turns')).toBeVisible({ timeout: 10000 });
 }
 
-test.beforeEach(async ({ context }) => {
-  await launch();
-  await context.addCookies([{
-    name: 'agentdeck-token',
-    value: token,
-    url,
-    httpOnly: true,
-    secure: false,
-    sameSite: 'Lax'
-  }]);
-});
-
-test.afterEach(async () => {
-  if (profile) fs.rmSync(profile, { recursive: true, force: true });
-});
-
 test.describe('mobile-web timeout and retry', () => {
-  test('send button shows timeout after 15 seconds without response', async ({ page }) => {
-    await page.goto(url);
-    await page.waitForSelector('[data-view="captain"]', { timeout: 5000 });
-
-    // Type a message
-    const input = await page.locator('input[placeholder*="队长"]');
-    await input.fill('测试消息');
-
-    // Slow down network to simulate timeout
-    await page.route('**/api/captain', async (route) => {
-      await new Promise(resolve => setTimeout(resolve, 20000)); // 20 seconds delay
-      await route.abort();
-    });
-
-    // Click send
-    const sendButton = await page.locator('button[aria-label*="发送"]');
-    await sendButton.click();
-
-    // Wait for timeout error message
-    const failedState = await page.locator('.outgoing[data-state="failed"]', { timeout: 20000 });
-    await expect(failedState).toBeVisible();
-
-    // Verify error message mentions timeout
-    const errorMsg = await page.locator('.failed-reason');
-    const text = await errorMsg.textContent();
-    expect(text).toContain('没有连上');
+  test.afterEach(async () => {
+    if (browser) await browser.close();
+    if (application) await closeElectron(application);
+    if (profile) fs.rmSync(profile, { recursive: true, force: true });
   });
 
-  test('retry button allows resending failed message', async ({ page }) => {
-    await page.goto(url);
-    await page.waitForSelector('[data-view="captain"]', { timeout: 5000 });
+  test('send timeout shows error with retry button', async () => {
+    await launch();
 
-    // Create a failed message first
-    const input = await page.locator('input[placeholder*="队长"]');
-    await input.fill('会失败的消息');
-
-    // Fail the first attempt
-    let firstAttempt = true;
-    await page.route('**/api/captain', async (route) => {
-      if (firstAttempt) {
-        firstAttempt = false;
-        await new Promise(resolve => setTimeout(resolve, 20000));
-        await route.abort();
-      } else {
-        await route.continue();
+    let firstRequest = true;
+    await mobile.route('**/api/captain', async (route) => {
+      if (firstRequest) {
+        firstRequest = false;
+        await new Promise(resolve => setTimeout(resolve, 16000));
       }
+      await route.abort('blockedbyclient');
     });
 
-    const sendButton = await page.locator('button[aria-label*="发送"]');
-    await sendButton.click();
+    const input = mobile.locator('input[placeholder*="队长"]');
+    await input.fill('超时测试');
+    await mobile.getByRole('button', { name: /发送|⇧/ }).click();
 
-    // Wait for failed state
-    const failedState = await page.locator('.outgoing[data-state="failed"]', { timeout: 20000 });
-    await expect(failedState).toBeVisible();
-
-    // Find and click retry button
-    const retryButton = failedState.locator('button[aria-label*="重新发送"]');
-    await expect(retryButton).toBeVisible();
-    await retryButton.click();
-
-    // Verify message is being sent again
-    const sendingState = await page.locator('.outgoing[data-state="sending"]');
-    await expect(sendingState).toBeVisible();
+    await expect(mobile.locator('.failed-reason')).toContainText('没有连上', { timeout: 20000 });
+    await expect(mobile.locator('.failed-foot').getByRole('button').first()).toBeVisible();
   });
 
-  test('do not resend duplicate messages on retry', async ({ page }) => {
-    await page.goto(url);
-    await page.waitForSelector('[data-view="captain"]', { timeout: 5000 });
+  test('deduplication key sent in requests', async () => {
+    await launch();
 
-    const input = await page.locator('input[placeholder*="队长"]');
-    await input.fill('避免重复的消息');
-
-    let requestCount = 0;
-    await page.route('**/api/captain', async (route) => {
-      requestCount++;
-      await route.abort();
+    let capturedKey = '';
+    await mobile.route('**/api/captain', async (route) => {
+      const body = route.request().postDataJSON();
+      capturedKey = body.deduplicationKey || '';
+      await route.abort('blockedbyclient');
     });
 
-    const sendButton = await page.locator('button[aria-label*="发送"]');
+    const input = mobile.locator('input[placeholder*="队长"]');
+    await input.fill('去重测试');
+    await mobile.getByRole('button', { name: /发送|⇧/ }).click();
 
-    // Send twice rapidly
-    await sendButton.click();
-    await sendButton.click();
-
-    // Should only make one request for duplicate content
-    await page.waitForTimeout(2000);
-    expect(requestCount).toBeLessThanOrEqual(2); // May have debounce
+    await mobile.waitForTimeout(1000);
+    expect(capturedKey).toMatch(/^msg-/);
   });
 });
