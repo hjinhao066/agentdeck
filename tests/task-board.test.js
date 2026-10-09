@@ -134,7 +134,7 @@ test('optimistic retry rebases an operation over an incoming sync edit; local wr
     return original(project, doc, raw);
   };
   store.move({ id: a.id, status: 'done' }); assert.equal(store.list()[0].detail, 'Changed on Windows');
-  fs.mkdirSync(store.lock); t.after(() => fs.rmSync(store.lock, { recursive: true, force: true }));
+  fs.mkdirSync(store.lock); fs.writeFileSync(path.join(store.lock, 'owner.json'), JSON.stringify({ pid: process.pid, created: new Date().toISOString() })); t.after(() => fs.rmSync(store.lock, { recursive: true, force: true }));
   assert.throws(() => add(), /another local process/);
 });
 test('heartbeat claims external start edges exactly once, ignores ordinary edits and resumes pending local claims', (t) => {

@@ -162,8 +162,23 @@ class TaskStore {
       fs.renameSync(tmp, file);
     } finally { if (fd !== undefined) fs.closeSync(fd); if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
   }
+  tryRecoverLock() {
+    if (!fs.existsSync(this.lock)) return;
+    const ownerFile = path.join(this.lock, 'owner.json');
+    if (!fs.existsSync(ownerFile)) { fs.rmSync(this.lock, { recursive: true, force: true }); return; }
+    let owner;
+    try { owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8')); } catch (_) { fs.rmSync(this.lock, { recursive: true, force: true }); return; }
+    const createdTime = new Date(owner.created).getTime();
+    const now = Date.now();
+    const LOCK_TIMEOUT = 5 * 60 * 1000;
+    if (now - createdTime > LOCK_TIMEOUT) { fs.rmSync(this.lock, { recursive: true, force: true }); return; }
+    if (typeof owner.pid === 'number') {
+      try { process.kill(owner.pid, 0); } catch (err) { if (err.code === 'ESRCH') fs.rmSync(this.lock, { recursive: true, force: true }); }
+    }
+  }
   mutate(run) {
     fs.mkdirSync(this.dir, { recursive: true });
+    this.tryRecoverLock();
     try { fs.mkdirSync(this.lock); } catch (err) { if (err.code === 'EEXIST') throw new Error('Task board is being written by another local process. Retry shortly; stale locks can be removed only after that process exits.'); throw err; }
     fs.writeFileSync(path.join(this.lock, 'owner.json'), JSON.stringify({ pid: process.pid, created: new Date().toISOString() }));
     try {
