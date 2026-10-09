@@ -604,3 +604,27 @@ test('inbox help and the Captain briefing say a report is read once the user saw
   const M = require('../main-core');
   for (const platform of ['darwin', 'win32']) assert.match(M.instructions(platform, '', false, 30), /report（挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说）/);
 });
+
+test('new --sub-captain requires --project and rejects if not called by Captain', async () => {
+  for (const args of [['new', '--title', 'Sub Captain', '--task', 'Run', '--sub-captain'], ['new', '--title', 'Sub Captain', '--task', 'Run', '--sub-captain', '--project']]) {
+    const result = await runCli(args, { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /sub-captain/);
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-sub-captain-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  const server = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file));
+      if (request.action === 'main-new' && request.subCaptain === true) {
+        fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: '已开新小队长会话 c-test 「My Sub Captain」。' }));
+      }
+    }
+  }, 20);
+  try {
+    const result = await runCli(['new', '--title', 'My Sub Captain', '--task', 'Coordinate', '--sub-captain', '--project', 'MyProject'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token' });
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /已开新小队长会话/);
+  } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
+});

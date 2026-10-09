@@ -1289,7 +1289,11 @@
         ...(metadata.worktree ? { worktree: metadata.worktree } : {}),
         assignee: { agent: window.BoardCore.inferAgentType(cmd), model: cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
     }
-    col = host.createSession({ ...metadata, taskPrompt: text, captainTaskPrompt: text, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
+    let taskPrompt = text;
+    if (metadata.subCaptain === true) {
+      taskPrompt = text + '\n\n---\n\n你是这个项目的小队长。详见 sub-captain-instructions.md（同目录）或以下简明版：\n\n**核心职责**：协调本项目的多个工作线条，开子会话（≤4个），子会话的回执和待补充只给你，需要总队长决策才用 ask 上报。\n\n**派活规则**：多线条间需要协调的活、需要独立审查的交付、需要用户汇总的问题才经过你；普通零散小活（≤1小时）直接派下去。\n\n**管理规则**：子会话占用并发名额；你被归档时，进行中的子会话交回总队长并提示。\n\n详细规则见同目录的 sub-captain-instructions.md。';
+    }
+    col = host.createSession({ ...metadata, taskPrompt, captainTaskPrompt: taskPrompt, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
     if (waiting) { waiting.boardId = metadata.boardId || ''; waiting.boardAttempt = requestId; }
     dispatch(col, text, title, waiting);
     return col;
@@ -2761,6 +2765,11 @@
           if (!sessions.some((c) => c.id === id && !c.isMain)) throw new Error(`找不到可审查的会话：${id}。先用 ledger 看 id；不能审查队长。`);
         }
         const metadata = { project, reviews, boardId: typeof message.boardId === 'string' ? message.boardId : '' };
+        if (message.subCaptain === true) {
+          if (!isMain(caller)) throw new Error('--sub-captain 只有队长可以用。');
+          if (!project) throw new Error('--sub-captain 需要指定 --project。');
+          metadata.subCaptain = true;
+        }
         if (message.priority !== undefined && (!['high', 'normal'].includes(message.priority) || !isMain(caller))) throw new Error('--priority 只能是 high 或 normal，且只有队长可以标。');
         if (metadata.boardId && reviews.length) {
           const card = await findCard(metadata.boardId);
