@@ -206,8 +206,10 @@ Windows 版只有命令行前缀不同（`node "$env:AGENTDECK_BOARD_CLI"`）；
 
 - ✅ 表示 AgentDeck 一次回车就提交、模型请求里逐字一致。测试用 4 个 Codex 实例各 5 档，共 20 次，只有 2 次是这样。
 - **改动前的 7990 字原文在 Windows 上 4 次全错，和现在的 8427 字错法一样**（都在规则 5 的「——」一带错乱）。200 字、4000 字也会丢换行或吞回车。所以这不是这次把上限提到 10000 造成的，也和长度无关：Codex 在 Windows 上本来就收不全 AgentDeck 粘贴进去的提示词。
-- 同一台 Windows 机器上，记录原始字节的替身逐字收到了同样的内容（含「——」和全部换行），Claude Code 五档全对。说明 AgentDeck 到 ConPTY 这一段没有问题，丢字发生在 Codex 自己的 Windows 输入处理里（推测与 ConPTY 把输入转成按键事件、Codex 自带的“快速输入当粘贴”判断有关，没有进一步验证）。
-- 这个问题不只影响队长：同一条发送路径也用于派给 Codex 队员的普通任务（200 字也丢了换行）。建议另开一张卡单独处理；本卡没有改它。
+- 同一台 Windows 机器上，记录原始字节的替身逐字收到了同样的内容（含「——」和全部换行），Claude Code 五档全对。当时据此推测丢字发生在 Codex 自己的输入处理里。**后来查清（2.0.1，卡 t-6d945bac）：丢字发生在 ConPTY 把纯文本转成控制台按键事件的这一步，与括号粘贴、逐字键入、分块写入都无关**。用 Windows 上的真实 Codex 0.161.0（OWENJH，ConPTY，假接口）实测：整段括号粘贴、逐字写入、64 字分块写入，模型请求里都少了所有「—」「“」「”」（200 字少 20 个），换行有时也丢；表情符号、汉字、「（）」「、」没事。
+- **修法：在 Windows 上发给 Codex 的文字改成 win32-input-mode 按键事件**（`MainCore.winCodexKeys`，Windows Terminal 键入的同款）。每个字符直接带 UTF-16 编码，换行是 Shift+Enter，提交仍是一次普通回车，并等 Codex 屏幕静下来 0.7 秒再按。注意：①BMP 字符要带按下和抬起，只按下会把连续相同的字（「——」）吞成一个；②表情符号的两半只发按下，加了抬起会打两遍。其他 CLI、Mac 上的 Codex 不变。
+- 修后实测（同一台 Windows 机器，`scripts/probe-codex-input.js`，不碰 AgentDeck 本体）：200 字、8000 字带空行、「——」「—」「———」、中英文引号、括号、表情符号的提示词，模型请求里与发出的逐字一致，都是一次回车提交；修前同样脚本 200 字只收到 180 字。回归测试 `tests/win-codex-input.test.js`。
+- 这个问题不只影响队长：同一条发送路径也用于派给 Codex 队员的普通任务（200 字也丢了换行），修好后这些也一起好了。你在 Codex 终端里直接敲的字（不经过聊天框）走的是另一条路，没有改。
 - CI 的 Windows Server 虚拟机和用户的桌面环境可能不同（Windows 版本、终端组件、Codex 版本），所以这一结论还要在用户自己的 Windows 电脑上确认。
 - 原始记录：CI 日志里每个 Windows 任务的 [ladder] 和 [ladder-diff] 行。诊断脚本在临时分支 `ci-probe/t-0e2ef693`（不合并），只在这次取证时用。
 
@@ -264,7 +266,7 @@ AGENTDECK_REAL_CLI=claude,codex npx playwright test tests/e2e/real-cli-briefing.
 ## 9. 已知边界和没有验证的部分
 
 - **用户自己的 Windows 电脑：以上所有 CLI 都需在 Windows 机器上验证。** 在那台机器的仓库里（PowerShell）：`npx playwright test tests/e2e/captain-briefing-paste.spec.js`，然后 `$env:AGENTDECK_REAL_CLI = "claude,codex,cursor,agy"; npx playwright test tests/e2e/real-cli-briefing.spec.js`。CI 的 Windows Server 虚拟机是原生 Windows，但不是用户的桌面环境。
-- Codex 在 Windows 上收不全提示词（6.3）：改动前就有，本卡没修，建议另开卡。修好之前，Windows 上用 Codex 当队长（ChatGPT Relay）时，队长提示词会被改字或停在输入框里，改动前的 7990 字也一样。
+- Codex 在 Windows 上收不全提示词（6.3）：改动前就有，2.0.1 已修（改走按键事件，见 6.3）。2.0.0 及更早的 Windows 版本，用 Codex 当队长时队长提示词仍会被改字或停在输入框里。
 - agy：模型层面没证到（额度用尽），额度恢复后用 `AGENTDECK_REAL_CLI=agy` 重跑。
 - Cursor、agy 只在本机 Mac 上测过，CI 上没有登录不能测。
 - Grok CLI、Codex 原生队长宿主没有测；claude-ds 没有单独跑（就是 Claude Code 本体）。

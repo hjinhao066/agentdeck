@@ -1340,6 +1340,24 @@
   // Captain briefing passes a larger opts.inlineLimit.
   // A pasted image path is read by the agent before it accepts Enter; a big image takes a few seconds.
   const PASTE_READ_MAX = 30_000;
+  const KEYED_SETTLE_MAX = 120_000;
+  // Codex on Windows gets its text as key events, not as pasted text: ConPTY drops the long dash and
+  // curly quotes from plain text and loses or mis-fires its line breaks (MainCore.winCodexKeys).
+  // A column that runs another command but shows Codex's screen (started by hand) counts too.
+  function winCodex(col, entry) {
+    if (host.platform !== 'win32') return false;
+    return !!window.BoardCore.codexProgram(col.cmd, 'win32')
+      || (window.BoardCore.inferAgentType(col.cmd) === 'Shell' && window.MainCore.windowsCodexReady(entry.lastScreen));
+  }
+  // False when the column went away or the send was cancelled before everything was typed.
+  async function typeWinCodex(col, entry, text, o) {
+    for (const chunk of window.MainCore.winCodexKeys(text)) {
+      window.deck.ptyInput(col.id, chunk);
+      await new Promise((resolve) => setTimeout(resolve, window.MainCore.WIN_CODEX_KEY_DELAY));
+      if (host.terms.get(col.id) !== entry || !entry.alive || (o.cancelled && o.cancelled())) return false;
+    }
+    return true;
+  }
   async function sendPrompt(col, prompt, atts, opts) {
     const o = opts || {};
     if (o.cancelled && o.cancelled()) return false;
@@ -1349,7 +1367,7 @@
     if (prompt && prompt.length > (o.inlineLimit || window.MainCore.LONG_PROMPT)) return sendLong(col, prompt, atts, o);
     // No bracketed paste: the terminal reads line by line and the tty drops what a line holds past
     // ~1 KB. A line that long goes out as a file with a one-line pointer, never cut short.
-    const lineMode = !(entry.term.modes && entry.term.modes.bracketedPasteMode);
+    const lineMode = !(entry.term.modes && entry.term.modes.bracketedPasteMode) && !winCodex(col, entry);
     if (prompt && lineMode && C.longestLineBytes((o.prefix || '') + (atts || []).map(host.shellQuote).join(' ') + ' ' + prompt + (o.suffix || '')) > C.LINE_MODE_BYTES) return sendLong(col, prompt, atts, o);
     if (entry.sendingPrompt) return false;
     // guardUserInput (receipts, 队长's work for others): never into an input box
@@ -1373,19 +1391,24 @@
       const turn = o.silent ? null : beginTurn(col, o.display != null ? o.display : prompt, o.displayAtts || atts, text);
       // bracketed paste keeps multi-line text one prompt; the CR goes separately so
       // Ink-based TUIs submit instead of inserting a newline
-      const bracketed = entry.term.modes && entry.term.modes.bracketedPasteMode;
-      window.deck.ptyInput(col.id, bracketed ? '\x1b[200~' + text + '\x1b[201~' : text.replace(/\r?\n/g, '\r'));
+      const keyed = winCodex(col, entry);
+      const bracketed = !keyed && entry.term.modes && entry.term.modes.bracketedPasteMode;
+      if (keyed) { if (!await typeWinCodex(col, entry, text, o)) return false; }
+      else window.deck.ptyInput(col.id, bracketed ? '\x1b[200~' + text + '\x1b[201~' : text.replace(/\r?\n/g, '\r'));
       // Cursor and other TUIs buffer paste input asynchronously. An Enter only
       // 60ms later can be swallowed by their paste detector. Wait for the paste
       // redraw to settle, then submit once; never retry into a changed terminal.
       const pastedAt = Date.now();
       const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
       const minWait = isCursor ? 700 : (bracketed ? 500 : 80);
+      // Typed as keys, Codex takes them in one repaint at a time; an Enter that reaches it while it still is
+      // would be read as one more line break. Submit only once its screen has been quiet.
       do {
-        await new Promise((resolve) => setTimeout(resolve, bracketed ? 50 : 60));
+        await new Promise((resolve) => setTimeout(resolve, bracketed || keyed ? 50 : 60));
         if (host.terms.get(col.id) !== entry || !entry.alive || (o.cancelled && o.cancelled())) return false;
-      } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)
-        || (Date.now() - pastedAt < PASTE_READ_MAX && C.pasteBusy(host.dumpScreen(entry.term, 6)))));
+      } while ((keyed && (Date.now() - pastedAt < 700 || (Date.now() - (entry.lastOutputAt || 0) < 700 && Date.now() - pastedAt < KEYED_SETTLE_MAX)))
+        || (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)
+        || (Date.now() - pastedAt < PASTE_READ_MAX && C.pasteBusy(host.dumpScreen(entry.term, 6))))));
       if (!o.silent && window.MainSession) window.MainSession.onContextCommandSent(col, text);
       window.deck.ptyInput(col.id, '\r');
       host.manualPromptSent(col.id, turn, o.userInitiated === true);
@@ -1422,7 +1445,7 @@
       const opening = prompt.slice(0, 300).replace(/\s+/g, ' ').trim();
       const entry = host.terms.get(col.id);
       let pointer = `${opening}…\n${note}`;
-      if (entry && !(entry.term.modes && entry.term.modes.bracketedPasteMode)) {
+      if (entry && !(entry.term.modes && entry.term.modes.bracketedPasteMode) && !winCodex(col, entry)) {
         // only what shares the pointer's line counts: the end of the prefix and the start of the suffix
         const fixed = String(o.prefix || '').split(/\r?\n|\r/).at(-1) + (atts || []).map(host.shellQuote).join(' ') + String(o.suffix || '').split(/\r?\n|\r/)[0] + note + '… ';
         const fitting = C.clipBytes(opening, C.LINE_MODE_BYTES - C.utf8Length(fixed));

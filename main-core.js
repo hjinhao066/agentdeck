@@ -1082,8 +1082,30 @@
       : `用户：${oneLine(t.user, 600)}\n回复：${oneLine(t.reply, 800) || '（没有文字回复）'}`)).join('\n\n');
   }
 
+  // Text for Codex on Windows, as keyboard events (win32-input-mode, the way Windows Terminal types).
+  // Written as plain text, ConPTY turns it into console key events and loses what has no key: the long
+  // dash and curly quotes vanish, and an Enter or line feed is lost or submits. A key event carries the
+  // exact UTF-16 unit, so nothing is lost; a line break is Shift+Enter (Codex's newline), and the
+  // caller's later plain Enter submits. Down+up for a BMP unit (down alone drops a repeated character);
+  // the two halves of an emoji are key-down only (an up event of a half is typed again).
+  // Returns strings of at most `size` characters each, so the caller can pace the writes.
+  const WIN_CODEX_KEY_DELAY = 10;
+  function winCodexKeys(text, size = 40) {
+    const key = (unit, down) => `\x1b[0;0;${unit};${down ? 1 : 0};0;1_`;
+    const chars = [...String(text).replace(/\r\n?/g, '\n').replace(/\t/g, '    ')].filter((ch) => ch === '\n' || ch >= ' ' && ch !== '\x7f' && !(ch >= '\x80' && ch < '\xa0'));
+    const chunks = [];
+    for (let i = 0; i < chars.length; i += size) {
+      chunks.push(chars.slice(i, i + size).map((ch) => {
+        if (ch === '\n') return '\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_';
+        const units = Array.from({ length: ch.length }, (_, n) => ch.charCodeAt(n));
+        return units.map((u) => key(u, true) + (units.length === 1 ? key(u, false) : '')).join('');
+      }).join(''));
+    }
+    return chunks;
+  }
+
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
+    winCodexKeys, WIN_CODEX_KEY_DELAY, RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };
