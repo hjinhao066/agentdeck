@@ -83,6 +83,7 @@ const win = {
     iconProviderFor: () => 'Claude', renderBadge() {}, PROVIDER_ICONS: {},
   },
   SidebarCore: require('../sidebar-core.js'),
+  TodoUI: { shortcutLabel: () => '⌘⇧N' },
   addEventListener() {}, getSelection: () => ({ removeAllRanges() {}, addRange() {} }),
 };
 const ctx = { window: win, document, MutationObserver, Element: Node, innerWidth: 1000, innerHeight: 800, confirm: () => false, setTimeout, console };
