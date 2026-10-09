@@ -145,6 +145,27 @@ test('snapshotCommit: clean tree uses HEAD; dirty tree (modified + new file) bec
     assert.equal(git('stash', 'list'), '');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+test('snapshotCommit: a node_modules link in the worktree stays out of the snapshot (this repo\'s .gitignore covers links too)', {
+  skip: process.platform === 'win32' && 'a symlink needs developer mode on Windows',
+}, () => {
+  // Worktrees often link node_modules to a main checkout. `node_modules/` matches only folders, so the link
+  // made the tree dirty and went to Windows inside the snapshot, where it blocks the job's own link.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-auto-git-'));
+  const git = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e.x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e.x' } }).trim();
+  try {
+    git('init', '-q'); git('config', 'commit.gpgsign', 'false');
+    fs.copyFileSync(path.join(ROOT, '.gitignore'), path.join(dir, '.gitignore'));
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'one'); git('add', '.'); git('commit', '-qm', 'base', '--no-verify');
+    const head = git('rev-parse', 'HEAD');
+    fs.mkdirSync(path.join(dir, 'main-checkout-modules'));
+    fs.symlinkSync(path.join(dir, 'main-checkout-modules'), path.join(dir, 'node_modules'));
+    fs.rmSync(path.join(dir, 'main-checkout-modules'), { recursive: true }); // only the link is in the tree
+    assert.equal(snapshotCommit(dir), head, 'a tree with only the link is clean');
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'two');
+    const sha = snapshotCommit(dir);
+    assert.deepEqual(git('ls-tree', '--name-only', sha).split('\n').sort(), ['.gitignore', 'a.txt']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 // ---- the real modules e2e-auto calls must offer what it calls (a mismatch was hidden by the fallback) ----
 test('e2e-auto calls main() of e2e-remote-win and e2e-queue: both modules export it', () => {
