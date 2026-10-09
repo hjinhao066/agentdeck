@@ -1389,3 +1389,20 @@ test('智能一页 in one lane is never wider than the window: its frames give u
   const one = C.planAcross(crewOf({ a: 6, b: 1 }), { w: 300 }, { ...ARRANGE, caps: { a: 3, b: 1 } });
   assert.deepEqual(one, { lanes: [['a', 'b']], caps: { a: 1, b: 1 } });
 });
+
+// README 终端架构图: 「直到新算出的排法留出 3% 余地也放得下…才换。所以来回拖窗口差几个像素不会跳」. 2.0.2's planPage kept the
+// columns in use by score alone (PAGE_KEEP), asking no room to spare of the new choice; on a 1x screen every choice that
+// fits is scored at the same capped scale, so the keep never held over the width where a frame's extra column just fits.
+test('智能一页 does not flip a frame\'s columns on a few pixels back and forth where one more column just fits', () => {
+  const cases = [['11-3-1 (README), 1x', { a: 11, b: 3, c: 1 }, 1440, 1], ['the screenshots\' 24 sessions, 125%', { agentdeck: 15, 秋招: 3, kenke: 2, fuqing: 2, daily: 1, other: 1 }, 1872, 1.25]];
+  for (const [name, spec, w, dpr] of cases) {
+    const seen = sweep(crewOf(spec), [w, w + 4, w, w + 4, w, w + 4, w], 900, dpr).slice(1);
+    assert.equal(switches(seen), 0, `${name}: ${[...new Set(seen)].join(' <-> ')}`);
+  }
+  // a pixel at a time over that width, both ways: one change at most, and the extra column is taken with room to spare
+  const map = crewOf({ a: 11, b: 3, c: 1 });
+  for (const widths of [widthsFrom(1400, 1520), widthsFrom(1520, 1400)]) {
+    const seen = sweep(map, widths, 900, 1);
+    assert.ok(switches(seen) <= 1, `${widths[0]} -> ${widths[widths.length - 1]}: ${[...new Set(seen)].join(' / ')}`);
+  }
+});
