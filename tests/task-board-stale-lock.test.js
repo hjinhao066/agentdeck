@@ -206,3 +206,18 @@ test('the start time of a real process is read from the system', (t) => {
   assert.ok(Math.abs(read - started) < 3000, `read ${new Date(read).toISOString()}, started ${new Date(started).toISOString()}`);
   assert.ok(Number.isNaN(store.processStart(deadPid())));
 });
+
+test('a lock whose owner record cannot be written (EMFILE, full disk) is removed and the real error reported', (t) => {
+  const store = board(t);
+  const write = fs.writeFileSync;
+  let fail = true;
+  fs.writeFileSync = function (file, ...rest) {
+    if (fail && String(file) === path.join(store.lock, 'owner.json')) { fail = false; const err = new Error('EMFILE: too many open files'); err.code = 'EMFILE'; throw err; }
+    return write.call(this, file, ...rest);
+  };
+  t.after(() => { fs.writeFileSync = write; });
+  assert.throws(() => add(store, 'first'), (err) => err.code === 'EMFILE' && !/another local process/.test(err.message));
+  assert.equal(fs.existsSync(store.lock), false, 'the half-made lock is gone');
+  add(store, 'next');
+  assert.deepEqual(store.list().map((c) => c.title), ['next']);
+});

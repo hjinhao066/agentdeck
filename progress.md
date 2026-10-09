@@ -6,7 +6,7 @@
 
 | 项 | 提交 | 证据 |
 |---|---|---|
-| ① 看板写锁回收 | 433a430 | `tests/task-board-stale-lock.test.js` 12 项；草稿上跑 6 项失败（抢活锁、删无主锁、两个写入者同时进锁），修后全过，Windows 也全过 |
+| ① 看板写锁回收 | 433a430 | `tests/task-board-stale-lock.test.js` 13 项（含审查补的：写 owner 失败要删掉自己的锁并报真实错误）；草稿上跑 6 项失败（抢活锁、删无主锁、两个写入者同时进锁），修后全过，Windows 也全过 |
 | ② 手机端 15 秒超时「没连上，重试」 | 1532670 | `tests/e2e/mobile-web-timeout.spec.js` 3 项；改前 3 项全失败，改后 Mac、Windows 都 3/3 |
 | ③ 重试去重（服务端按 key） | 48f6ab1 | `tests/mobile-web-deduplication.test.js` 9 项；草稿上 8 项失败，修后全过 |
 | ④ E2E 送 Windows | 5ad802d | 2 个 spec 共 6 项全过（用 t-1d02d7dd 的新版 e2e-remote-win.js，旧版和别的任务共用 work 目录，跑到一半被换成别的提交） |

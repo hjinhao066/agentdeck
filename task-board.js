@@ -175,7 +175,14 @@ class TaskStore {
       try { fs.mkdirSync(this.lock); } catch (again) { if (again.code === 'EEXIST') throw this.lockBusy(); throw again; }
     }
     try { fs.writeFileSync(path.join(this.lock, 'owner.json'), JSON.stringify({ pid: process.pid, host: os.hostname(), created: new Date().toISOString() }), { flag: 'wx' }); }
-    catch (_) { throw this.lockBusy(); }
+    catch (err) {
+      // EEXIST: another process named itself first, the lock is theirs. Anything
+      // else (EMFILE, a full temp disk): the directory is ours and holds no record,
+      // so nothing could ever take it over; remove it and say what went wrong.
+      if (err.code === 'EEXIST') throw this.lockBusy();
+      fs.rmSync(this.lock, { recursive: true, force: true });
+      throw err;
+    }
   }
   // Takes over a lock only when its owner process has exited (a crash mid-write).
   // A live writer keeps its lock however long it holds it; a lock whose owner
