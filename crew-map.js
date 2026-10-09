@@ -71,7 +71,7 @@
   let plan = null;          // the arrangement in use: { lanes, caps, tight }
   let planW = 0;            // the viewport width it was worked out for
   let planDpr = 0;          // and the screen's density
-  let drawnFor = '';        // the viewport size the map was last arranged for
+  let drawnFor = '';        // the viewport size (and screen density) the map was last arranged for
   let pageFits = true;      // the whole map shows at 100% in this window
   let undo = null;          // what 一键整理 / 智能一页 replaced, until the next move by hand
   let hintT = 0;
@@ -501,6 +501,7 @@
   const FIT_INSET = { top: 8, right: 8, bottom: 8, left: 8 };
   // the screen's density: how many device pixels a CSS pixel takes (the least scale keeps text readable on it)
   const density = () => window.devicePixelRatio || 1;
+  const drawnKey = () => vpEl.clientWidth + 'x' + vpEl.clientHeight + '@' + density();
   const fitBounds = (l) => C.fitBounds(lastMap, l, dims, showReturn);
   function fit(smooth) {
     if (!lay) return;
@@ -779,7 +780,7 @@
 
   function render(opts) {
     if (!rootEl || mode !== 'crew' || !host.visible() || drag) return;
-    drawnFor = vpEl.clientWidth + 'x' + vpEl.clientHeight;
+    drawnFor = drawnKey();
     const map = collect();
     lastMap = map;
     lastSig = C.signature(map) + '|' + showArchived;
@@ -998,11 +999,12 @@
     // A window being resized: the map arranges itself at once, then (if the size moved on meanwhile) once
     // more when the window has rested RESIZE_MS, gliding there; a size it was already arranged for does nothing.
     let resizeT = 0, resizeAt = 0;
-    // the window moved to a screen of another density: the least the map may show at moves with it
-    const watchDensity = () => matchMedia(`(resolution: ${density()}dppx)`).addEventListener('change', () => { watchDensity(); if (lay) render({ smooth: true }); }, { once: true });
+    // the window moved to a screen of another density: the least the map may show at moves with it (unless the map
+    // has been arranged for it already: a window resized onto it meanwhile)
+    const watchDensity = () => matchMedia(`(resolution: ${density()}dppx)`).addEventListener('change', () => { watchDensity(); if (lay && drawnKey() !== drawnFor) render({ smooth: true }); }, { once: true });
     watchDensity();
     new ResizeObserver(() => {
-      const ready = () => host.visible() && vpEl.clientWidth && !drag && vpEl.clientWidth + 'x' + vpEl.clientHeight !== drawnFor;
+      const ready = () => host.visible() && vpEl.clientWidth && !drag && drawnKey() !== drawnFor;
       clearTimeout(resizeT);
       // a window that changes once (the sidebar folded, maximised, snapped) glides there as well as one dragged
       if (ready() && Date.now() - resizeAt > RESIZE_MS) render({ smooth: true });
