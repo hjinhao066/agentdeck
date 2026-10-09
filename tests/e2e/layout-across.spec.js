@@ -140,10 +140,11 @@ const readMap = () => page.evaluate(() => {
     frames: [...document.querySelectorAll('.cm-pane')].map((n) => ({ key: n.dataset.project, ...rect(n) })), captain: rect(document.querySelector('.cm-node.kind-captain')),
     cardPx: document.querySelector('.cm-node:not(.kind-captain)').getBoundingClientRect().width };
 });
-// lanes at 1920, 1440 and 980 wide windows (智能一页: one page where it fits, else lanes at 100%, as many as the width holds)
-const LANES = { 1: [1, 1, 1], 4: [4, 4, 2], 9: [6, 4, 2] };
+// lanes at 1920, 1440 and 980 wide windows (智能一页: one page where it fits, else lanes at 100%; as many lanes as show
+// the map largest, not simply as many as the width holds: nine projects at 1920 stand in five, at 135%)
+const LANES = { 1: [1, 1, 1], 4: [4, 4, 2], 9: [5, 4, 2] };
 
-for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构图: ${label} 个项目 stand across the window, as many abreast as it holds, the rest under them; filling it when they show whole`, async () => {
+for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构图: ${label} 个项目 stand across the window, as many abreast as show the map largest, the rest under them; filling it when they show whole`, async () => {
   await launch(crew);
   const keys = crew.map(([project]) => project);
   for (const [i, [name, w, h]] of WIDTHS.entries()) {
