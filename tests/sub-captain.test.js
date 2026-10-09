@@ -377,3 +377,51 @@ test('review ③: a card-bound sub-captain\'s stage reports leave the card alone
   assert.match(await r.text('main-receipts', r.captain), /最终交付/);
   assert.match(M.subCaptainBrief('darwin'), /complete --final/);
 });
+
+// docs/sub-captain.md: every complete is a stage report that reaches the Captain, and ask may come
+// at any time. A 小队长's question leaves its one dispatch record 'asking'; its next complete or ask
+// must not delete what the Captain has not taken yet from that record.
+test('a sub-captain asks, then reports a stage before the Captain read either: the Captain gets both', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  await r.api.submit({ action: 'ask', question: '字节名额怎么分？' }, sub);
+  await r.api.submit({ action: 'complete', result: '阶段二：JD 分析收齐', files: [] }, sub);
+  const view = await r.text('main-receipts', r.captain);
+  assert.match(view, /阶段二：JD 分析收齐/);
+  assert.match(view, /字节名额怎么分/, 'the question was deleted before the Captain read it');
+});
+
+test('a sub-captain\'s stage, question, stage and two questions in a row, none read yet: every one reaches the Captain', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  await r.api.submit({ action: 'complete', result: '阶段一：简历 v1 出了', files: [] }, sub);
+  await r.api.submit({ action: 'ask', question: '字节名额怎么分？' }, sub);
+  await r.api.submit({ action: 'complete', result: '阶段二：JD 分析收齐', files: [] }, sub);
+  await r.api.submit({ action: 'ask', question: '腾讯要不要投？' }, sub);
+  await r.api.submit({ action: 'ask', question: '阿里笔试几号？' }, sub);
+  const view = await r.text('main-receipts', r.captain);
+  for (const said of ['阶段一：简历 v1 出了', '字节名额怎么分', '阶段二：JD 分析收齐', '腾讯要不要投', '阿里笔试几号']) assert.ok(view.includes(said), `lost: ${said}`);
+});
+
+test('a sub-captain\'s stage report still replaces an unread automatic notice, and an ordinary worker\'s result its own unread question', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  await r.api.submit({ action: 'complete', result: '阶段一：简历 v1 出了', files: [] }, sub);
+  await r.api.submit({ action: 'ask', question: '字节名额怎么分？' }, sub);
+  // The 小队长's terminal exits with no new receipt: an automatic notice, not something it said.
+  await r.api.submit({ action: 'session-exit', code: 1 }, sub);
+  await r.api.submit({ action: 'complete', result: '阶段二：JD 分析收齐', files: [] }, sub);
+  const view = await r.text('main-receipts', r.captain);
+  assert.match(view, /阶段一：简历 v1 出了/);
+  assert.match(view, /字节名额怎么分/);
+  assert.match(view, /阶段二：JD 分析收齐/);
+  assert.doesNotMatch(view, /未提交回执/, 'the automatic notice gives way to the real report');
+  // Unchanged for everyone else: a worker's real result replaces its own unread question.
+  await r.run('main-new', r.captain, { title: '普通队员', task: 'x' });
+  const worker = r.byTitle('普通队员');
+  await r.api.submit({ action: 'ask', question: '用哪个模板？' }, worker);
+  await r.api.submit({ action: 'complete', result: '做完了', files: [] }, worker);
+  const later = await r.text('main-receipts', r.captain);
+  assert.match(later, /做完了/);
+  assert.doesNotMatch(later, /用哪个模板/);
+});

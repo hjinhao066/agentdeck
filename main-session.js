@@ -1825,9 +1825,11 @@
     if (!(isSubCaptain(caller) && message.action === 'complete' && message.final !== true)) await recordReceiptForBoard(task, receipt);
     // A real submission may follow a question or the no-receipt notice. Replace
     // an unread automatic notice so the Captain sees the authoritative result.
+    // A sub-captain reports in stages on this one record: what it said itself stays.
     if (['asking', 'stopped', 'failed'].includes(task.status)) {
       if (task.receipt?.source === 'command' && task.status !== 'asking') return response;
-      dropReceipts(s, (p) => p.taskId === task.id);
+      const ownWords = isSubCaptain(caller);
+      dropReceipts(s, (p) => p.taskId === task.id && !(ownWords && p.source === 'command'));
       task.status = 'working';
       task.gen = s.gen; // a closed task keeps its old Captain's generation; the real result must reach the current one
     }

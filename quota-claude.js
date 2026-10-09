@@ -105,19 +105,31 @@ async function refreshOauth(auth, now, post = postRefresh, expectedUuid = null) 
   }
   return { ...auth, accessToken: response.access_token, refreshToken: nextRefresh, expiresAt: now + expiresIn * 1000, refreshTokenExpiresAt, scopes: nextScopes };
 }
+// `security add-generic-password … -w` reads the secret at a password prompt that keeps only its first
+// 128 bytes and still exits 0, and a credential is several hundred: the item was left unparseable. The
+// add command goes to `security -i` on stdin instead, the secret hex-encoded (-X): never in argv, never
+// at that prompt. `security -i` reads a line into a 4 KB buffer and stores part of a longer one, so a
+// line that may not fit is never sent ('' here), and a renewal whose result may not fit is not started.
+const KEYCHAIN_LINE_MAX = 4000, RENEWAL_ROOM = 256;
+function keychainLine(service, account, payload) {
+  if (!/^[\w .-]+$/.test(service) || !/^[\w.-]+$/.test(account)) return '';
+  const line = `add-generic-password -U -a ${account} -s "${service}" -X ${Buffer.from(payload, 'utf8').toString('hex')}\n`;
+  return line.length <= KEYCHAIN_LINE_MAX ? line : '';
+}
 function persistKeychain(service, account, payload, spawnImpl = spawn) {
   if (typeof payload !== 'string' || /[\r\n]/.test(payload) || Buffer.byteLength(payload) > MAX_BYTES) return Promise.resolve(false);
+  const line = keychainLine(service, account, payload);
+  if (!line) return Promise.resolve(false);
   return new Promise((resolve) => {
     let child, done = false;
     const finish = (ok) => { if (!done) { done = true; clearTimeout(timer); resolve(ok); } };
     const timer = setTimeout(() => { try { child?.kill('SIGKILL'); } catch (_) {} finish(false); }, 5000);
     try {
-      // -w is last so `security` reads the secret from stdin twice, never argv.
-      child = spawnImpl('/usr/bin/security', ['add-generic-password', '-a', account, '-s', service, '-U', '-w'], { stdio: ['pipe', 'ignore', 'ignore'] });
+      child = spawnImpl('/usr/bin/security', ['-i'], { stdio: ['pipe', 'ignore', 'ignore'] });
     } catch (_) { return finish(false); }
     child.on('error', () => finish(false));
     child.on('close', (code) => finish(code === 0));
-    try { child.stdin.write(payload + '\n' + payload + '\n'); child.stdin.end(); }
+    try { child.stdin.write(line); child.stdin.end(); }
     catch (_) { try { child.kill('SIGKILL'); } catch (_) {} finish(false); }
   });
 }
@@ -202,6 +214,8 @@ async function readCredentials(seat, home, platform = process.platform, exec = e
     if (Number.isFinite(base?.expiresAt) && base.expiresAt <= now) deps.onAuth?.('logged-out');
     return null;
   }
+  // Renewing rotates the refresh token on the server: never start one whose result this Keychain item cannot take.
+  if (loaded.source === 'keychain' && !deps.persist && !keychainLine(loaded.loc.keychainService, loaded.account, loaded.raw.trim() + ' '.repeat(RENEWAL_ROOM))) return null;
   if (!deps.inGate) {
     if (typeof deps.exclusive !== 'function') return null;
     return (await deps.exclusive(() => readCredentials(seat, home, platform, exec, { ...deps, exclusive: null, inGate: true }))) ?? null;

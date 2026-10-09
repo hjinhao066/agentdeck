@@ -22,10 +22,15 @@ registered external sessions; anything it cannot place counts as busy). Renewal 
 AgentDeck starting a Claude on the same seat (a column's launch line, the warm-up's run)
 are serialized per seat, and the credential is read again inside that lock. The reader
 then posts one refresh to `https://platform.claude.com/v1/oauth/token` and writes the
-rotated credential back to that seat's Keychain item (macOS, secret on stdin) or
-credential file. With a Claude running on the seat the expired token is only read and
-the seat's numbers are 未知 until that session renews it. A refresh that fails leaves
-the previous usage sample untouched, so an idle seat stays queryable.
+rotated credential back to that seat's Keychain item or credential file. On macOS the
+write is one `add-generic-password -U … -X <hex>` line on `security -i`'s stdin (never
+argv; never `-w`, whose password prompt keeps only 128 bytes and still exits 0). That
+line must stay under `security -i`'s 4 KB line buffer, so a credential whose renewed
+form might not fit is not renewed at all (renewing first would rotate the refresh token
+on the server and then fail to store it); its seat reads 未知 like a busy one. With a
+Claude running on the seat the expired token is only read and the seat's numbers are
+未知 until that session renews it. A refresh that fails leaves the previous usage sample
+untouched, so an idle seat stays queryable.
 
 Sampling happens on startup, about every five minutes, refresh-button clicks, and
 new CLI exhaustion observations for the affected seat. Concurrent requests for a
