@@ -1304,6 +1304,12 @@ the end of a round that changed something; an idle round writes nothing. A
 queued card whose content has not changed keeps its operation ID. Unsent edits
 are rebuilt from the board files at launch, and captain transcripts are not
 kept in the state file: they are noted again from `userData/chats` at launch.
+Transcripts an older build left in the state file first move to one file each
+in `fleet-state-history-outbox/` (written and synced before the state file
+drops them; any that cannot be written stay in the state file) and are deleted
+once the hub has them. If one board write of a batch fails, the batch is
+retried card by card so only the refused card waits for the next round.
+Stopping sync saves the latest sync time, which idle rounds do not write.
 Downloaded transcripts are written only when they changed. (2.0.1 rewrote the
 whole state file per card per upload and held the main process long enough to
 leave a black window on the first launch with sync configured.) Snapshot downloads

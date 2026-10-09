@@ -191,3 +191,102 @@ test('sync waits after launch before its first round', () => {
   assert.equal(readFleetSettings({ env: { ...env, AGENTDECK_FLEET_START_DELAY_MS: '0' } }).startDelayMs, 0);
   assert.equal(readFleetSettings({ env: { ...env, AGENTDECK_FLEET_START_DELAY_MS: 'soon' } }).startDelayMs, START_DELAY_MS);
 });
+
+// Review of 1a85b2a: the transcripts an older build left in fleet-state.json
+// must reach their own files on disk before the state file drops them, and
+// stay there until the hub has them, so a crash or a failed upload loses none.
+test('transcripts left in an old state file survive a crash during migration and a failed upload', async (t) => {
+  const f = await fixture(t, { ...SMALL, chats: 12 });
+  const historyDown = async (url, options) => {
+    if (url.endsWith('/v1/history')) throw new Error('history upload down');
+    return fetch(url, options);
+  };
+  // Run 1 dies after writing a few migrated files, before saving anything else.
+  const rename = fs.renameSync;
+  let moved = 0;
+  fs.renameSync = function (from, to) {
+    if (path.basename(path.dirname(to)) !== path.basename(f.dir) && path.dirname(path.dirname(to)) === f.dir && ++moved > 4) throw new Error('power cut');
+    return rename.apply(this, arguments);
+  };
+  try { client(f, { fetchImpl: historyDown }); } catch (_) {}
+  fs.renameSync = rename;
+  // Run 2 migrates, saves its round (the old copies leave the state file), and
+  // dies with every transcript upload having failed.
+  const second = client(f, { fetchImpl: historyDown });
+  assert.equal(second.historyOutbox.size, 12);
+  assert.match((await second.syncOnce()).error, /同步失败/);
+  assert.equal(fs.readFileSync(f.stateFile, 'utf8').includes(REPLY + REPLY), false, 'the state file no longer carries them');
+  // Run 3 still has all twelve and delivers them.
+  const third = client(f);
+  assert.equal(third.historyOutbox.size, 12);
+  assert.equal((await third.syncOnce()).error, null);
+  assert.equal(f.store.snapshot().history.length, 12);
+  assert.equal(client(f).historyOutbox.size, 0, 'delivered transcripts are not sent again after a restart');
+});
+
+test('old transcripts stay in the state file when their own files cannot be written', async (t) => {
+  const f = await fixture(t, { ...SMALL, chats: 3 });
+  const rename = fs.renameSync;
+  fs.renameSync = function (from, to) {
+    if (to !== f.stateFile && path.dirname(path.dirname(to)) === f.dir && path.basename(path.dirname(to)) !== 'tasks' && path.basename(path.dirname(to)) !== 'history') throw new Error('disk full');
+    return rename.apply(this, arguments);
+  };
+  const fleet = client(f, { fetchImpl: async (url, options) => { if (url.endsWith('/v1/history')) throw new Error('down'); return fetch(url, options); } });
+  await fleet.syncOnce();
+  fs.renameSync = rename;
+  assert.ok(fs.readFileSync(f.stateFile, 'utf8').includes(REPLY + REPLY), 'unmigrated transcripts are kept where they were');
+  const restarted = client(f);
+  assert.equal(restarted.historyOutbox.size, 3);
+  assert.equal((await restarted.syncOnce()).error, null);
+  assert.equal(f.store.snapshot().history.length, 3);
+});
+
+test('a whole batch is saved as attempted before its first request, and a crash mid-batch uploads nothing twice', async (t) => {
+  const f = await fixture(t, { ...SMALL, pending: 120, synced: 0 });
+  let posts = 0, onDisk = null;
+  const crashing = async (url, options) => {
+    if (url.endsWith('/v1/tasks')) {
+      // What the state file says when the first request leaves (asserted below:
+      // a throw in here would only become a sync error).
+      if (!onDisk) onDisk = JSON.parse(fs.readFileSync(f.stateFile, 'utf8')).taskOutbox.filter((item) => item.attempted).map((item) => item.opId);
+      // The power goes after the 70th request reached the hub.
+      if (++posts > 70) throw new Error('power cut');
+    }
+    return fetch(url, options);
+  };
+  await client(f, { fetchImpl: crashing }).syncOnce();
+  assert.deepEqual(onDisk, Array.from({ length: 50 }, (_, i) => `op-fixture-${i}`), 'the first batch of 50 is on disk as attempted');
+  const restarted = client(f);
+  assert.equal((await restarted.syncOnce()).error, null);
+  const cards = f.store.snapshot().cards;
+  assert.equal(cards.length, 120);
+  assert.ok(cards.every((card) => card.revision === 1 && !(card.conflicts || []).length), 'no card was applied twice');
+  assert.equal(restarted.taskOutbox.size, 0);
+});
+
+test('one acknowledged card the board rejects does not hold back the rest of its batch', async (t) => {
+  const f = await fixture(t, { ...SMALL, pending: 5, synced: 0 });
+  const bad = f.cards[2].id;
+  const tampering = async (url, options) => {
+    const response = await fetch(url, options);
+    if (!url.endsWith('/v1/tasks') || JSON.parse(options.body).cardId !== bad) return response;
+    const body = await response.json();
+    body.card.depends_on = ['t-not-downloaded-yet'];
+    return new Response(JSON.stringify(body), { status: response.status, headers: { 'content-type': 'application/json' } });
+  };
+  const fleet = client(f, { fetchImpl: tampering });
+  assert.match((await fleet.syncOnce()).error, /Unknown dependency/);
+  assert.deepEqual([...fleet.taskOutbox.keys()], [bad]);
+  for (const card of f.cards) if (card.id !== bad) assert.equal(fleet.bases.get(card.id).revision, 1);
+});
+
+test('the latest sync time is saved when sync stops, even after idle rounds', async (t) => {
+  const f = await fixture(t, SMALL);
+  const fleet = client(f);
+  assert.equal((await fleet.syncOnce()).error, null);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal((await fleet.syncOnce()).error, null);
+  const latest = fleet.lastSyncAt;
+  fleet.stop();
+  assert.equal(client(f).lastSyncAt, latest);
+});

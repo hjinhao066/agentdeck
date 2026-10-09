@@ -119,32 +119,74 @@ class FleetClient {
     this.timer = null;
     this.dirty = false;
     this.writtenHistory = new Map();
+    // Transcripts an older build left in the state file, kept one file each
+    // until the hub has them. Ones that could not be written stay in the state file.
+    this.outboxDir = path.join(path.dirname(stateFile), path.basename(stateFile, '.json') + '-history-outbox');
+    this.keptHistory = new Set();
+    this.unmigrated = [];
+    this.savedSyncAt = null;
     this._load();
     this._seedTasks();
   }
   _load() {
+    let legacy = [];
     try {
       const saved = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
       for (const [id, base] of saved.bases || []) this.bases.set(id, base);
       for (const item of saved.taskOutbox || []) if (item && item.cardId) this.taskOutbox.set(item.cardId, item);
-      // Older builds kept whole transcripts here; send them once, then drop them from the file.
-      for (const item of saved.historyOutbox || []) if (item && item.sessionId && Array.isArray(item.turns)) { this.historyOutbox.set(item.sessionId, item); this.dirty = true; }
+      legacy = saved.historyOutbox;
       this.lastSyncAt = typeof saved.lastSyncAt === 'string' ? saved.lastSyncAt : null;
+      this.savedSyncAt = this.lastSyncAt;
       this.devices = Array.isArray(saved.devices) ? saved.devices : [];
       this.history = Array.isArray(saved.history) ? saved.history : [];
     } catch (_) {}
+    this._migrateHistory(legacy);
   }
-  // Captain transcripts are not saved here: main.js notes every captain chat
-  // again at launch from userData/chats, so an unsent one is never lost.
+  _outboxFile(sessionId) {
+    return path.join(this.outboxDir, crypto.createHash('sha256').update(sessionId).digest('hex') + '.json');
+  }
+  // Older builds kept whole transcripts in the state file. Each goes to its own
+  // file first; the state file drops it only on a save after that file is on
+  // disk, and the file goes once the hub has it, so a crash loses none.
+  _migrateHistory(legacy) {
+    let names = [];
+    try { names = fs.readdirSync(this.outboxDir).filter((name) => name.endsWith('.json')); } catch (_) {}
+    for (const name of names) {
+      try {
+        const item = JSON.parse(fs.readFileSync(path.join(this.outboxDir, name), 'utf8'));
+        if (item && isSessionId(item.sessionId) && Array.isArray(item.turns)) { this.historyOutbox.set(item.sessionId, item); this.keptHistory.add(item.sessionId); }
+      } catch (_) {}
+    }
+    for (const item of Array.isArray(legacy) ? legacy : []) {
+      if (!item || !isSessionId(item.sessionId) || !Array.isArray(item.turns)) continue;
+      this.historyOutbox.set(item.sessionId, item);
+      try {
+        atomicWrite(this._outboxFile(item.sessionId), JSON.stringify(item));
+        this.keptHistory.add(item.sessionId);
+      } catch (_) { this.unmigrated.push(item); }
+      this.dirty = true;
+    }
+  }
+  _delivered(sessionId) {
+    if (this.keptHistory.delete(sessionId)) {
+      try { fs.unlinkSync(this._outboxFile(sessionId)); } catch (_) {}
+    }
+    const left = this.unmigrated.filter((item) => item.sessionId !== sessionId);
+    if (left.length !== this.unmigrated.length) { this.unmigrated = left; this.dirty = true; }
+  }
+  // Captain transcripts noted by this build are not saved here: main.js notes
+  // every captain chat again at launch from userData/chats.
   _persist() {
     atomicWrite(this.stateFile, JSON.stringify({
       bases: [...this.bases],
       taskOutbox: [...this.taskOutbox.values()],
+      ...(this.unmigrated.length ? { historyOutbox: this.unmigrated } : {}),
       devices: this.devices,
       history: this.history,
       lastSyncAt: this.lastSyncAt,
     }));
     this.dirty = false;
+    this.savedSyncAt = this.lastSyncAt;
   }
   _setBase(id, card) {
     const base = { revision: card.revision || 0, fields: pick(card) };
@@ -277,15 +319,21 @@ class FleetClient {
         accepted.push({ item, card: result.body.card, next: Object.keys(nextSet).length ? { ...result.body.card, ...nextSet } : null });
       }
       if (accepted.length) {
-        try {
-          this.taskStore.upsertSyncedMany(accepted.map(({ card, next }) => next || card));
-          for (const { item, card, next } of accepted) {
-            this._setBase(card.id, card);
-            this.taskOutbox.delete(item.cardId);
-            this.dirty = true;
-            if (next) this.noteCard(next);
-          }
-        } catch (err) { failure = failure || err; }
+        let written = accepted;
+        try { this.taskStore.upsertSyncedMany(accepted.map(({ card, next }) => next || card)); }
+        catch (_) {
+          // One card the board refuses must not hold back the rest of the batch.
+          written = accepted.filter(({ card, next }) => {
+            try { this.taskStore.upsertSynced(next || card); return true; }
+            catch (err) { failure = failure || err; return false; }
+          });
+        }
+        for (const { item, card, next } of written) {
+          this._setBase(card.id, card);
+          this.taskOutbox.delete(item.cardId);
+          this.dirty = true;
+          if (next) this.noteCard(next);
+        }
       }
       await yieldLoop();
     }
@@ -297,6 +345,7 @@ class FleetClient {
       try {
         await this._send(token, 'POST', '/v1/history', { ...item, deviceId: this.device.id });
         if (this.historyOutbox.get(item.sessionId)?.opId === item.opId) this.historyOutbox.delete(item.sessionId);
+        this._delivered(item.sessionId);
       } catch (err) { failure = failure || err; }
     }
     return failure;
@@ -394,6 +443,11 @@ class FleetClient {
   stop() {
     clearInterval(this.timer);
     this.timer = null;
+    // Idle rounds skip the save, so the latest sync time is kept here.
+    // It never recreates a data folder that has been removed.
+    if ((this.dirty || this.lastSyncAt !== this.savedSyncAt) && fs.existsSync(path.dirname(this.stateFile))) {
+      try { this._persist(); } catch (_) {}
+    }
   }
   snapshot() {
     let conflictCount = 0;
