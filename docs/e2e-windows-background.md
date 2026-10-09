@@ -28,6 +28,10 @@ node scripts/e2e-auto.js --status                                         # loca
 - **What Windows tests is your working tree**, uncommitted changes and new files included (a throw-away commit
   is built with a temporary index; HEAD, your index, branches and the stash are untouched).
 - Unknown arguments before `--` are an error (they used to be dropped silently).
+- A spec given by its absolute path is passed on relative to the repository (Windows runs its own checkout,
+  where a Mac path names nothing); a spec outside the repository is refused.
+- **Ctrl-C stops the whole run** (exit 130). ssh stopped by a signal exits 255 like a lost connection, but an
+  interrupted Windows group is not started again on the Mac.
 
 ## How the Windows side is laid out (`%USERPROFILE%\agentdeck-e2e-win`)
 
@@ -50,8 +54,10 @@ job uses (marker in `deps\<key>\.users`) or is installing is never removed, and 
 folder's own lock. Before a new install the free space must be at least 2 GB (`AGENTDECK_E2E_MIN_FREE_BYTES`);
 otherwise old folders are pruned first and, if that is not enough, the job exits with 16 and `e2e-auto` falls
 back to the Mac. A job's checkout is deleted when it ends; checkouts left by killed jobs are swept (older than
-3 hours) when the next job starts. The install lock records its owner process: a lock whose owner is gone is
-taken over at once, one whose owner is alive is respected (3 hours at most). All deletions go through
+3 hours) when the next job starts, their `node_modules` link first (git for Windows follows a junction on
+`worktree remove` and would empty the shared folder; a link that cannot be removed leaves that checkout for a
+later sweep). The install lock records its owner process: a lock whose owner is gone is taken over at once, by
+one waiting job only (`<lock>.break`), one whose owner is alive is respected (3 hours at most). All deletions go through
 a check that the target is a direct child of `checkouts` or `deps`, and every Windows path the dispatcher puts
 in a command line is quoted (home folders with a space are refused anyway).
 
