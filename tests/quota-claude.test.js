@@ -530,12 +530,16 @@ test('darwin keychain refresh passes the secret on stdin and keeps a rotated tok
   assert.equal(token, 'fresh-access-token');
   assert.equal(writes.length, 1);
   assert.equal(writes[0].bin, '/usr/bin/security');
-  assert.deepEqual(writes[0].args.slice(0, 2).concat(writes[0].args.slice(3)), ['add-generic-password', '-a', '-s', M.credentialLocation(seat, home).keychainService, '-U', '-w']);
+  // `security -i` takes the add command on stdin, the secret hex-encoded (-X): never argv, never the 128-byte prompt.
+  assert.deepEqual(writes[0].args, ['-i']);
   assert.equal(writes[0].args.includes('fresh-access-token') || writes[0].args.includes('rotated-refresh-token'), false);
   const stored = writes[0].child.stdin.text;
-  assert.equal(stored, stored.split('\n')[0] + '\n' + stored.split('\n')[0] + '\n');
-  assert.equal(JSON.parse(stored.split('\n')[0]).claudeAiOauth.refreshToken, 'rotated-refresh-token');
-  assert.equal(JSON.parse(stored.split('\n')[0]).mcpOAuth.keep, 'yes');
+  const command = /^add-generic-password -U -a [\w.-]+ -s "([^"\n]+)" -X ([0-9a-f]+)\n$/.exec(stored);
+  assert.ok(command, 'stdin holds one add command line');
+  assert.equal(command[1], M.credentialLocation(seat, home).keychainService);
+  const written = Buffer.from(command[2], 'hex').toString('utf8');
+  assert.equal(JSON.parse(written).claudeAiOauth.refreshToken, 'rotated-refresh-token');
+  assert.equal(JSON.parse(written).mcpOAuth.keep, 'yes');
   assert.equal(fs.existsSync(M.credentialLocation(seat, home).credentialsPath), false);
   assert.equal(await C.readCredentials(seat, home, 'darwin', keychain, {
     post: async () => { posts.push('refresh'); return refreshResponse(); }, spawn: spawnImpl, exclusive: free,
