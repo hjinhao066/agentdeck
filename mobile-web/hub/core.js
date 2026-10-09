@@ -50,7 +50,8 @@
     if (!result || result.failed || result.timedOut) return classify(result);
     const { status, body } = result;
     if (status === 200) {
-      if (body && body.app === 'agentdeck' && body.apiVersion >= 2 && Array.isArray(body.capabilities) && body.capabilities.includes('snapshot')) return { current: true };
+      // dedupe: the computer takes a message's deduplicationKey once, so a retry is safe.
+      if (body && body.app === 'agentdeck' && body.apiVersion >= 2 && Array.isArray(body.capabilities) && body.capabilities.includes('snapshot')) return { current: true, dedupe: body.capabilities.includes('send-dedupe') };
       if (body && typeof body === 'object') return { state: 'upgrade' };
       return { state: 'error', detail: '入口返回了看不懂的内容。' };
     }
@@ -82,8 +83,10 @@
     return '';
   }
 
-  function sendFailure(result, name) {
+  // safeRetry: the message carried a key the computer takes only once.
+  function sendFailure(result, name, safeRetry = false) {
     if (!result || result.failed) return '手机连不上入口，消息没有发出。';
+    if (result.timedOut && safeRetry) return `没连上 ${name}（15 秒没有回音）。点右边的重试，队长不会收到两遍。`;
     if (result.timedOut) return `没有收到 ${name} 的确认，消息可能已经排队，也可能没有。先看一眼 ${name} 队长的对话，再决定要不要重发。`;
     if (result.status === 502) return `${name} 离线，消息没有发出，也没有转给另一台电脑。`;
     if (result.status === 401) return `${name} 的登录已失效，消息没有发出。`;

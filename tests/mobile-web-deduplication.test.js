@@ -41,7 +41,7 @@ const answer = (result) => ({ status: result.status, body: JSON.parse(result.tex
 
 test('the computer says it can take a send key', async (t) => {
   const { status } = await start(t);
-  assert.ok(JSON.parse((await request(status, '/api/info')).text).capabilities.includes('captain-dedupe'));
+  assert.ok(JSON.parse((await request(status, '/api/info')).text).capabilities.includes('send-dedupe'));
 });
 
 test('the same key sent twice reaches the Captain once and both get the first answer', async (t) => {
@@ -125,7 +125,7 @@ test('one phone cannot replay or block another phone\'s key', async (t) => {
 test('through the hub entry (public origin, machine prefix) a retry is not sent twice', async (t) => {
   const { status, auth, messages } = await start(t, { publicOrigin: PUBLIC_ORIGIN, basePath: '/mac/', label: 'Mac' });
   const info = JSON.parse((await request(status, '/mac/api/info')).text);
-  assert.ok(info.capabilities.includes('captain-dedupe'));
+  assert.ok(info.capabilities.includes('send-dedupe'));
   for (let i = 0; i < 2; i++) assert.equal((await post(status, '/mac/api/captain', { message: '总台发来的', deduplicationKey: KEY }, auth)).status, 200);
   assert.deepEqual(messages, ['总台发来的']);
 });

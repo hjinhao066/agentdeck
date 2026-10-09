@@ -1,71 +1,22 @@
 'use strict';
 const test = require('node:test');
-const assert = require('node:assert');
+const assert = require('node:assert/strict');
+const Core = require('../mobile-web/hub/core');
 
-// Simulated api function with timeout (extracted from mobile-web/app.js)
-async function api(url, options, fetchFn) {
-  if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, 'X-CSRF-Token': 'token' } };
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetchFn(url, { credentials: 'same-origin', ...options, signal: controller.signal });
-    if (response.status === 401) throw new Error('登录已过期。');
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '请求失败，请稍后刷新。');
-    return result;
-  } finally { clearTimeout(timeout); }
-}
+// The hub sends a message's deduplicationKey only to a computer that says it
+// takes keys (an older build refuses unknown fields), and only then tells the
+// user that a retry after a timeout is safe.
+const info = (capabilities) => ({ status: 200, body: { app: 'agentdeck', apiVersion: 2, capabilities } });
 
-test('mobile-web: api receives AbortSignal for timeout', async () => {
-  let receivedSignal = null;
-  const trackingFetch = async (url, options) => {
-    receivedSignal = options.signal;
-    assert.ok(receivedSignal, 'fetch should receive AbortSignal');
-    assert.ok(typeof receivedSignal.addEventListener === 'function', 'signal should be an AbortSignal');
-    return { status: 200, ok: true, json: async () => ({ queued: true }) };
-  };
-
-  const result = await api('/api/captain', { method: 'POST', body: '{}' }, trackingFetch);
-  assert.ok(receivedSignal, 'signal should have been passed to fetch');
-  assert.deepEqual(result, { queued: true });
+test('a computer that takes send keys is told apart from one that does not', () => {
+  assert.deepEqual(Core.classifyInfo(info(['snapshot', 'basePath', 'send-dedupe'])), { current: true, dedupe: true });
+  assert.deepEqual(Core.classifyInfo(info(['snapshot', 'basePath'])), { current: true, dedupe: false });
 });
 
-test('mobile-web: api request succeeds before timeout', async () => {
-  const response = { status: 200, ok: true, json: async () => ({ queued: true }) };
-  let fetchCalled = false;
-  const quickFetch = async (url, options) => {
-    fetchCalled = true;
-    assert.ok(options.signal, 'fetch should receive AbortSignal');
-    return response;
-  };
-
-  const result = await api('/api/captain', { method: 'POST', body: '{}' }, quickFetch);
-  assert.ok(fetchCalled, 'fetch should have been called');
-  assert.deepEqual(result, { queued: true });
-});
-
-test('mobile-web: api handles network errors', async () => {
-  const failingFetch = async () => {
-    throw new TypeError('Failed to fetch');
-  };
-
-  try {
-    await api('/api/captain', { method: 'POST', body: '{}' }, failingFetch);
-    assert.fail('Should have thrown TypeError');
-  } catch (err) {
-    assert.equal(err.message, 'Failed to fetch');
-    assert.ok(err instanceof TypeError);
-  }
-});
-
-test('mobile-web: api handles HTTP errors', async () => {
-  const response = { status: 500, ok: false, json: async () => ({ error: '服务器错误' }) };
-  const failingFetch = async () => response;
-
-  try {
-    await api('/api/captain', { method: 'POST', body: '{}' }, failingFetch);
-    assert.fail('Should have thrown error');
-  } catch (err) {
-    assert.equal(err.message, '服务器错误');
-  }
+test('a timed-out send says 没连上 and offers 重试 only when the retry cannot duplicate', () => {
+  assert.equal(Core.sendFailure({ timedOut: true }, 'Mac', true), '没连上 Mac（15 秒没有回音）。点右边的重试，队长不会收到两遍。');
+  // An older computer: a retry could deliver twice, so the user looks first.
+  assert.match(Core.sendFailure({ timedOut: true }, 'Mac'), /可能已经排队，也可能没有/);
+  assert.equal(Core.sendFailure({ failed: true }, 'Mac', true), '手机连不上入口，消息没有发出。');
+  assert.match(Core.sendFailure({ status: 502, body: { offline: true } }, 'Mac', true), /没有转给另一台电脑/);
 });
