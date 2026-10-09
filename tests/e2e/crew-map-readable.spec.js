@@ -216,11 +216,13 @@ test('1x screen: a window that changes once (the sidebar folded, then back) glid
   // glide, or frames and cards moving
   const watch = () => page.evaluate(() => { window.__glides = 0; window.__watch = setInterval(() => { if (document.querySelector('.cm-canvas.cm-smooth') || [...document.querySelectorAll('.cm-pane, .cm-node')].some((n) => n.getAnimations().some((a) => a.playState === 'running' && Number.isFinite(a.effect.getComputedTiming().iterations)))) window.__glides++; }, 10); });
   const stop = () => page.evaluate(() => { clearInterval(window.__watch); return window.__glides; });
+  // (the map may keep its arrangement and its size, a window grown never shows it smaller: it moves to stay centred)
+  const where = () => page.evaluate(() => { const v = CrewMap.view(); return [v.scale, v.x, v.y].map((n) => Math.round(n * 1000) / 1000).join(' '); });
   for (const button of ['#navCollapseBtn', '#navExpandBtn']) {
-    const before = (await read()).scale;
+    const before = await where();
     await watch();
     await page.locator(button).click();
-    await expect.poll(async () => (await read()).scale, { timeout: 15000 }).not.toBe(before);
+    await expect.poll(where, { timeout: 15000 }).not.toBe(before);
     await settled();
     expect(await stop(), `${button}: the map glided there`).toBeGreaterThan(0);
   }
