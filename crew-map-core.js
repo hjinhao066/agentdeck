@@ -727,7 +727,8 @@
     const near = (d) => (Math.abs(d) < 1e-9 ? 0 : d);
     const largest = lanes.slice().sort((a, b) => (b.fits - a.fits) || (a.fits ? near(b.scale - a.scale) : near(a.height - b.height)) || (a.plan.lanes.length - b.plan.lanes.length))[0];
     const most = lanes[lanes.length - 1];
-    const fresh = row && row.fits && !(most.fits && most.scale >= row.scale * WRAP_GAIN) ? row : largest;
+    // (no project on the map: no lanes to weigh, the row, 队长 alone, stands)
+    const fresh = row && (!most || (row.fits && !(most.fits && most.scale >= row.scale * WRAP_GAIN))) ? row : largest;
     const same = (a, b) => JSON.stringify([a.lanes, a.caps, !!a.tight, !!a.page]) === JSON.stringify([b.lanes, b.caps, !!b.tight, !!b.page]);
     // It takes over from the one in use only holding the map with WRAP_KEEP's room to spare (whole on the page, and
     // its lanes across the window) and better by WRAP_KEEP: whole where the one in use scrolls; that much larger

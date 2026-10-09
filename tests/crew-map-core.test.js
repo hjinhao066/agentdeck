@@ -1346,3 +1346,26 @@ test('智能一页 keeps the smallest text at 10 device px or more: on a 1x scre
     assert.ok(r.scale * 11.5 >= 10 - 1e-9, `${JSON.stringify(spec)} at ${w}x${h}: ${(r.scale * 11.5).toFixed(2)}px`);
   }
 });
+
+test('智能一页 with no project on the map (only 队长, as after the last project is archived) still arranges it', () => {
+  const empty = crewOf({});
+  assert.equal(empty.projects.length, 0);
+  for (const dpr of [1, 2]) for (const [w, h] of [[1440, 900], [980, 700], [400, 300]]) {
+    const r = C.arrangePage(empty, { w, h }, { ...ARRANGE, dpr }, {});
+    assert.deepEqual(r.plan.lanes, [], `${w}x${h}, ${dpr}x`);
+    assert.ok(r.lay && r.lay.groups.length === 0);
+    // the arrangement in use when the projects went is given back
+    const held = C.arrangePage(crewOf({ a: 2, b: 1 }), { w, h }, { ...ARRANGE, dpr }, {});
+    assert.deepEqual(C.arrangePage(empty, { w, h }, { ...ARRANGE, dpr }, { plan: held.plan, planW: w, dpr }).plan.lanes, []);
+  }
+});
+
+test('智能一页 with no project on the map and the board view not laid out yet (0×0, AgentDeck starting on 架构图) gives 队长 alone', () => {
+  // 2.0.2: this first drawing threw, and the page stopped before 任务看板 was set up
+  for (const dpr of [1, 2]) {
+    const r = C.arrangePage(crewOf({}), { w: 0, h: 0 }, { ...ARRANGE, dpr }, {});
+    assert.deepEqual(r.plan.lanes, []);
+    assert.ok(r.lay.captain && r.lay.groups.length === 0);
+    assert.equal(r.pageFits, false);
+  }
+});

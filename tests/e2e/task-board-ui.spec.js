@@ -124,16 +124,16 @@ async function dragAim(from, anchor, dy, { release = true, edge = false } = {}) 
 }
 
 let seeded = [];
-async function launch(big = false) {
+// view: the page AgentDeck starts on; states: the crew's task states (working ones put their project on the map)
+async function launch(big = false, { view = 'terminals', states = ['working', 'done', 'working', 'working', 'failed'] } = {}) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-task-board-ui-'));
   seeded = seed(path.join(profile, 'tasks'), big);
   const column = (id, title, project) => ({ id, title, displayTitle: title, manualTitle: true, cmd: FAKE, cwd: profile, width: 460, role: 'manual', captainCrew: true, project });
   const workers = [column('w-login', '登录权限', '客户门户'), column('w-ui', '工作台界面', '客户门户'), column('w-ask', '密码策略', '客户门户'), column('w-report', '导出报表', '报表服务'), column('w-deck', '看板打磨', 'AgentDeck')];
-  const states = ['working', 'done', 'working', 'working', 'failed'];
   const now = Date.now();
   // Large read-only fixtures have unbound doing cards. Route their heartbeat
   // notices to the stand-in Captain so they never launch a real provider CLI.
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'captain' },
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'captain' }, activeView: view,
     columns: [{ ...column('cap', '队长', ''), isMain: true, captainCrew: false }, ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
       tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: states[i], sentAt: now - 60_000 + i, turnId: '',
@@ -147,12 +147,15 @@ async function launch(big = false) {
   });
   page = await application.firstWindow(); errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
-  await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(6);
+  // (a busy machine can take well over five seconds to bring the page up)
+  await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 30000 }).toBe(6);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(6);
 }
 test.afterEach(async () => {
   if (application) await closeElectron(application);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  // A force-closed Electron's helpers can still hold files in the profile for a few seconds (EPERM on Windows):
+  // a temporary folder left behind is reported, it does not fail a test that passed.
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
   application = null;
 });
 
@@ -666,6 +669,24 @@ test('the board stays read-only and opens with no cards', { tag: '@smoke' }, asy
   await page.locator('#navTop .nav-row[data-nav="tasks"]').click();
   await expect(page.locator('#taskBoardView')).toBeHidden();
   expect(fs.existsSync(path.join(profile, 'tasks'))).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+// 2.0.2: started on 架构图 with no project at work, the map's first drawing (made while the page was still being set
+// up) threw on the empty map, the page stopped there, and neither 任务看板 entry opened anything.
+test('started on 架构图 with no project at work, the board opens from the sidebar and from the map', async () => {
+  await launch(false, { view: 'board', states: ['done', 'done', 'done', 'done', 'done'] });
+  await page.locator('#taskBoardBtn').click();
+  await expect(page.locator('#taskBoardView')).toBeVisible();
+  await expect(page.locator('.tbv-card[data-card-id="a-board"]')).toBeVisible();
+  await page.locator('#taskBoardBtn').click();
+  await expect(page.locator('#taskBoardView')).toBeHidden();
+  await page.locator('#boardTasksTab').click();
+  await expect(page.locator('#taskBoardView')).toBeVisible();
+  await expect(page.locator('.tbv-card[data-card-id="a-board"]')).toBeVisible();
+  // the map underneath shows 队长 alone
+  await page.locator('.tbv-close').click();
+  await expect(page.locator('#crewMap .cm-node[data-node-id="cap"]')).toBeVisible();
   expect(errors).toEqual([]);
 });
 

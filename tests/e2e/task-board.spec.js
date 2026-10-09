@@ -445,7 +445,8 @@ test('new selected Claude seat queues at quota and the queue opens after recover
     await page.evaluate(() => MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)));
     await expect.poll(async () => (await card(other.id)).session_id).toBeTruthy();
     expect((await card(c.id)).session_id).toBeFalsy();
-    await page.evaluate(() => { for (const q of Object.values(config.quotas)) q.blocked.resetAt = Date.now() - 1; MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)); });
+    // (a background quota sample may have added an entry of its own, without a block)
+    await page.evaluate(() => { for (const q of Object.values(config.quotas)) if (q && q.blocked) q.blocked.resetAt = Date.now() - 1; MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)); });
     await expect.poll(async () => (await card(c.id)).session_id).toBeTruthy();
     for (const id of [c.id, other.id]) {
       const session = (await card(id)).session_id;
