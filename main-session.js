@@ -528,7 +528,8 @@
       await tellSession({ to: execId, message: AV.reworkMessage({ card, findings: reject.findings }), id: AV.reworkAttemptId(id, reject.round), reworkKey: reject.key });
     } catch (error) {
       // The card was moved after the check above: the rework is no longer wanted.
-      if (!/^自动返工已经不用发了/.test(error.message)) throw error;
+      // (through ipcRenderer.invoke the message reads "Error invoking remote method '…': Error: 自动返工…")
+      if (!/自动返工已经不用发了/.test(error.message)) throw error;
       await boardRequest('reworkDispatched', { id, key: input.key });
       return { card, ignored: true };
     }
