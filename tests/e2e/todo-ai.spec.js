@@ -297,12 +297,9 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
   } finally {
     clearInterval(foregroundTimer);
     for (const child of children) if (child.exitCode === null) child.kill();
-    if (application) {
-      const proc = application.process();
-      // A quit with a Captain takes a few seconds; killing it mid-close leaves the worker hanging.
-      await Promise.race([application.close(), new Promise((resolve) => setTimeout(resolve, 20000))]);
-      if (proc.exitCode === null) try { process.kill(proc.pid, 'SIGKILL'); } catch (_) {}
-    }
+    // Let the app quit as every other spec does: killing it mid-close (a quit with a
+    // Captain is slow on a busy machine) leaves the Playwright worker hanging.
+    if (application) await application.close();
     fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); // the app may still be writing as it quits
   }
 });
