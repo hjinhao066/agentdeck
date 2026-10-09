@@ -125,7 +125,8 @@ function watchTodos() {
 handleMain('todos:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'update', 'remove'].includes(payload.op)) throw new Error('Invalid to-do operation.');
   const input = payload.input && typeof payload.input === 'object' ? payload.input : {};
-  if (payload.op === 'list') return { items: todoStore.list() };
+  // `device` tells 待我处理 which @ai items this computer handed to 队长.
+  if (payload.op === 'list') return { items: todoStore.list(), device: todoStore.deviceId };
   // The desktop page never writes on the phone's behalf, and never touches the AI flag.
   const item = payload.op === 'add' ? todoStore.add({ text: input.text })
     : payload.op === 'remove' ? todoStore.remove({ id: input.id })

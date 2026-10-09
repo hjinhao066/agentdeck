@@ -60,7 +60,7 @@ AGENTDECK_TODO_SHOTS=<目录> npx playwright test tests/e2e/todo.spec.js
 AGENTDECK_HUB_SCREENSHOT_DIR=<目录> npx playwright test tests/e2e/mobile-hub-todo.spec.js
 ```
 
-## 第二步：AI 后台（现有 Todo 界面不变）
+## 第二步：AI 后台
 
 本地字面匹配 `@ai`，大小写、半角/全角 `@`、前后空格、`@ ai` 都认；标记后是中文字符、结尾、空白或标点都认（下划线不算），中文也可紧邻标记之前，例如 `@ai查火车`、`帮我@ai找本书`、`＠AI查资料`。标记后紧跟英文字母或数字不触发，例如 `@aiden`、`@air_france`、`@ai2`；英文/数字用户名邮箱 `me@ai.com`、`someone@ai中文.com` 也不触发。后文出现版本号、网址或点号不会排除中文句中的标记，例如 `帮我@ai查一下Python3.12的文档` 与句首写法同样触发；纯中文用户名如 `用户@ai中文.com` 按中文紧邻标记规则触发。建卡标题、任务正文和待办均保留原文。没有意图判断。不使用关键词推断或模型分类，保存事件、应用启动和每小时兜底扫描都没有模型调用。已勾掉、已删除及个人待办不投递。
 
@@ -90,7 +90,7 @@ node "$AGENTDECK_BOARD_CLI" todo status --id td-… --task-id todo-… --status 
 
 队长照常用 `new --task-id <卡片 id> ...` 派活；接手、等待、验收完毕或失败后由队长明确回填，不把屏幕结束或队员说明当作完成证明。`done` 必须有至少一个本机存在的文件绝对路径（不接受目录），但文件质量/是否搜全仍由队长验收。AI 完成不自动勾掉用户的 `done`。回填同时更新关联卡片：working→doing，needs_user→needs_user（具体缺材料进入 `user_question`），done→done，failed→needs_user + failed 标记；当前基线的「需要你」看板据此读取等待/失败原因。
 
-`ai` 供下步界面读取：
+`ai` 的字段（界面见下一节）：
 
 | 字段 | 含义 |
 | --- | --- |
@@ -105,11 +105,23 @@ node "$AGENTDECK_BOARD_CLI" todo status --id td-… --task-id todo-… --status 
 
 允许 queued→working/needs_user/done/failed，working→needs_user/done/failed，needs_user→working/done/failed，failed→working/needs_user/done；done 为终态，同状态可重试回填。重试或返工不再次提醒同版本。内容编辑重置 `ai`，下一次本地扫描建立新版本。
 
+## 第三步：在界面上看到、回到「待我处理」
+
+整条路：桌面待办页、⌘T 速记或手机总台记一条带 `@ai` 的 → 记下它的那台电脑建卡交给队长（上节）→ 队长派活、用 `todo status` 回填 → 结果出现在这条待办下面，也登记到「待我处理」。
+
+- **待办行**（桌面和手机总台）：文字下面一行状态——「已交给 AI · 等队长接收 / 队长已收到」「AI 正在办」「AI 在等你：缺什么」「AI 办完了」「AI 没办成：原因」。办完的列出交回的文件：桌面点文件名在侧栏预览，旁边是复制路径（两个重叠方框，复制后短暂变勾）和在访达/资源管理器中显示的图标按钮；手机只显示文件名，文件在「待我处理」里打开。`ai` 随待办文件经 git 同步，所以两台电脑和手机看到同一个状态。AI 办完不替你勾掉这条待办。
+- **待我处理**（`attention-core.js` 的 `syncTodos`，桌面刷新「待我处理」时比对待办）：只在把这条交给队长的那台电脑（`ai.ownerDevice`）登记，手机总台本来就合并两台电脑的「待我处理」，所以不会出现两条。
+  - `needs_user` → 「要你处理」（等你回答），问题就是队长写的缺什么；你的回复带着卡片 id 交给队长。
+  - `failed` → 「要你处理」（等你拍板），快捷回复「重试 / 先放着」。这次失败的手机提醒仍按上节合并发送，但不再另登记一条笼统的「有 N 条没办成」。
+  - `done` → 「做完了你还没看」的结果汇报，附交回的文件。
+  - 每个回答（状态 + 说明 + 文件）只登记一次，你勾掉、看过或被清理出「已完成」后都不会再冒出来（`todoFiled` 记着）；AI 接着办（状态变了）、待办被改字或删掉时，对应的「要你处理」自动打勾。条目标「来自待办」。
+  - 队长回填后不需要再用 `inbox` 重复登记，任务正文里写明了这一点。
+
 追加后台验证：
 
 ```sh
-node --test tests/todo-ai.test.js tests/todo-store.test.js tests/todo-inbox.test.js tests/todo-backend-errors.test.js tests/todo-failure-notifications.test.js tests/receipts-seen.test.js tests/board-cli.test.js tests/task-board.test.js tests/notify-user.test.js tests/mobile-todos.test.js tests/mobile-hub-todo.test.js
-npx playwright test tests/e2e/todo.spec.js tests/e2e/todo-ai.spec.js tests/e2e/mobile-hub-todo.spec.js
+node --test tests/todo-attention.test.js tests/attention-core.test.js tests/todo-ai.test.js tests/todo-store.test.js tests/todo-inbox.test.js tests/todo-backend-errors.test.js tests/todo-failure-notifications.test.js tests/receipts-seen.test.js tests/board-cli.test.js tests/task-board.test.js tests/notify-user.test.js tests/mobile-todos.test.js tests/mobile-hub-todo.test.js
+npx playwright test tests/e2e/todo.spec.js tests/e2e/todo-ai.spec.js tests/e2e/mobile-hub-todo.spec.js tests/e2e/attention.spec.js tests/e2e/mobile-hub-attention.spec.js --workers=1
 ```
 
 先取得 README 的全机测试锁；测试 Electron 使用 `--test-user-data` 后台透明且不可聚焦窗口、隔离文件和模拟 agent/Bark，手机 Chromium 测试用默认 headless。勿使用真实模型冒烟或正在运行的用户应用。

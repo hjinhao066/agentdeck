@@ -13,6 +13,7 @@
         { "text": "全仓库体检后找到的问题逐个修好", "state": "doing" },
         { "text": "自动审查有时丢失的问题修好", "state": "doing" },
         { "text": "每晚自动挑一段代码找一个有证据的毛病，第二天交给队长修", "state": "planned" },
+        { "text": "待办里写 @ai 就交给 AI：队长派活，结果回到这条待办下面和「待我处理」，桌面和手机都看得到", "state": "doing" },
         { "text": "三台设备走一遍「随手记 → @ai → 交出东西 → 待我处理」，结果一致，再观察一周", "state": "planned" },
         { "text": "在 Windows 电脑上修好遗留的 5 项测试失败", "state": "pending", "suggestion": "建议做，等你回家后在 Windows 上修" },
         { "text": "雷达：修好两个坏掉的搜索源，改成每周跑一次，不再推荐已经有的功能", "state": "pending", "suggestion": "建议都做，只改雷达不动 AgentDeck" }

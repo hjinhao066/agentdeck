@@ -35,7 +35,8 @@ function taskDetail(item, id) {
     '隐私：病历、CT、证件、财务等材料只在本机处理和存放，不得上传到任何在线服务（包括在线模型、网页工具或云盘）。待办原文的同步存储方式保持原样。\n' +
     '手机提醒默认一律不发，等材料和办完都不响铃；没办成/出错由 Todo 后端通过现有 notify-user 提醒一次，队长不要重复提醒。\n' +
     `队长回填（使用自己的控制终端）：node "$AGENTDECK_BOARD_CLI" todo status --id ${item.id} --task-id ${id} --status working\n` +
-    '等你提供用 --status needs_user --message "缺什么材料"；办完用 --status done --files "绝对产物路径1,路径2"；没办成用 --status failed --message "原因"。不要直接改 todos/*.json。';
+    '等你提供用 --status needs_user --message "缺什么材料"；办完用 --status done --files "绝对产物路径1,路径2"；没办成用 --status failed --message "原因"。不要直接改 todos/*.json。\n' +
+    '回填后 AgentDeck 自动把结果登记到用户的「待我处理」（等你提供/没办成在「要你处理」，办完在「做完了你还没看」，附产物文件），不要再用 inbox 重复登记；用户在那里的回复会作为回执带着这张卡片 id 交给你。';
 }
 
 class TodoAI {

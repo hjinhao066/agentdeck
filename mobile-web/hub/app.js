@@ -1367,7 +1367,7 @@
     if (!(shut && item.label === '要你处理')) top.append(node('span', 'at-kind', item.label));
     if (stay) top.append(node('span', 'at-seen', '已读'));
     const when = shut ? item.doneAt : item.created;
-    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.automation && '自动任务：' + item.automation, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
+    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.automation && '自动任务：' + item.automation, item.source === 'todo' && '来自待办', item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
     if (when) meta.title = (shut ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
     top.append(meta);
     // An open need with a question: the question is the biggest thing on the card,
@@ -1642,9 +1642,20 @@
     check.addEventListener('click', () => toggleTodo(t, row, check));
     const body = node('div', 'todo-main');
     const when = t.done ? '完成于 ' + Core.ago(Date.parse(t.doneAt || t.updated), Date.now()) : Core.ago(Date.parse(t.created), Date.now());
-    body.append(node('p', 'todo-text', t.text), node('p', 'todo-when', when));
+    body.append(node('p', 'todo-text', t.text));
+    if (t.ai) body.append(todoAi(t.ai));
+    body.append(node('p', 'todo-when', when));
     row.append(check, body);
     return row;
+  }
+  // A 待办 handed to AI (@ai). The files themselves open from 待我处理.
+  const TODO_AI_LABEL = { working: 'AI 正在办', needs_user: 'AI 在等你', done: 'AI 办完了', failed: 'AI 没办成' };
+  function todoAi(ai) {
+    const box = node('p', 'todo-ai is-' + ai.status);
+    box.append(node('span', 'todo-ai-chip', TODO_AI_LABEL[ai.status] || (ai.delivered ? '已交给 AI · 队长已收到' : '已交给 AI · 等队长接收')));
+    if (ai.message && ai.status !== 'queued') box.append(node('span', 'todo-ai-msg', ai.message));
+    if (ai.files.length) box.append(node('span', 'todo-ai-files', `交回 ${ai.files.length} 个文件：${ai.files.join('、')}（在「待我处理」打开）`));
+    return box;
   }
   async function toggleTodo(t, row, check) {
     const m = todoWriter();

@@ -2639,7 +2639,8 @@
       case 'main-notify-user':
         if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
         // The user also finds it on 待我处理 when they come back.
-        if (!message.test && window.AttentionUI) window.AttentionUI.fromNotify(message.message);
+        // A 待办's failure alert is not one: that item is already filed from the 待办 itself.
+        if (!message.test && window.AttentionUI && !/^todo-failures-/.test(String(message.id || ''))) window.AttentionUI.fromNotify(message.message);
         return { done: true, visible: host.captainColumnVisible(caller.id),
           turnId: message.test ? message.id : host.terms.get(caller.id)?.captainTurnId || message.id };
       case 'main-discuss-receipt': {

@@ -5,7 +5,8 @@
 //          the 队长 turn it was said in; once the user has seen it (that turn's
 //          reply in the 队长 chat, or the item itself, on screen for a moment,
 //          desktop or phone) it is read and leaves the column (`markRead`).
-// Items come from 队长 only (`inbox need|report`, and every `notify-user`).
+// Items come from 队长 (`inbox need|report`, and every `notify-user`), and from
+// what 队长 writes back on a 待办 handed to AI with `@ai` (`syncTodos`).
 // A card that stops for the user (需要你, held after two failed rounds) is not
 // filed here by the program: 队长 hears about it on the receipt channel, judges
 // whether the user is really needed, and files one plain question with the
@@ -44,10 +45,11 @@
   const REPORT_LABEL = '结果汇报';
   const LIMITS = { title: 300, ask: 1000, detail: 8000, note: 500, reply: 4000, files: 20, path: 1024, project: 120, options: 6, option: 24, toCaptain: 8000 };
   const KEEP_DONE = 200;
+  const TODO_FILED_KEEP = 500;
   const ID = /^at-[a-z0-9-]{4,40}$/;
   const REF = /^[A-Za-z0-9_-]{1,160}$/;
   const DONE_BY = ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat'];
-  const SOURCES = ['captain', 'notify', 'card', 'automation'];
+  const SOURCES = ['captain', 'notify', 'card', 'automation', 'todo'];
 
   const isTime = (v) => Number.isSafeInteger(v) && v > 0;
   // One line: runs of whitespace (line breaks too) become one space.
@@ -105,6 +107,9 @@
       items.push(item);
     }
     const out = { version: VERSION, items };
+    // What syncTodos already filed, so an item pruned from 已完成 is never filed again.
+    const filed = Array.isArray(raw?.todoFiled) ? raw.todoFiled.filter((k) => typeof k === 'string' && k.length <= 400).slice(-TODO_FILED_KEEP) : [];
+    if (filed.length) out.todoFiled = filed;
     // A note waiting to reach 队长 (see migrate): kept until it is delivered.
     const toCaptain = typeof raw?.toCaptain === 'string' ? clip(block(raw.toCaptain), LIMITS.toCaptain) : '';
     if (toCaptain) out.toCaptain = toCaptain;
@@ -259,6 +264,57 @@
     }
     return changed;
   }
+  // ---- 待办 handed to AI ----------------------------------------------------
+  // A 待办 with `@ai` becomes a card for 队长 (todo-ai.js). What 队长 writes back
+  // (`todo status`) is filed here by the program, once per state and content:
+  //   needs_user → 要你处理 (等你回答): the user's reply goes to 队长 with the card;
+  //   failed     → 要你处理 (等你拍板): retry or leave it;
+  //   done       → 结果汇报 with the files.
+  // Only on the computer that handed the item to AI (`ai.ownerDevice`): the phone
+  // hub merges both computers' pages, and the other desktop shows the state on
+  // its 待办 page. A need is ticked once the AI state moves on (or the card is
+  // done, syncCards). `todos` is the merged 待办 list; null when it could not be read.
+  function todoKey(ai) {
+    // FNV-1a over what was written back: the same answer filed twice is one item.
+    let h = 0x811c9dc5;
+    for (const ch of [ai.status, line(ai.message), ...(Array.isArray(ai.files) ? ai.files : [])].join('\n')) h = Math.imul(h ^ ch.codePointAt(0), 16777619) >>> 0;
+    return `todo:${ai.taskId}:${ai.status}:${h.toString(36)}`;
+  }
+  const TODO_STATES = ['needs_user', 'failed', 'done'];
+  function syncTodos(store, todos, device, now) {
+    if (!Array.isArray(todos) || typeof device !== 'string' || !device) return 0;
+    const live = new Map();
+    for (const t of todos) {
+      const ai = t && !t.deleted && t.ai;
+      if (ai && typeof ai.taskId === 'string' && REF.test(ai.taskId) && ai.ownerDevice === device) live.set(ai.taskId, { t, ai });
+    }
+    let changed = 0;
+    // A question or a failure the AI has moved past is settled.
+    for (const item of store.items) {
+      if (item.done || item.source !== 'todo' || item.kind !== 'need' || !item.card) continue;
+      const cur = live.get(item.card);
+      if (cur && TODO_STATES.includes(cur.ai.status) && todoKey(cur.ai) === item.key) continue;
+      finish(item, 'card', cur ? 'AI 已接着办' : '这条待办已改动或删除', now);
+      changed++;
+    }
+    const filed = new Set(store.todoFiled || []);
+    for (const { t, ai } of live.values()) {
+      if (!TODO_STATES.includes(ai.status)) continue;
+      const key = todoKey(ai);
+      if (filed.has(key)) continue;
+      const what = clip(line(t.text), 80), message = clip(line(ai.message), LIMITS.ask - 20);
+      const input = ai.status === 'needs_user' ? { kind: 'need', type: 'question', title: 'AI 在等你：' + what, ask: message || '缺材料，回复里告诉 AI 在哪。' }
+        : ai.status === 'failed' ? { kind: 'need', type: 'decide', title: 'AI 没办成：' + what, ask: (message ? message + ' ' : '') + '要重试还是先放着？', options: ['重试', '先放着'] }
+          : { kind: 'report', title: 'AI 办完了：' + what, detail: block(ai.message), files: (Array.isArray(ai.files) ? ai.files : []).slice(0, LIMITS.files) };
+      try { add(store, { ...input, project: 'todo', card: ai.taskId, cardTitle: t.text, source: 'todo', key }, now); }
+      catch (_) { continue; /* never block the other items */ }
+      filed.add(key);
+      changed++;
+    }
+    if (changed) store.todoFiled = [...filed].slice(-TODO_FILED_KEEP);
+    return changed;
+  }
+
   // Version 1 filed every card that stopped for the user by itself, with the
   // card's last receipt as 要你做 (「XX 停下来等你回答」, 「验收卡住了」). Those go,
   // once: an open one nobody answered leaves the page and 队长 is told which
@@ -355,7 +411,7 @@
 
   // ---- what 队长 is told ---------------------------------------------------
   function refs(item) {
-    return [item.source === 'automation' && item.automation && '来自自动任务：' + item.automation, item.project && '项目：' + item.project, item.card && `卡片 ${item.card}${item.cardTitle ? '「' + item.cardTitle + '」' : ''}`,
+    return [item.source === 'automation' && item.automation && '来自自动任务：' + item.automation, item.source === 'todo' && '来自待办（@ai）', item.project && '项目：' + item.project, item.card && `卡片 ${item.card}${item.cardTitle ? '「' + item.cardTitle + '」' : ''}`,
       item.session && `会话 ${item.session}${item.sessionTitle ? '「' + item.sessionTitle + '」' : ''}`].filter(Boolean).join('，');
   }
   // The user's reply, with the item it answers, as one receipt for 队长.
@@ -430,5 +486,5 @@
   }
 
   return { VERSION, KINDS, TYPES, REPORT_LABEL, LIMITS, KEEP_DONE, ID, normalize, normalizeItem, newId, add, resolve, reopen, markRead, unseenByTurn, reply, markRepliesSeen, prune,
-    notifyItem, syncCards, migrate, syncSessions, label, sorted, counts, badgeTitle, view, doneText, when, refs, replyNotice, doneNotice, listText, addedText, phonePush, phoneItem, phoneView };
+    notifyItem, syncCards, syncTodos, todoKey, migrate, syncSessions, label, sorted, counts, badgeTitle, view, doneText, when, refs, replyNotice, doneNotice, listText, addedText, phonePush, phoneItem, phoneView };
 });

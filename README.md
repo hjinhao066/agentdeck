@@ -78,7 +78,7 @@ the middle:
 
 - **待办** (sidebar, under 搜索): your own one-line to-dos, kept apart from the
   agents' task cards. Type and press Enter; ⌘T (Ctrl+Shift+T on Windows) records one
-  from anywhere in the window. The phone hub has the same list. A literal `@ai` mention (Chinese/end/space/punctuation boundary, excluding email/handles) opts a Todo into a local task for the Captain; unread notices survive Captain recreation. Status/artifact write-back uses `board-cli todo`; only failures send coalesced ordinary expedited phone alerts, deferred during local 23:00–10:00 quiet hours. See [docs/todo.md](docs/todo.md).
+  from anywhere in the window. The phone hub has the same list. A literal `@ai` mention (Chinese/end/space/punctuation boundary, excluding email/handles) opts a Todo into a local task for the Captain; unread notices survive Captain recreation. Status/artifact write-back uses `board-cli todo`; the state shows under the item (desktop and phone) and the answer is filed on 待我处理 (waiting for you or failed → 要你处理, done with files → 做完了你还没看); only failures send coalesced ordinary expedited phone alerts, deferred during local 23:00–10:00 quiet hours. See [docs/todo.md](docs/todo.md).
 - **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 任务看板, 搜索, 待办, Schedule, Artifacts, Skills,
   then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.

@@ -5,6 +5,14 @@ const os = require('os');
 const path = require('path');
 const { taskId } = require('../../todo-ai');
 
+// AGENTDECK_TODO_AI_SHOTS=<dir> saves the 待办 row and 待我处理 screenshots.
+async function shot(page, name) {
+  const dir = process.env.AGENTDECK_TODO_AI_SHOTS;
+  if (!dir) return;
+  fs.mkdirSync(dir, { recursive: true });
+  await page.screenshot({ path: path.join(dir, name + '.png') });
+}
+
 // Background transparent/unfocusable windows, stand-in agents and private stores. Inherited
 // Captain/worker capabilities must never reach a test app or its CLI child.
 function isolatedEnv() {
@@ -51,8 +59,13 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     const items = () => page.evaluate(() => window.deck.todos('list').then((r) => r.items));
     const cards = () => page.evaluate(() => window.deck.taskBoard('list', { project: 'todo', archived: true }));
     const bark = () => application.evaluate(({ app }) => app.testCaptainAlerts.filter((e) => e.type === 'bark'));
+    // A long prompt (the Captain briefing) is typed as a pointer to a file in the profile: read that too.
+    const expand = (prompt) => {
+      const file = /完整内容已存成文件，请先完整读取再照做：(\S+?\.txt)/.exec(prompt)?.[1];
+      return file && fs.existsSync(file) ? prompt + '\n' + fs.readFileSync(file, 'utf8') : prompt;
+    };
     const captured = () => fs.existsSync(promptsFile)
-      ? fs.readFileSync(promptsFile, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : [];
+      ? fs.readFileSync(promptsFile, 'utf8').split('\n').filter(Boolean).map(JSON.parse).map(expand) : [];
     const cli = (args) => new Promise((resolve, reject) => {
       const credentials = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
       const child = spawn(process.execPath, [path.join(credentials.AGENTDECK_CONTROL_DIR, 'tools', 'agentdeck-board.js'), ...args], {
@@ -66,6 +79,9 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
       child.once('close', (code) => { children.delete(child); resolve({ code, stdout, stderr }); });
     });
     const status = (item, state, extra = []) => cli(['todo', 'status', '--id', item.id, '--task-id', item.ai.taskId, '--status', state, ...extra]);
+    // 待我处理 items filed from the 待办 (the page also checks on its own every 30 s and on every change).
+    const filed = () => page.evaluate(() => AttentionUI.refresh().then(() => config.attention.items.filter((i) => i.source === 'todo')
+      .map((i) => ({ kind: i.kind, type: i.type, title: i.title, ask: i.ask, options: i.options, files: i.files, done: i.done, card: i.card }))));
     const rawRequest = async (command, token) => {
       const credentials = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
       const id = 'todo-security-' + Date.now() + '-' + Math.random().toString(16).slice(2);
@@ -89,6 +105,10 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     expect(submitted.ai).toMatchObject({ status: 'queued', taskId: taskId(submitted), deliveredAt: null });
     expect((await items()).find((i) => i.text === '自己去取快递').ai).toBe(null);
     expect((await cards())[0]).toMatchObject({ id: submitted.ai.taskId, project: 'todo', status: 'todo', title: taskBody });
+    // The row says it went to AI; a plain 待办 says nothing.
+    await expect(page.locator('.todo-row', { hasText: original }).locator('.todo-ai-chip')).toHaveText('已交给 AI · 等队长接收');
+    await expect(page.locator('.todo-row', { hasText: '自己去取快递' }).locator('.todo-ai')).toHaveCount(0);
+    expect(await filed()).toEqual([]);
 
     // A request recorded before a Captain exists stays in its durable outbox.
     await page.locator('.nav-row[data-nav="captain"]').click();
@@ -116,7 +136,7 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     await page.locator('#mdCwd').fill(profile);
     await page.locator('#mdCreate').click();
     captainId = await page.evaluate(() => MainSession.mainCol().id);
-    await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
+    await expect.poll(() => fs.existsSync(controlFile), { timeout: 20000 }).toBe(true);
     await expect.poll(() => page.evaluate(() => MainSession.state().pending.length)).toBe(1);
     await expect.poll(() => captured().join('\n'), { timeout: 20000 }).toContain('run_in_background: true');
     await expect.poll(() => page.evaluate((id) => terms.get(id).sendingPrompt, captainId)).toBe(false);
@@ -157,6 +177,10 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     await page.waitForTimeout(2300); // The existing needs-user Bark observer coalesces for 2 s.
     expect(await bark()).toEqual([]);
     expect((await items()).find((i) => i.id === submitted.id).ai.status).toBe('needs_user');
+    // What 队长 wrote back is a question for the user on 待我处理, about this card.
+    await expect.poll(filed).toEqual([{ kind: 'need', type: 'question', title: 'AI 在等你：' + original, ask: '等你提供本机材料，不要上传',
+      options: [], files: [], done: false, card: submitted.ai.taskId }]);
+    await expect(page.locator('#attentionBtn .nav-row-badge')).toHaveText('1');
     const absent = await status(submitted, 'done', ['--files', path.join(profile, 'missing.epub')]);
     expect(absent.code).not.toBe(0);
     expect(absent.stderr).toContain('已经落盘');
@@ -166,6 +190,32 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     expect((await items()).find((i) => i.id === submitted.id).ai).toMatchObject({ status: 'done', files: [artifact] });
     expect((await cards())[0].status).toBe('done');
     expect(await bark()).toEqual([]);
+    // The question is settled; the result is a report with the file, unread.
+    await expect.poll(filed).toEqual([
+      { kind: 'need', type: 'question', title: 'AI 在等你：' + original, ask: '等你提供本机材料，不要上传', options: [], files: [], done: true, card: submitted.ai.taskId },
+      { kind: 'report', type: '', title: 'AI 办完了：' + original, ask: '', options: [], files: [artifact], done: false, card: submitted.ai.taskId },
+    ]);
+    await expect(page.locator('#attentionBtn .nav-row-badge')).toBeHidden();
+    await expect(page.locator('#attentionBtn .nav-row-dot')).toBeVisible();
+    // Under the 待办 itself: the state and the file, with icon tools.
+    await page.locator('#todoBtn').click();
+    const doneRow = page.locator('.todo-row', { hasText: original });
+    await expect(doneRow.locator('.todo-ai.is-done .todo-ai-chip')).toHaveText('AI 办完了');
+    await expect(doneRow.locator('.todo-ai-open')).toHaveText('public-book.epub');
+    await expect(doneRow.locator('.todo-ai-open')).toHaveAttribute('title', artifact);
+    const copyPath = doneRow.getByRole('button', { name: '复制路径' });
+    await expect(copyPath).toHaveAttribute('title', '复制路径');
+    await expect(doneRow.locator('.todo-ai-tool[aria-label^="在"][aria-label$="中显示"]')).toHaveCount(1);
+    await copyPath.click();
+    await expect(doneRow.getByRole('button', { name: '已复制' })).toHaveClass(/done/);
+    await expect(doneRow.getByRole('button', { name: '复制路径' })).toBeVisible(); // back to the copy icon
+    expect(await page.evaluate(() => window.deck.clipboardRead())).toBe(artifact); // a test profile's own clipboard
+    await expect(doneRow).not.toHaveClass(/is-done/); // AI finishing never ticks the user's own 待办
+    await shot(page, 'desktop-todo-ai-done');
+    await page.locator('#attentionBtn').click();
+    const report = page.locator('.at-item', { hasText: 'AI 办完了' });
+    await expect(report.locator('.at-from')).toHaveText('来自待办');
+    await shot(page, 'desktop-attention-ai-done');
 
     // Editing the original creates a fresh version; late old results are refused.
     await page.locator('#todoBtn').click();
@@ -190,9 +240,27 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     expect(await bark()).toHaveLength(1);
     expect((await items()).find((i) => i.id === submitted.id).ai.status).toBe('failed');
     expect((await cards()).find((c) => c.id === next.ai.taskId)).toMatchObject({ status: 'needs_user', flag: 'failed' });
+    // The failure is one decision with quick answers, not a second generic alert item.
+    // (The report above may already count as read: it was on screen.)
+    await expect.poll(async () => (await filed()).filter((i) => i.kind === 'need' && !i.done)).toEqual([
+      { kind: 'need', type: 'decide', title: 'AI 没办成：' + edited, ask: '测试异常：没有找到资料 要重试还是先放着？', options: ['重试', '先放着'], files: [], done: false, card: next.ai.taskId },
+    ]);
+    expect(await page.evaluate(() => config.attention.items.filter((i) => /没办成或出错/.test(i.title)).length)).toBe(0);
+    await page.locator('#attentionBtn').click();
+    const failed = page.locator('.at-item', { hasText: 'AI 没办成' });
+    await expect(failed.locator('.at-quick button')).toHaveText(['重试', '先放着']);
+    await shot(page, 'desktop-attention-ai-failed');
+    await page.locator('#todoBtn').click();
+    await expect(page.locator('.todo-row', { hasText: edited }).locator('.todo-ai.is-failed')).toContainText('AI 没办成测试异常：没有找到资料');
+    await page.locator('#attentionBtn').click();
+    // One tap answers: it reaches 队长 with the card, and the decision is ticked.
+    await failed.locator('.at-quick button', { hasText: '重试' }).click();
+    await expect.poll(async () => (await filed()).find((i) => i.kind === 'need' && i.card === next.ai.taskId).done).toBe(true);
     await expect.poll(async () => (await items()).find((i) => i.id === submitted.id).ai.deliveredAt).not.toBeNull();
     const received = await cli(['receipts']);
     expect(received.stdout).toContain(edited);
+    expect(received.stdout).toContain('用户的回复：重试');
+    expect(received.stdout).toContain(next.ai.taskId);
     await page.reload();
     await expect.poll(() => page.evaluate(() => !!window.MainSession?.state())).toBe(true);
     expect(await cards()).toHaveLength(2);
@@ -234,6 +302,6 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
       await Promise.race([application.close(), new Promise((resolve) => setTimeout(resolve, 3000))]);
       if (proc.exitCode === null) try { process.kill(proc.pid, 'SIGKILL'); } catch (_) {}
     }
-    fs.rmSync(profile, { recursive: true, force: true });
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); // the app may still be writing as it quits
   }
 });

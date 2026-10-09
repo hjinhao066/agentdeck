@@ -3851,6 +3851,19 @@ button.todo-done-toggle:hover { background: var(--icon-hover-bg); color: var(--t
 .todo-main { flex: 1; min-width: 0; padding: 5px 0; }
 .todo-text { display: block; color: var(--text); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; cursor: text; transition: color .2s ease; }
 .todo-row.is-done .todo-text { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 70%, transparent); }
+.todo-ai { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 4px; font-size: 12.5px; line-height: 1.5; color: var(--text-2); }
+.todo-ai-chip { flex: 0 0 auto; padding: 0 7px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--pill-bg); color: var(--muted); }
+.todo-ai.is-working .todo-ai-chip { background: color-mix(in srgb, var(--st-working) 16%, transparent); color: var(--st-working); }
+.todo-ai.is-needs_user .todo-ai-chip, .todo-ai.is-failed .todo-ai-chip { background: color-mix(in srgb, var(--st-input) 14%, transparent); color: var(--st-input); }
+.todo-ai.is-done .todo-ai-chip { background: color-mix(in srgb, var(--st-done) 16%, transparent); color: var(--st-done); }
+.todo-ai-msg { min-width: 0; overflow-wrap: anywhere; }
+.todo-ai-files { flex-basis: 100%; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.todo-ai-file { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.todo-ai-open { border: none; background: transparent; cursor: pointer; font: inherit; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 6px; border-radius: 6px; color: var(--accent); font-size: 12.5px; text-align: left; }
+.todo-ai-open:hover { background: var(--icon-hover-bg); text-decoration: underline; }
+.todo-ai-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.todo-ibtn.todo-ai-tool { width: 28px; height: 28px; }
+.todo-ibtn.todo-ai-tool.done { color: var(--st-done); }
 .todo-when { flex: 0 0 auto; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* The tools sit over the time on hover or keyboard focus, so a quiet row has no empty strip. */
 .todo-actions {

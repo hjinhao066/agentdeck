@@ -466,6 +466,15 @@
   // both: the copy updated last wins, and a deletion mark hides the item.
   const TODO_ID = /^td-[A-Za-z0-9-]{8,64}$/;
   const time = (value) => typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value));
+  // A 待办 handed to AI (@ai): its state, what 队长 said and the names of the files it handed back.
+  const TODO_AI = ['queued', 'working', 'needs_user', 'done', 'failed'];
+  function cleanTodoAi(ai) {
+    if (!ai || typeof ai !== 'object' || !TODO_AI.includes(ai.status)) return null;
+    return { status: ai.status, delivered: time(ai.deliveredAt),
+      message: typeof ai.message === 'string' ? ai.message.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500) : '',
+      files: ai.status !== 'done' || !Array.isArray(ai.files) ? [] : ai.files.filter((f) => typeof f === 'string').slice(0, 10)
+        .map((f) => (f.split(/[\\/]/).filter(Boolean).pop() || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200)).filter(Boolean) };
+  }
   function cleanTodos(body) {
     const items = body && Array.isArray(body.items) ? body.items : [];
     const out = [];
@@ -474,7 +483,7 @@
       if (item.deleted === true) { out.push({ id: item.id, deleted: true, updated: item.updated }); continue; }
       if (typeof item.text !== 'string' || !item.text.trim()) continue;
       out.push({ id: item.id, text: item.text.slice(0, 500), done: item.done === true, doneAt: item.done === true && time(item.doneAt) ? item.doneAt : null,
-        created: time(item.created) ? item.created : item.updated, updated: item.updated });
+        created: time(item.created) ? item.created : item.updated, updated: item.updated, ...(cleanTodoAi(item.ai) ? { ai: cleanTodoAi(item.ai) } : {}) });
     }
     return out;
   }
@@ -542,7 +551,7 @@
         options: item.kind === 'need' ? [...new Set((Array.isArray(item.options) ? item.options : []).map((o) => line(o, 24)).filter(Boolean))].slice(0, 6) : [],
         files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
         project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
-        source: item.source === 'card' ? 'card' : item.source === 'automation' ? 'automation' : 'captain', automation: item.source === 'automation' ? line(item.automation, 40) : '', turn: item.kind === 'report' && typeof item.turn === 'string' && TURN.test(item.turn) ? item.turn : '',
+        source: item.source === 'card' ? 'card' : item.source === 'automation' ? 'automation' : item.source === 'todo' ? 'todo' : 'captain', automation: item.source === 'automation' ? line(item.automation, 40) : '', turn: item.kind === 'report' && typeof item.turn === 'string' && TURN.test(item.turn) ? item.turn : '',
         created: time(item.created), readAt: time(item.readAt),
         done: item.done === true, doneAt: item.done === true ? time(item.doneAt) : 0, doneText: item.done === true ? line(item.doneText, 200) : '',
         doneBy: item.done === true && DONE_BY.includes(item.doneBy) ? item.doneBy : '',

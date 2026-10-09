@@ -199,7 +199,8 @@ class TodoStore {
         // newer stamp and cover that edit. A deleted copy here stays deleted,
         // and fields the phone never sees are kept.
         current = { ...current, text: seen.text, done: seen.done, doneAt: seen.doneAt, updated: seen.updated };
-        if (seen.text !== byId.get(id).text) Object.assign(current, { ai: null, awaitingOrigin: true, originUpdated: seen.updated });
+        // Text written on the other computer is that computer's to hand to AI.
+        if (seen.text !== byId.get(id).text) Object.assign(current, { awaitingOrigin: true, originUpdated: seen.updated });
       }
       if (!current) throw new Error('这条待办已经不在了，刷新一下。');
       const next = { ...current, updated: this.stamp(current.updated), device: this.deviceId };
