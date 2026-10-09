@@ -1052,7 +1052,7 @@ node scripts/e2e-queue.js --queue-status                                  # 看�
 
 - 入口是 `scripts/e2e-queue.js`（逻辑在 `scripts/e2e-queue-core.js`）。全机（所有会话、所有 `~/agentdeck-worktrees/*` 副本）同一时间只放 **1 组**（一次 `npm run e2e` 调用算一组），其余打印 `排队中，前面还有 X 组（正在跑 R 组，排在前面 Q 组，并发上限 N）` 并按先来后到等。轮到时打印 `轮到了（等了 N 秒）`。
 - 锁目录在 `/tmp/agentdeck-e2e-queue/`（Windows 是系统临时目录下同名目录）：`slots/<n>/owner.json` 是正在跑的组，`queue/` 是排队票。**不需要手动清理**：持锁进程（包括它启动的 Electron）都不在了，下一个排队者会自动回收并打印 `回收失效的锁`；进程号被别的程序复用也认得出（对比进程启动时间）。
-- 超时：排队最多等 120 分钟（退出码 75），单组最多跑 45 分钟（超时杀掉整棵进程树并释放锁，退出码 124）。可调：`--queue-wait-timeout 分钟`、`--queue-run-timeout 分钟`、`--queue-slots N`（并发上限，默认 1），或环境变量 `AGENTDECK_E2E_WAIT_MINUTES`、`AGENTDECK_E2E_RUN_MINUTES`、`AGENTDECK_E2E_SLOTS`。机器空闲时可以 `AGENTDECK_E2E_SLOTS=2` 放宽；`--queue-` 开头的参数由入口吃掉，其余原样交给 Playwright。
+- 超时：排队最多等 120 分钟（退出码 75），单组最多跑 45 分钟（超时先发终止信号，宽限 10 秒后强杀，包括不听 SIGTERM 的后代和已脱离进程组的后代；**整棵进程树都退出后才释放锁**，退出码 124）。正常跑完时也会清掉遗留的辅助进程再放行下一组。可调：`--queue-wait-timeout 分钟`、`--queue-run-timeout 分钟`、`--queue-slots N`（并发上限，默认 1），或环境变量 `AGENTDECK_E2E_WAIT_MINUTES`、`AGENTDECK_E2E_RUN_MINUTES`、`AGENTDECK_E2E_SLOTS`。机器空闲时可以 `AGENTDECK_E2E_SLOTS=2` 放宽；`--queue-` 开头的参数由入口吃掉，其余原样交给 Playwright。
 - 也可以包一条任意命令：`node scripts/e2e-queue.js -- <命令 参数…>`。已经在排队入口里面的命令（如 `release.js` 跑冒烟）不会再等自己。
 - `release.js` 的冒烟走 `npm run test:smoke`，所以自动排队；`/tmp/agentdeck-test.lock` 仍只管单测和发版。
 

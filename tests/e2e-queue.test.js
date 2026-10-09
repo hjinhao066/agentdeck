@@ -192,8 +192,10 @@ test('cli: a holder killed with SIGKILL is reclaimed; nothing deadlocks', async 
   // The wrapper dies, but its test process still runs: the slot must stay taken.
   a.child.kill('SIGKILL');
   await new Promise((r) => setTimeout(r, 300));
-  assert.doesNotMatch(b.out(), /轮到了/);
-  process.kill(childPid, 'SIGKILL');
+  // (On Windows the child is in a kill-on-close job object and dies with its wrapper, so
+  // there the slot is rightly free at once.)
+  if (process.platform !== 'win32') assert.doesNotMatch(b.out(), /轮到了/);
+  try { process.kill(childPid, 'SIGKILL'); } catch {}
   const result = await b.done;
   assert.equal(result.code, 0);
   assert.match(result.out(), /回收失效的锁/);
@@ -209,7 +211,7 @@ test('cli: waiting too long exits 75; running too long is killed (124) and frees
   assert.match(waited.out(), /排队超时/);
   const killed = await slow.done;
   assert.equal(killed.code, 124);
-  assert.match(killed.out(), /强制结束并释放锁/);
+  assert.match(killed.out(), /强制结束整棵进程树/);
   assert.deepEqual(fs.readdirSync(path.join(dir, 'slots')), []);
   assert.equal((await cli(dir, ['--', process.execPath, '-e', '0']).done).code, 0);
 });
@@ -231,4 +233,58 @@ test('cli: --queue-status lists who is running and who is waiting', async (t) =>
   const result = await status.done;
   assert.match(result.out(), /正在跑 1 组，排队 0 组/);
   await a.done;
+});
+
+// ---- the slot is released only after the whole process tree is gone ----
+const GRACE = { AGENTDECK_E2E_KILL_GRACE_MS: '300' };
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+// A parent that starts a stubborn descendant (ignores SIGTERM) and records its pid.
+function stubbornTree(dir, { detached = false, parentExits = false } = {}) {
+  const pidFile = path.join(dir, 'descendant.pid');
+  const stubborn = path.join(dir, 'stubborn.js');
+  const parent = path.join(dir, 'parent.js');
+  fs.writeFileSync(stubborn, `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`);
+  fs.writeFileSync(parent, `const c = require('child_process').spawn(process.execPath, [${JSON.stringify(stubborn)}], { stdio: 'ignore', detached: ${detached} });
+require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(c.pid));
+${parentExits ? 'c.unref();' : 'setInterval(() => {}, 1000);'}`);
+  return { parent, descendantPid: () => Number(fs.readFileSync(pidFile, 'utf8')), pidFile };
+}
+
+test('cli: a run that times out frees the slot only after a SIGTERM-ignoring descendant is gone', async (t) => {
+  const dir = tempDir(t);
+  const tree = stubbornTree(dir);
+  const run = cli(dir, ['--queue-run-timeout', '0.03', '--', process.execPath, tree.parent], GRACE);
+  const result = await run.done;
+  assert.equal(result.code, 124);
+  assert.equal(alive(tree.descendantPid()), false, 'descendant survived the timeout');
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'slots')), []);
+  if (process.platform !== 'win32') assert.match(result.out(), /清理残留的子进程/);
+});
+
+test('cli: the next group does not start while the previous group still has a process', { skip: process.platform === 'win32' }, async (t) => {
+  const dir = tempDir(t);
+  const tree = stubbornTree(dir);
+  const first = cli(dir, ['--queue-run-timeout', '0.03', '--', process.execPath, tree.parent], { AGENTDECK_E2E_KILL_GRACE_MS: '1500' });
+  await waitFor(() => fs.existsSync(tree.pidFile));
+  const second = cli(dir, ['--', process.execPath, '-e', `process.stdout.write('SECOND-SAW-' + (${alive.toString()})(${'${PID}'}))`.replace('${PID}', String(tree.descendantPid()))]);
+  await first.done;
+  const result = await second.done;
+  assert.match(result.out(), /SECOND-SAW-false/);
+});
+
+test('cli: a finished run does not leave helpers behind', { skip: process.platform === 'win32' }, async (t) => {
+  const dir = tempDir(t);
+  const tree = stubbornTree(dir, { parentExits: true });
+  const result = await cli(dir, ['--', process.execPath, tree.parent], GRACE).done;
+  assert.equal(result.code, 0);
+  assert.equal(alive(tree.descendantPid()), false, 'helper survived the run');
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'slots')), []);
+});
+
+test('cli: a descendant that left the process group is also ended on timeout', { skip: process.platform === 'win32' }, async (t) => {
+  const dir = tempDir(t);
+  const tree = stubbornTree(dir, { detached: true });
+  const result = await cli(dir, ['--queue-run-timeout', '0.03', '--', process.execPath, tree.parent], GRACE).done;
+  assert.equal(result.code, 124);
+  assert.equal(alive(tree.descendantPid()), false, 'escaped descendant survived the timeout');
 });

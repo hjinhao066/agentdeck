@@ -46,13 +46,48 @@ function playwrightCommand(args) {
   return [process.execPath, cli, 'test', ...args];
 }
 
-function killTree(child, signal) {
-  if (!child.pid) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  else { try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch {} } }
+const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+const groupAlive = (pgid) => { try { process.kill(-pgid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// pid and every process below it, read from the process table before its parents die and
+// the children are re-parented (a child that left the process group is still found).
+function descendants(root) {
+  if (process.platform === 'win32') return [];
+  const result = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' });
+  const kids = new Map();
+  for (const line of (result.stdout || '').split('\n')) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+    if (pid && ppid) kids.set(ppid, [...(kids.get(ppid) || []), pid]);
+  }
+  const found = [];
+  const walk = (pid) => { for (const kid of kids.get(pid) || []) { found.push(kid); walk(kid); } };
+  walk(root);
+  return found;
 }
 
-function runChild(command, lease, runMs) {
+function signalTree(child, extra, signal) {
+  if (!child.pid) return;
+  if (process.platform === 'win32') { spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); return; }
+  try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch {} }
+  for (const pid of extra) { try { process.kill(pid, signal); } catch {} }
+}
+
+// The slot may only be released once nothing of the run is left: a child that ignores
+// SIGTERM, or stray helpers of a finished run, would otherwise overlap the next group.
+async function reap(child, extra, graceMs) {
+  if (process.platform === 'win32' || !child.pid) return;
+  const anyLeft = () => groupAlive(child.pid) || extra.some(isAlive);
+  const waitGone = async (ms) => { for (let waited = 0; anyLeft() && waited < ms; waited += 100) await pause(100); return !anyLeft(); };
+  if (!anyLeft()) return;
+  say('清理残留的子进程');
+  signalTree(child, extra, 'SIGTERM');
+  if (await waitGone(graceMs)) return;
+  signalTree(child, extra, 'SIGKILL');
+  if (!(await waitGone(30000))) say('警告：仍有进程没能结束，不再等待');
+}
+
+function runChild(command, lease, runMs, graceMs = 10000) {
   return new Promise((resolve) => {
     const child = spawn(command[0], command.slice(1), {
       cwd: process.cwd(), stdio: 'inherit', detached: process.platform !== 'win32',
@@ -60,17 +95,25 @@ function runChild(command, lease, runMs) {
     });
     lease.setChild(child.pid);
     let timedOut = false;
+    let extra = [];
+    let killer;
+    const stop = (signal) => {
+      extra = [...new Set([...extra, ...descendants(child.pid)])];
+      signalTree(child, extra, signal);
+      // A child that ignores the polite signal gets the hard one after the grace period.
+      clearTimeout(killer);
+      killer = setTimeout(() => signalTree(child, extra, 'SIGKILL'), graceMs);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      say(`运行超过 ${Math.round(runMs / 60000)} 分钟，强制结束并释放锁`);
-      killTree(child, 'SIGTERM');
-      setTimeout(() => killTree(child, 'SIGKILL'), 10000).unref();
+      say(`运行超过 ${Math.round(runMs / 60000 * 100) / 100} 分钟，强制结束整棵进程树，全部退出后才释放锁`);
+      stop('SIGTERM');
     }, runMs);
-    const forward = (signal) => () => { killTree(child, signal); };
-    const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => [signal, forward(signal)]);
+    const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => [signal, () => stop(signal === 'SIGINT' ? 'SIGINT' : 'SIGTERM')]);
     for (const [signal, handler] of handlers) process.on(signal, handler);
-    const finish = (code) => {
-      clearTimeout(timer);
+    const finish = async (code) => {
+      clearTimeout(timer); clearTimeout(killer);
+      await reap(child, extra, graceMs);
       for (const [signal, handler] of handlers) process.removeListener(signal, handler);
       resolve(timedOut ? 124 : code);
     };
@@ -92,7 +135,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   const command = options.command || playwrightCommand(options.passthrough);
   if (env.AGENTDECK_E2E_QUEUE_HELD === '1') {
     // Already inside a queued run (e.g. release.js -> npm run test:smoke): do not wait for ourselves.
-    return runChild(command, { setChild() {} }, options.runMinutes * 60000);
+    return runChild(command, { setChild() {} }, options.runMinutes * 60000, Number(env.AGENTDECK_E2E_KILL_GRACE_MS) || 10000);
   }
   let lease;
   const abort = (signal) => () => { process.exit(signal === 'SIGINT' ? 130 : 143); };
@@ -107,7 +150,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     for (const [signal, handler] of early) process.removeListener(signal, handler);
   }
   say(`轮到了（等了 ${Math.round(lease.waitedMs / 1000)} 秒），开始跑：${command.slice(1).map((a) => path.basename(a) === 'cli.js' ? 'playwright' : a).join(' ')}`);
-  try { return await runChild(command, lease, options.runMinutes * 60000); }
+  try { return await runChild(command, lease, options.runMinutes * 60000, Number(env.AGENTDECK_E2E_KILL_GRACE_MS) || 10000); }
   finally { lease.release(); }
 }
 
