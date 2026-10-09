@@ -2634,12 +2634,19 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
    is working is brighter, sits in a soft glow of its colour and carries a short light that travels
    it; a finished line is thinner, dimmer and still. */
 .cm-edges .cm-edge, .cm-halo, .cm-pulse, .cm-bus, .cm-hl-path { fill: none; stroke-linejoin: round; stroke-linecap: round; }
-.cm-edge.dispatch { stroke: hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)); stroke-width: 1.5; opacity: 0.5; }
-.cm-edge.dispatch.st-working { stroke-width: 2; opacity: 0.95; }
-.cm-edge.dispatch.st-input { stroke: var(--cm-need); stroke-width: 1.8; opacity: 0.9; }
-.cm-edge.dispatch.st-queued { stroke: var(--cm-wait); stroke-width: 1.3; stroke-dasharray: 2 6; opacity: 0.7; }
-.cm-edge.dispatch:is(.st-done, .st-stopped, .st-idle) { stroke-width: 1.2; opacity: 0.38; }
-.cm-edge.dispatch.st-failed { stroke: var(--cm-fail); stroke-width: 1.4; opacity: 0.55; }
+.cm-edge:is(.dispatch, .squad) { stroke: hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)); stroke-width: 1.5; opacity: 0.5; }
+.cm-edge:is(.dispatch, .squad).st-working { stroke-width: 2; opacity: 0.95; }
+.cm-edge:is(.dispatch, .squad).st-input { stroke: var(--cm-need); stroke-width: 1.8; opacity: 0.9; }
+.cm-edge:is(.dispatch, .squad).st-queued { stroke: var(--cm-wait); stroke-width: 1.3; stroke-dasharray: 2 6; opacity: 0.7; }
+.cm-edge:is(.dispatch, .squad):is(.st-done, .st-stopped, .st-idle) { stroke-width: 1.2; opacity: 0.38; }
+.cm-edge:is(.dispatch, .squad).st-failed { stroke: var(--cm-fail); stroke-width: 1.4; opacity: 0.55; }
+/* 小队长: its crew stands on a pocket under it, one step in from its edge, its line down that step.
+   The pocket starts halfway down the 小队长's card, so the card and the pocket read as one piece. */
+.cm-pocket {
+  fill: color-mix(in srgb, hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)) var(--cm-pocket-tint, 7%), var(--cm-zone));
+  stroke: color-mix(in srgb, hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)) var(--cm-pocket-edge, 30%), var(--cm-zone-rim)); stroke-width: 1;
+}
+:root[data-theme="light"] .cm-pocket { --cm-pocket-tint: 6%; --cm-pocket-edge: 34%; }
 .cm-halos { opacity: var(--cm-halo-a); }
 .cm-halo { stroke: hsl(var(--project-hue) 90% 70%); stroke-width: 8; }
 .cm-halo.core { stroke: var(--cm-wire-hi); stroke-width: 10; }
@@ -2689,8 +2696,8 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-edges.cm-hovering .cm-edge:not(.hl), .cm-edges.cm-hovering .cm-bus, .cm-edges.cm-hovering .cm-socket, .cm-edges.cm-hovering .cm-chevron { opacity: 0.14; }
 .cm-edges.cm-hovering .cm-halos, .cm-edges.cm-hovering .cm-pulses { opacity: 0.1; }
 .cm-hl-path { stroke: var(--cm-wire-hi); stroke-width: 2.6; }
-.cm-hl-path.dispatch { stroke: hsl(var(--project-hue) 95% 76%); }
-:root[data-theme="light"] .cm-hl-path.dispatch { stroke: hsl(var(--project-hue) 85% 38%); }
+.cm-hl-path:is(.dispatch, .squad) { stroke: hsl(var(--project-hue) 95% 76%); }
+:root[data-theme="light"] .cm-hl-path:is(.dispatch, .squad) { stroke: hsl(var(--project-hue) 85% 38%); }
 .cm-hl-path.review { stroke: var(--cm-review); stroke-dasharray: 5 6; }
 .cm-hl-path.return { stroke: var(--cm-back); }
 :root[data-theme="light"] .cm-hl-path { stroke-width: 2.8; }
@@ -2803,6 +2810,15 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 /* 高优先级: a solid flag chip leading the card's title, in a blue no status uses. The card keeps its status colours. */
 .cm-prio { display: inline-flex; align-items: center; gap: 3px; height: 18px; margin-right: 7px; padding: 0 7px 0 5px; border-radius: 6px; background: var(--prio); color: var(--prio-ink); font-size: 11px; font-weight: 700; line-height: 18px; white-space: nowrap; vertical-align: 2px; }
 .cm-prio svg { flex: 0 0 auto; }
+/* 小队长: the same chip in its project's colour, a small crest like 队长's */
+.cm-lead {
+  display: inline-flex; align-items: center; gap: 3px; height: 18px; margin-right: 7px; padding: 0 7px 0 5px; border-radius: 6px;
+  font-size: 11px; font-weight: 700; line-height: 18px; white-space: nowrap; vertical-align: 2px; color: var(--cm-text);
+  background: color-mix(in srgb, hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)) 15%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)) 42%, transparent);
+}
+.cm-lead svg { flex: 0 0 auto; color: hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)); }
+.cm-node:is(.st-done, .st-stopped, .st-idle) .cm-lead { color: var(--cm-text-2); }
 /* On a card the status is always whole: it takes the width its words need and the model badge beside it gives way. */
 .cm-top > .cm-status { flex: 0 0 auto; }
 .st-working > .cm-top .cm-status { color: var(--cm-work); }

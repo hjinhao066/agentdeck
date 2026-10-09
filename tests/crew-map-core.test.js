@@ -1036,3 +1036,117 @@ test('a web request waiting its turn is 排队 even though its terminal reads wo
   assert.equal(C.nodeStatus({ ...queued, webPhase: 'running' }, { alive: true, state: 'working' }).status, 'working');
   assert.equal(C.nodeStatus({ ...queued, status: 'done' }, { alive: true, state: 'done' }).status, 'done');
 });
+
+// ---- 小队长分层: a session that handed work on (create-child) leads its crew, which stands under it ----
+// The records create-child leaves: the child's parentTaskId is its 小队长's taskId; the child has no
+// 队长 task card and no project of its own; what it hands back stays on it (taskCompleted, result).
+const squadInput = (extra = {}) => ({
+  captain,
+  columns: [
+    col('lead', '2.0.1 发版小队长', { project: 'agentdeck', taskId: 'T-lead', state: 'working' }),
+    col('w1', '侧栏额度深色修正', { project: 'agentdeck', taskId: 'T-w1', state: 'working' }),
+    col('k1', '打包 macOS', { captainCrew: false, taskId: 'T-k1', parentTaskId: 'T-lead', state: 'working' }),
+    col('g1', '签名公证', { captainCrew: false, taskId: 'T-g1', parentTaskId: 'T-k1', state: 'working' }),
+    col('k2', '打包 Windows', { captainCrew: false, taskId: 'T-k2', parentTaskId: 'T-lead', state: 'done', taskCompleted: true, result: 'Windows 安装包已签名，SHA 写进 release-notes。' }),
+    col('k3', '写更新说明', { captainCrew: false, taskId: 'T-k3', parentTaskId: 'T-lead', state: 'input' }),
+    // a hand-opened session's own helper: its parent is not on the map, so neither is it
+    col('m0', '自己开的会话', { captainCrew: false, taskId: 'T-m0' }),
+    col('m1', '它的帮手', { captainCrew: false, taskId: 'T-m1', parentTaskId: 'T-m0' }),
+  ],
+  tasks: [task('t-lead', 'lead', 'working', 10, { project: 'agentdeck' }), task('t-w1', 'w1', 'working', 20, { project: 'agentdeck' })],
+  ...extra,
+});
+
+test('小队长分层: a 小队长\'s crew is on the map under it, in its project, however deep; 队长\'s lines go to the 小队长, the 小队长\'s to its crew', () => {
+  const map = C.buildCrewMap(squadInput());
+  const node = (id) => map.nodes.find((n) => n.id === id);
+  assert.deepEqual(map.nodes.map((n) => n.id).sort(), ['g1', 'k1', 'k2', 'k3', 'lead', 'w1']);
+  // no card from 队长, no project of their own: they stand in their 小队长's
+  assert.deepEqual(['k1', 'k2', 'k3', 'g1'].map((id) => node(id).project), ['agentdeck', 'agentdeck', 'agentdeck', 'agentdeck']);
+  assert.deepEqual(map.projects.map((p) => p.key), ['agentdeck']);
+  assert.deepEqual(['lead', 'w1', 'k1', 'g1', 'k2'].map((id) => [node(id).parent, node(id).depth]), [['', 0], ['', 0], ['lead', 1], ['k1', 2], ['lead', 1]]);
+  assert.deepEqual(['lead', 'k1', 'w1', 'g1'].map((id) => [node(id).leader, node(id).crew]), [[true, 3], [true, 1], [false, 0], [false, 0]]);
+  // 队长 → the 小队长 and the other session it sent; the 小队长 → its crew; a crew member's crew from it
+  const of = (type) => map.edges.filter((e) => e.type === type).map((e) => `${e.from}>${e.to}`).sort();
+  assert.deepEqual(of('dispatch'), ['cap>lead', 'cap>w1']);
+  assert.deepEqual(of('squad'), ['k1>g1', 'lead>k1', 'lead>k2', 'lead>k3']);
+  // what a crew member hands back goes to its 小队长: no line back to 队长 from it
+  assert.equal(node('k2').status, 'done');
+  assert.equal(node('k2').line, 'Windows 安装包已签名，SHA 写进 release-notes。');
+  assert.equal(node('k2').returned, 'ok');
+  assert.deepEqual(of('return'), []);
+  assert.equal(node('k3').status, 'input');
+  // 队长's tally counts the whole crew, 小队长s' crews too
+  assert.deepEqual(map.counts, { working: 4, done: 1, input: 1 });
+  // a session flagged 小队长 that has no crew yet is still one
+  const flagged = C.buildCrewMap({ captain, columns: [col('s', '秋招小队长', { project: '秋招', taskId: 'T-s', subCaptain: true, state: 'working' })], tasks: [] });
+  assert.deepEqual([flagged.nodes[0].leader, flagged.nodes[0].crew], [true, 0]);
+});
+
+test('小队长分层: a crew whose 小队长 is archived out of sight stands on its own under 队长; a loop in the records is cut', () => {
+  const map = C.buildCrewMap({
+    captain,
+    columns: [col('k1', '打包 macOS', { captainCrew: false, taskId: 'T-k1', parentTaskId: 'T-lead', state: 'working' })],
+    archived: [{ id: 'lead', title: '发版小队长', provider: 'Claude', model: 'Opus 5.5', captainCrew: true, project: 'agentdeck', taskId: 'T-lead', archivedAt: 5, lastReceipt: { summary: '交接给队长', explicit: true } }],
+    tasks: [],
+  });
+  assert.deepEqual(map.nodes.map((n) => [n.id, n.parent, n.depth, n.project]), [['k1', '', 0, 'agentdeck']]);
+  assert.deepEqual(map.edges.filter((e) => e.type === 'dispatch').map((e) => e.to), ['k1']);
+  // shown with the archive, it is back under its 小队长
+  const all = C.buildCrewMap({ ...squadInput(), showArchived: true, columns: [col('k1', '打包 macOS', { captainCrew: false, taskId: 'T-k1', parentTaskId: 'T-lead', state: 'working' })],
+    archived: [{ id: 'lead', title: '发版小队长', captainCrew: true, project: 'agentdeck', taskId: 'T-lead', archivedAt: 5 }], tasks: [] });
+  assert.equal(all.nodes.find((n) => n.id === 'k1').parent, 'lead');
+  // two records naming each other: neither hangs under the other forever
+  const loop = C.buildCrewMap({ captain, tasks: [], columns: [
+    col('a', 'A', { project: 'p', taskId: 'T-a', parentTaskId: 'T-b', state: 'working' }), col('b', 'B', { project: 'p', taskId: 'T-b', parentTaskId: 'T-a', state: 'working' })] });
+  assert.equal(loop.nodes.filter((n) => !n.parent).length, 1);
+  assert.ok(C.layout(loop, { ...ROOM, caps: { p: 2 } }).nodes.size === 2);
+});
+
+test('小队长分层 layout: the 小队长 heads its column, its crew a step in under it (theirs a step more), the rest beside; a pocket under each 小队长, a line down its step to each of its crew', () => {
+  const map = C.buildCrewMap(squadInput());
+  const opts = { ...ROOM, rails: true, railX: 8, entryTop: 20, headH: 68 };
+  const lay = C.layout(map, { ...opts, caps: { agentdeck: 2 } });
+  const b = (id) => lay.nodes.get(id);
+  const step = ROOM.nodeH + ROOM.rowGap;
+  // the 小队长's block fills column one, depth first: 小队长, 打包 macOS, its 签名公证, 打包 Windows, 写更新说明
+  assert.deepEqual(['lead', 'k1', 'g1', 'k2', 'k3'].map((id) => (b(id).y - b('lead').y) / step), [0, 1, 2, 3, 4]);
+  assert.deepEqual(['lead', 'k1', 'g1', 'k2', 'k3'].map((id) => b(id).x - b('lead').x), [0, 24, 48, 24, 24]);
+  assert.deepEqual(['lead', 'k1', 'g1'].map((id) => b(id).w), [ROOM.nodeW, ROOM.nodeW - 32, ROOM.nodeW - 64]);
+  // the other session stands in the next column, level with the 小队长
+  assert.equal(b('w1').y, b('lead').y);
+  assert.equal(b('w1').x, b('lead').x + ROOM.nodeW + ROOM.gapX);
+  const g = lay.groups[0];
+  assert.equal(g.h, opts.headH + 4 * step + ROOM.nodeH + ROOM.padBottom, 'five rows: the 小队长 and its four');
+  // pockets: the 小队长's from halfway down its card to under its last one, and 打包 macOS's inside it
+  assert.deepEqual(C.pockets(lay).map((p) => [p.id, p.depth, p.x, p.y, p.w, p.h]), [
+    ['lead', 0, b('lead').x, b('lead').y + ROOM.nodeH / 2, ROOM.nodeW, b('k3').y + ROOM.nodeH + 6 - (b('lead').y + ROOM.nodeH / 2)],
+    ['k1', 1, b('k1').x, b('k1').y + ROOM.nodeH / 2, b('k1').w, b('g1').y + ROOM.nodeH + 6 - (b('k1').y + ROOM.nodeH / 2)],
+  ]);
+  const routes = C.routes(map, lay, opts);
+  const squad = routes.filter((r) => r.type === 'squad');
+  assert.deepEqual(squad.map((r) => `${r.from}>${r.to}`).sort(), ['k1>g1', 'lead>k1', 'lead>k2', 'lead>k3']);
+  squad.forEach((r) => {
+    const l = b(r.from), c = b(r.to);
+    assert.deepEqual(r.points[0], [l.x + 12, l.y + l.h], 'out of the bottom of the 小队长, in the middle of the step');
+    assert.deepEqual(r.points[r.points.length - 1], [c.x - 2, c.y + 20], 'into the side of its crew member, where every card is entered');
+    assert.ok(r.points.every(([x]) => x >= l.x && x <= l.x + l.w), 'inside the 小队长\'s own column');
+  });
+  assert.match(squad.find((r) => r.to === 'k3').cls, /\bst-input\b/);
+  assert.deepEqual(routes.filter((r) => r.type === 'dispatch').map((r) => r.to).sort(), ['lead', 'w1']);
+  // one column: the same block, the other session under it
+  const one = C.layout(map, { ...opts, caps: { agentdeck: 1 } });
+  assert.deepEqual(['lead', 'k1', 'g1', 'k2', 'k3', 'w1'].map((id) => (one.nodes.get(id).y - one.nodes.get('lead').y) / step), [0, 1, 2, 3, 4, 5]);
+});
+
+test('小队长分层 and 智能一页: a 小队长\'s block is one column, so a project of one 小队长 and its crew stays one card wide', () => {
+  const map = C.buildCrewMap({ captain, tasks: [], columns: [
+    col('lead', '秋招小队长', { project: '秋招', taskId: 'T-lead', state: 'working' }),
+    ...[1, 2, 3].map((i) => col('k' + i, '投递 ' + i, { captainCrew: false, taskId: 'T-k' + i, parentTaskId: 'T-lead', state: 'working' })),
+    ...[1, 2].map((i) => col('o' + i, '其他 ' + i, { project: 'other', state: 'working' })),
+  ] });
+  const plan = C.planPage(map, { w: 4000, h: 2400 }, PAGE);
+  assert.deepEqual(plan.caps, { 秋招: 1, other: 1 });
+  const lay = C.layout(map, { ...PAGE, lanes: plan.lanes, caps: plan.caps });
+  assert.equal(new Set(['lead', 'k1', 'k2', 'k3'].map((id) => lay.nodes.get(id).y)).size, 4, 'four rows: the 小队长 and its three');
+});

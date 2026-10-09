@@ -89,10 +89,14 @@
 
   // input: {
   //   captain: { id, title, alive, state, provider, model } | null,
-  //   columns: [{ id, title, alive, state, live, provider, model, lastReceipt, captainCrew }],
-  //   archived: [{ id, title, provider, model, lastReceipt, captainCrew, archivedAt }],
+  //   columns: [{ id, title, alive, state, live, provider, model, lastReceipt, captainCrew, taskId, parentTaskId, subCaptain, taskCompleted, result }],
+  //   archived: [{ id, title, provider, model, lastReceipt, captainCrew, archivedAt, taskId, parentTaskId, subCaptain, taskCompleted, result }],
   //   tasks: config.mainSession.tasks, showArchived
   // }
+  // 小队长: a session on the map that handed work on to sessions of its own (board-cli create-child:
+  // the child's parentTaskId is its taskId) is their 小队长. Its crew stands under it in its project
+  // (node.parent, node.depth), its lines come from it ('squad' edges), and what they hand back goes to
+  // it, not to 队长. node.crew: how many it leads on the map; node.leader: it is a 小队长.
   function buildCrewMap(input) {
     const tasks = (Array.isArray(input.tasks) ? input.tasks : []).filter((t) => t && typeof t === 'object');
     const live = new Map((input.columns || []).map((c) => [c.id, c]));
@@ -111,6 +115,14 @@
         if ((live.has(id) || archived.has(id)) && !byCol.has(id)) byCol.set(id, []);
       });
     });
+    // A 小队长's crew comes with it, however deep, though 队长 never handed them a card.
+    const sessions = [...(input.columns || []), ...(input.archived || [])];
+    const byTask = new Map(sessions.filter((c) => c.taskId).map((c) => [c.taskId, c.id]));
+    const parentOf = (c) => { const id = c.parentTaskId ? byTask.get(c.parentTaskId) : ''; return id && id !== c.id ? id : ''; };
+    for (let grew = true; grew;) {
+      grew = false;
+      sessions.forEach((c) => { if (!byCol.has(c.id) && byCol.has(parentOf(c))) { byCol.set(c.id, []); grew = true; } });
+    }
 
     const all = [];
     byCol.forEach((list, colId) => {
@@ -119,7 +131,8 @@
       const isArchived = !live.has(colId);
       const latest = list[list.length - 1] || null;
       const term = isArchived ? null : col;
-      const kept = real(col.lastReceipt);
+      // (a crew member's result went to its 小队长: create-child keeps it on the session itself)
+      const kept = real(col.lastReceipt) || (col.taskCompleted && col.result ? { summary: String(col.result), explicit: true } : null);
       const remembered = !latest && kept ? { status: kept.failed ? 'failed' : kept.explicit ? 'done' : 'stopped', receipt: kept } : null;
       const { status, detail } = nodeStatus(latest || remembered, term);
       const sent = list.map((t) => t.sentAt || 0);
@@ -142,6 +155,7 @@
         ts: Math.max(latest ? latest.doneAt || latest.startedAt || latest.sentAt || 0 : 0, col.archivedAt || 0),
         files: latest && latest.receipt && Array.isArray(latest.receipt.files) ? latest.receipt.files.map(String) : [],
         returned: returnKind(latest || remembered, col.lastReceipt),
+        parent: parentOf(col), subCaptain: col.subCaptain === true,
       });
     });
     // work waiting for a free slot has no terminal yet
@@ -151,10 +165,21 @@
         project: oneLine(t.project, 120), reviews: Array.isArray(t.reviews) ? t.reviews : [],
         provider: '', model: '', status: 'queued', statusLabel: STATUS_LABEL.queued, detail: '等空位',
         line: '', full: '', live: '', progress: '', archived: false, review: false, taskCount: 1, important: t.important === true,
-        firstSentAt: t.sentAt || 0, lastSentAt: t.sentAt || 0, ts: t.sentAt || 0, files: [], returned: '',
+        firstSentAt: t.sentAt || 0, lastSentAt: t.sentAt || 0, ts: t.sentAt || 0, files: [], returned: '', parent: '', subCaptain: false,
       });
     });
     all.sort((a, b) => a.firstSentAt - b.firstSentAt || (a.id < b.id ? -1 : 1));
+
+    // A crew member stands in its 小队长's project, whatever its own record says. (A loop in the
+    // records is cut where it closes.)
+    const byId = new Map(all.map((n) => [n.id, n]));
+    all.forEach((n) => { if (!byId.has(n.parent)) n.parent = ''; });
+    all.forEach((n) => {
+      const seen = new Set([n.id]);
+      for (let p = n.parent; p; p = byId.get(p).parent) { if (seen.has(p)) { n.parent = ''; break; } seen.add(p); }
+    });
+    const rootOf = (n) => { let r = n; while (r.parent) r = byId.get(r.parent); return r; };
+    all.forEach((n) => { if (n.parent) n.project = rootOf(n).project; });
 
     // AgentDeck and agentdeck are one project; the spelling shown is the one the
     // earliest session used. Stored names are never rewritten.
@@ -191,15 +216,26 @@
     const linked = new Set(reviews.edges.filter((e) => current.has(e.from) || current.has(e.to)).flatMap((e) => [e.from, e.to]));
     const visible = onMap.filter((n) => input.showArchived || !n.archived || linked.has(n.id));
     const shown = new Set(visible.map((n) => n.id));
+    // a crew member whose 小队长 is not shown (archived) stands on its own, under 队长
+    visible.forEach((n) => { if (n.parent && !shown.has(n.parent)) n.parent = ''; });
+    const crew = new Map();
+    visible.forEach((n) => { if (n.parent) crew.set(n.parent, (crew.get(n.parent) || 0) + 1); });
+    visible.forEach((n) => {
+      n.crew = crew.get(n.id) || 0;
+      n.leader = n.crew > 0 || n.subCaptain;
+      n.depth = 0;
+      for (let p = n.parent; p; p = byId.get(p).parent) n.depth++;
+    });
     const captainId = input.captain ? input.captain.id : '';
     const review = reviews.edges.filter((e) => shown.has(e.from) && shown.has(e.to));
-    // Results flow back to 队长. A reviewed session's result goes on through
-    // its review; only a question or a failure from it goes straight back.
+    // Results flow back to 队长 (a crew member's to its 小队长). A reviewed session's result goes on
+    // through its review; only a question or a failure from it goes straight back.
     const reviewed = new Set(review.map((e) => e.from));
     const edges = [
-      ...visible.map((n) => ({ from: captainId, to: n.id, type: 'dispatch' })),
+      ...visible.filter((n) => !n.parent).map((n) => ({ from: captainId, to: n.id, type: 'dispatch' })),
+      ...visible.filter((n) => n.parent).map((n) => ({ from: n.parent, to: n.id, type: 'squad' })),
       ...review,
-      ...(captainId ? visible.filter((n) => n.returned && (!reviewed.has(n.id) || n.returned !== 'ok'))
+      ...(captainId ? visible.filter((n) => !n.parent && n.returned && (!reviewed.has(n.id) || n.returned !== 'ok'))
         .map((n) => ({ from: n.id, to: captainId, type: 'return', kind: n.returned })) : []),
     ];
     const counts = {};
@@ -296,13 +332,20 @@
   }
 
   // One project's frame when its cards sit at most `cap` wide: workers first,
-  // review sessions on their own rows below. null when it takes no room on the
+  // review sessions on their own rows below. A 小队长 heads a block of its own: its crew under it
+  // in its column, a step in (theirs a step more), a row each. Blocks fill the columns shortest
+  // first, so a frame without a crew fills row by row; 小队长s' blocks come first. slots: where each
+  // card stands, [{ n, col, row, depth }] (n null: the fold). null when it takes no room on the
   // canvas (tray: a folded inactive project, or one with nothing to show).
   function frame(p, o, shown, cap) {
     const collapsed = isCollapsed(p, o.collapsedProjects, o.tray);
     const nodes = p.nodes.filter((n) => shown.has(n.id));
-    let workers = nodes.filter((n) => !n.review);
-    const reviewers = nodes.filter((n) => n.review), hasFold = !!o.fold && !p.key;
+    const crews = new Map();
+    nodes.forEach((n) => { if (n.parent) { if (!crews.has(n.parent)) crews.set(n.parent, []); crews.get(n.parent).push(n); } });
+    const heads = nodes.filter((n) => !n.parent);
+    // (a review session with a crew of its own stands with the workers, its crew under it)
+    let workers = heads.filter((n) => !n.review || crews.has(n.id));
+    const reviewers = heads.filter((n) => n.review && !crews.has(n.id)), hasFold = !!o.fold && !p.key;
     if (o.tray && ((collapsed && p.inactive) || (!nodes.length && !hasFold))) return null;
     const count = Math.max(workers.length + (hasFold ? 1 : 0), reviewers.length, 1);
     const cols = Math.max(1, Math.min(count, cap));
@@ -312,22 +355,32 @@
       const targets = new Set(reviewers.flatMap((n) => n.reviews));
       workers = [...workers.filter((n) => !targets.has(n.id)), ...workers.filter((n) => targets.has(n.id))];
     }
+    workers = [...workers.filter((n) => crews.has(n.id)), ...workers.filter((n) => !crews.has(n.id))];
+    const slots = [], height = new Array(cols).fill(0);
+    const put = (n, col, depth) => {
+      slots.push({ n, col, row: height[col]++, depth });
+      if (n) (crews.get(n.id) || []).forEach((k) => put(k, col, depth + 1));
+    };
+    [...workers, ...(hasFold ? [null] : [])].forEach((n) => put(n, height.indexOf(Math.min(...height)), 0));
+    const workRows = Math.max(...height);
+    reviewers.forEach((n, i) => slots.push({ n, col: i % cols, row: workRows + Math.floor(i / cols), depth: 0 }));
     const rowGap = Number.isFinite(o.rowGap) ? o.rowGap : o.gapY, reviewGap = Number.isFinite(o.reviewGap) ? o.reviewGap : o.gapY;
-    const rows = [];
-    const chunk = (list, review) => { for (let i = 0; i < list.length; i += cols) rows.push({ items: list.slice(i, i + cols), review }); };
-    chunk([...workers, ...(hasFold ? [null] : [])], false);
-    chunk(reviewers, true);
     // a review row sits a little lower: the review lines turn in that gap
+    const rows = [];
     let top = 0;
-    rows.forEach((row, r) => { if (r) top += o.nodeH + (row.review ? reviewGap : rowGap); row.top = top; });
+    for (let r = 0; r < workRows + Math.ceil(reviewers.length / cols); r++) {
+      if (r) top += o.nodeH + (r >= workRows ? reviewGap : rowGap);
+      rows.push({ top, review: r >= workRows });
+    }
     // A frame is never narrower than its own header (o.headW: what the project's whole name and its
     // tally need); the cards then stand centred in it, `inset` in from where they would start.
     const cardsW = cols * o.nodeW + (cols - 1) * o.gapX + 2 * o.padX;
     const w = Math.max(collapsed ? 320 : cardsW, Math.ceil((o.headW && o.headW[p.key]) || 0));
-    return { p, collapsed, cols, count, rows, w, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), h: collapsed ? o.headH + 4 : o.headH + top + o.nodeH + o.padBottom };
+    return { p, collapsed, cols, count, rows, slots, w, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), h: collapsed ? o.headH + 4 : o.headH + top + o.nodeH + o.padBottom };
   }
-  // headH: the frame's title strip, above its first row of cards
-  const LAYOUT = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, padX: 44, padBottom: 28, pad: 40, headH: 52, fold: false, collapsedProjects: {}, columnsPerProject: Infinity, grid: false, center: false, tray: false, lane: 7 };
+  // headH: the frame's title strip, above its first row of cards; crewIn: how far a crew stands in
+  // from its 小队长 (its line runs down the middle of that step), crewPad: and in from its right edge
+  const LAYOUT = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, padX: 44, padBottom: 28, pad: 40, headH: 52, fold: false, collapsedProjects: {}, columnsPerProject: Infinity, grid: false, center: false, tray: false, lane: 7, crewIn: 24, crewPad: 8 };
   // Projects in the user's own order (the keys in `order` first, in that order), the rest as the map lists them.
   function ordered(projects, order) {
     if (!Array.isArray(order) || !order.length) return projects;
@@ -380,14 +433,19 @@
       lane.forEach((f) => {
         const g = { ...f.p, x, y, w: f.w, h: f.h, collapsed: f.collapsed, lane: li };
         groups.push(g);
-        if (!f.collapsed) f.rows.forEach((row, r) => {
-          const start = o.grid ? x + o.padX + f.inset : x + (f.w - row.items.length * o.nodeW - Math.max(0, row.items.length - 1) * o.gapX) / 2;
-          row.items.forEach((n, i) => {
-            const bx = start + i * (o.nodeW + o.gapX), by = y + o.headH + row.top;
-            if (n) pos.set(n.id, { x: bx, y: by, anchorY: by, w: o.nodeW, h: o.nodeH, row: r + 1, project: f.p.key });
+        if (!f.collapsed) {
+          // (off the grid a row stands centred in its frame; a frame with a crew keeps to its columns)
+          const inRow = new Map();
+          f.slots.forEach((s) => inRow.set(s.row, (inRow.get(s.row) || 0) + 1));
+          const centred = !o.grid && f.slots.every((s) => !s.depth);
+          f.slots.forEach((s) => {
+            const k = inRow.get(s.row), d = Math.min(s.depth, 2);
+            const start = centred ? x + (f.w - k * o.nodeW - Math.max(0, k - 1) * o.gapX) / 2 : x + o.padX + f.inset;
+            const bx = start + s.col * (o.nodeW + o.gapX) + d * o.crewIn, by = y + o.headH + f.rows[s.row].top;
+            if (s.n) pos.set(s.n.id, { x: bx, y: by, anchorY: by, w: o.nodeW - d * (o.crewIn + o.crewPad), h: o.nodeH, row: s.row + 1, project: f.p.key, depth: s.depth, parent: s.n.parent || '' });
             else fold = { x: bx, y: by + o.nodeH / 2 - 16, w: 150, h: 32, project: f.p.key };
           });
-        });
+        }
         y += f.h + o.clusterGap;
       });
       x += widths[li] + (gaps[li] || 0);
@@ -409,7 +467,21 @@
     }
     // rails: every card hangs off a line down the left of its column (see routes)
     const rails = o.grid && o.rails ? { x: Number.isFinite(o.railX) ? o.railX : o.gapX / 2, headH: o.headH, entry: Number.isFinite(o.entryTop) ? o.entryTop : 20 } : null;
-    return { captain, nodes: pos, groups, fold, feeds, grid: !!o.grid, rails, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
+    return { captain, nodes: pos, groups, fold, feeds, grid: !!o.grid, rails, crewIn: o.crewIn, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
+  }
+
+  // The ground each 小队长's crew stands on: under the 小队长, as wide, from halfway down its card to
+  // just under the last of its crew (theirs nested inside it). Outermost first. [{ id, project, depth, x, y, w, h }]
+  function pockets(lay) {
+    const end = new Map();
+    lay.nodes.forEach((b) => {
+      const seen = new Set();
+      for (let p = b.parent; p && lay.nodes.has(p) && !seen.has(p); p = lay.nodes.get(p).parent) { seen.add(p); end.set(p, Math.max(end.get(p) || 0, b.y + b.h)); }
+    });
+    return [...end].map(([id, bottom]) => {
+      const l = lay.nodes.get(id), top = l.y + l.h / 2;
+      return { id, project: l.project, depth: l.depth || 0, x: l.x, y: top, w: l.w, h: bottom + 6 - top };
+    }).sort((a, b) => a.depth - b.depth);
   }
 
   // Which lane each project stands in, for a window size.w wide (in the canvas's own units, at the
@@ -739,6 +811,15 @@
         branch: tidy([[p.fx, yMain + (end ? Math.min(R, Math.abs(p.fx - cx) / 2) : 0)], ...(d.rail ? [] : [[p.fx, p.yL]]), ...tail]),
       });
     }));
+    // ---- 小队长 → its crew ----
+    // out of the bottom of the 小队长, down the step its crew stands in, a stop on the side of each
+    const step = (lay.crewIn || 24) / 2;
+    map.edges.filter((e) => e.type === 'squad' && box(e.from) && box(e.to)).forEach((e) => {
+      const l = box(e.from), b = box(e.to), n = status.get(e.to);
+      const x = l.x + step, y = rails ? b.y + rails.entry : b.y + b.h / 2 - 14;
+      const points = tidy([[x, l.y + l.h], [x, y], [b.x - 2, y]]);
+      out.push({ type: 'squad', from: e.from, to: e.to, cls: `squad st-${n.status}${n.archived ? ' archived' : ''}`, project: b.project, points, branch: points });
+    });
     // ---- 审查 ----
     let ri = 0;
     reviewOf.forEach((targets, id) => {
@@ -822,7 +903,7 @@
 
   // A change in anything but the live activity line rebuilds the map.
   function signature(map) {
-    const n = (x) => [x.id, x.status, x.detail, x.title, x.provider, x.model, x.line, x.archived ? 1 : 0, x.review ? 1 : 0, x.project || '', (x.reviews || []).join(','), x.important ? 1 : 0].join('\u0001');
+    const n = (x) => [x.id, x.status, x.detail, x.title, x.provider, x.model, x.line, x.archived ? 1 : 0, x.review ? 1 : 0, x.project || '', (x.reviews || []).join(','), x.important ? 1 : 0, x.leader ? 1 : 0].join('\u0001');
     return [map.captain ? n(map.captain) : '', ...map.nodes.map(n), ...map.edges.map((e) => `${e.type}:${e.from}>${e.to}:${e.kind || ''}`), map.hiddenArchived, ...map.projects.map((p) => `${p.key}:${p.completed}:${p.inactive}:${summaryLine(p.counts)}`)].join('\u0002');
   }
 
@@ -838,5 +919,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, PAGE_COLUMNS, PAGE_MIN_SCALE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, planPage, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, PAGE_COLUMNS, PAGE_MIN_SCALE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, pockets, planPage, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
 });

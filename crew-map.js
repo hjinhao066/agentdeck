@@ -91,6 +91,8 @@
     const s = host.mainState();
     const terms = host.terms;
     const info = (col) => host.agentInfo(col, terms.get(col.id)) || {};
+    // who handed a session its work (create-child), and what it handed back: a 小队长 and its crew
+    const squad = (c) => ({ taskId: c.taskId || '', parentTaskId: c.parentTaskId || '', subCaptain: c.subCaptain === true, taskCompleted: !!c.taskCompleted, result: c.result || '' });
     const columns = host.columns().filter((c) => !c.isMain).map((c) => {
       const entry = terms.get(c.id);
       const i = info(c);
@@ -99,12 +101,12 @@
         // whole lines (a narrow column wraps them), so a CLI's update notice is known for what it is
         live: entry && (entry.liveScreen || entry.lastScreen) ? host.activityLine(entry.liveScreen || entry.lastScreen) : '',
         provider: i.provider || '', model: i.shortModel || '', lastReceipt: c.lastReceipt || null, captainCrew: !!c.captainCrew, project: c.project, reviews: c.reviews,
-        important: host.isPriority(c),
+        important: host.isPriority(c), ...squad(c),
       };
     });
     const archived = (host.config.archived || []).map((a) => {
       const i = info(a);
-      return { id: a.id, title: host.columnLabel(a), provider: i.provider || '', model: i.shortModel || '', lastReceipt: a.lastReceipt || null, captainCrew: !!a.captainCrew, project: a.project, reviews: a.reviews, archivedAt: a.archivedAt || 0 };
+      return { id: a.id, title: host.columnLabel(a), provider: i.provider || '', model: i.shortModel || '', lastReceipt: a.lastReceipt || null, captainCrew: !!a.captainCrew, project: a.project, reviews: a.reviews, archivedAt: a.archivedAt || 0, ...squad(a) };
     });
     // work still waiting for a slot has no column: its own record (or its card) says whether it is 高优先级
     const tasks = ((s && s.tasks) || []).map((t) => (t && t.status === 'waiting' && !t.colId && host.isHigh(t) ? { ...t, important: true } : t));
@@ -152,6 +154,17 @@
     st.title = node.statusLabel + (node.detail ? ' · ' + node.detail : '');
     top.append(st, badge(node));
     const title = el('div', 'cm-title', node.title);
+    if (node.leader) {
+      // 小队长: a small crest like 队长's leading the title, in its project's colour; its crew hangs under it
+      const lead = el('span', 'cm-lead');
+      lead.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3.5 8 4.2 3.6L12 5l4.3 6.6L20.5 8l-1.7 9.5H5.2z"/></svg>';
+      lead.append(el('span', '', '小队长'));
+      lead.setAttribute('role', 'img');
+      lead.title = node.crew ? `小队长：带 ${node.crew} 个队员，挂在它下面` : '小队长：还没派出队员';
+      lead.setAttribute('aria-label', lead.title);
+      title.prepend(lead);
+      n.classList.add('leader');
+    }
     if (node.important) {
       // 高优先级: a solid flag chip in its own colour, leading the title; the top row keeps the status and the model.
       const flag = el('span', 'cm-prio');
@@ -212,7 +225,8 @@
       guard(more, () => togglePop(node.id));
       n.appendChild(more);
     }
-    n.title = (node.important ? '【高优先级】' : '') + (waiting ? node.title : `${node.title}\n${node.archived ? '点击：恢复这个会话并打开它的终端' : '点击：打开这个会话的终端列'}\n拖动：移动卡片`);
+    const leader = node.parent && lastMap && lastMap.nodes.find((x) => x.id === node.parent);
+    n.title = (node.important ? '【高优先级】' : '') + (waiting ? node.title : `${node.title}${leader ? `\n小队长「${leader.title}」派的活，结果交给它` : ''}\n${node.archived ? '点击：恢复这个会话并打开它的终端' : '点击：打开这个会话的终端列'}\n拖动：移动卡片`);
     n.addEventListener('pointerdown', (e) => startCardDrag(e, n, node, box));
     n.addEventListener('click', (e) => {
       if (n.dataset.dragged) { delete n.dataset.dragged; e.preventDefault(); return; }
@@ -336,6 +350,9 @@
       `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>`).join('') + '</defs>';
     const list = routeList = C.routes(lastMap, lay, dims);
     const layer = (cls) => svg('g', { class: cls });
+    // under every line: the ground each 小队长's crew stands on
+    const ground = layer('cm-pockets');
+    C.pockets(lay).forEach((p) => svg('rect', { class: 'cm-pocket', x: p.x, y: p.y, width: p.w, height: p.h, rx: 12, style: `--project-hue: ${C.projectHue(p.project)}`, 'data-lead': p.id }, ground));
     const returns = layer('cm-returns'), reviews = layer('cm-reviews');
     const halos = layer('cm-halos'), lines = layer('cm-lines'), pulses = layer('cm-pulses'), core = layer('cm-spine'), dots = layer('cm-dots');
     layer('cm-lit');   // the hovered card's own path, on top of everything else
@@ -346,7 +363,8 @@
     list.filter((r) => r.type === 'review').forEach((r) => {
       svg('path', { class: 'cm-edge ' + r.cls, d: rounded(r.points), 'marker-end': `url(#${MARK.review})`, 'data-from': r.from, 'data-to': r.to }, reviews);
     });
-    list.filter((r) => r.type === 'dispatch').sort((a, b) => RANK[stOf(a)] - RANK[stOf(b)]).forEach((r) => {
+    // 队长's lines to the sessions it sent, and each 小队长's to its crew
+    list.filter((r) => r.type === 'dispatch' || r.type === 'squad').sort((a, b) => RANK[stOf(a)] - RANK[stOf(b)]).forEach((r) => {
       const d = rounded(r.branch), style = `--project-hue: ${C.projectHue(r.project)}`;
       const live = stOf(r) === 'working' && !/\barchived\b/.test(r.cls);
       if (live) svg('path', { class: 'cm-halo', d, style }, halos);
@@ -383,9 +401,13 @@
     if (lit) lit.innerHTML = '';
     edgesEl.classList.toggle('cm-hovering', !!hoverId && !!lit);
     if (!hoverId || !lit) return;
-    const mine = routeList.filter((r) => (r.from === hoverId || r.to === hoverId) && (r.type !== 'return' || showReturn));
-    mine.forEach((r) => svg('path', { class: 'cm-hl-path ' + r.type, d: rounded(r.points), ...(r.type === 'dispatch' ? { style: `--project-hue: ${C.projectHue(r.project)}` } : {}) }, lit));
-    edgesEl.querySelectorAll('.cm-edge').forEach((p) => { if (p.dataset.from === hoverId || p.dataset.to === hoverId) p.classList.add('hl'); });
+    // a crew member's path is the whole chain: 队长 to its 小队长, the 小队长 to it
+    const up = new Set();
+    for (let p = hoverId; p; p = ((lastMap && lastMap.nodes.find((n) => n.id === p)) || {}).parent) up.add(p);
+    const handed = (r) => (r.type === 'dispatch' || r.type === 'squad') && up.has(r.to);
+    const mine = routeList.filter((r) => (r.from === hoverId || r.to === hoverId || handed(r)) && (r.type !== 'return' || showReturn));
+    mine.forEach((r) => svg('path', { class: 'cm-hl-path ' + r.type, d: rounded(r.points), ...(r.type === 'dispatch' || r.type === 'squad' ? { style: `--project-hue: ${C.projectHue(r.project)}` } : {}) }, lit));
+    edgesEl.querySelectorAll('.cm-edge').forEach((p) => { if (p.dataset.from === hoverId || p.dataset.to === hoverId || (/\b(dispatch|squad)\b/.test(p.getAttribute('class')) && up.has(p.dataset.to))) p.classList.add('hl'); });
   }
   function redrawEdges() { if (lay) drawEdges(); }
   // Two layers per project: the tinted pane under the wiring (zones) and a
