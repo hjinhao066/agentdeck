@@ -113,10 +113,10 @@ async function open(width, height, theme) {
 // a glide has landed: the view's own (cm-smooth) and every frame and card's
 const settled = () => expect.poll(() => page.evaluate(() => !document.querySelector('.cm-canvas.cm-smooth') && ![...document.querySelectorAll('.cm-node, .cm-pane, .cm-project, .cm-edges')].some((n) => n.getAnimations().some((a) => a.effect && Number.isFinite(a.effect.getComputedTiming().iterations) && a.playState === 'running')))).toBe(true);
 // Running lights are frozen at a set point of their cycle, so a picture shows them lit the same way every time.
-async function shot(name) {
-  if (!shots) return;
+// keep: the picture also stays in the test's own output folder, wherever it runs (智能一页's three situations).
+async function shot(name, keep) {
+  if (!shots && !keep) return;
   await settled();
-  fs.mkdirSync(shots, { recursive: true });
   await page.mouse.move(2, 2);
   await page.evaluate(() => {
     const at = { 'cm-flow': 0.3, 'cm-trail': 0.3, 'cm-flow-review': 0.3, 'cm-spin': 0.12, 'cm-ping': 0.2, 'cm-beat': 0.3 };
@@ -132,7 +132,9 @@ async function shot(name) {
       a.currentTime = ((at[a.animationName] == null ? 0.5 : at[a.animationName]) + (['cm-flow', 'cm-trail'].includes(a.animationName) ? phase(target) : 0)) * t.duration;
     });
   });
-  await page.screenshot({ path: path.join(shots, name + '.png'), animations: 'allow', scale: 'css' });
+  const png = await page.screenshot({ animations: 'allow', scale: 'css' });
+  if (shots) { fs.mkdirSync(shots, { recursive: true }); fs.writeFileSync(path.join(shots, name + '.png'), png); }
+  if (keep) fs.writeFileSync(test.info().outputPath(name + '.png'), png);
   await page.evaluate(() => document.getAnimations().forEach((a) => { if (a.playState === 'paused') a.play(); }));
 }
 async function dragBy(locator, dx, dy) {
@@ -232,11 +234,11 @@ for (const [name, spec, [w, h], caps] of [
   expect(g.view.scale).toBeLessThanOrEqual(0.7 + 1e-6);
   expect(g.view.scale).toBeGreaterThanOrEqual(0.7 * 0.8 - 1e-6);
   expect(await linesClear()).toEqual([]);
-  await shot(`page-${Object.values(spec).join('-')}-${w}x${h}-dark`);
+  await shot(`page-${Object.values(spec).join('-')}-${w}x${h}-dark`, true);
   // the same map in light
   await page.evaluate(() => applyTheme('light')); await settled();
   expect((await read()).plan.caps).toEqual(caps);
-  await shot(`page-${Object.values(spec).join('-')}-${w}x${h}-light`);
+  await shot(`page-${Object.values(spec).join('-')}-${w}x${h}-light`, true);
   expect(errors).toEqual([]);
 });
 
