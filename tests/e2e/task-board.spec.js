@@ -59,7 +59,8 @@ test.beforeAll(async () => {
   // The tests below open their own reviewers by hand; automatic verification has its own tests.
   await page.evaluate(() => TaskBoard.autoVerify(false));
 });
-test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
+// (a profile still held by the closed Electron's helpers on Windows is reported, it does not fail the run)
+test.afterAll(async () => { if (app) await app.close(); if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); } });
 test.afterEach(async ({}, info) => {
   if (info.status === info.expectedStatus) return;
   await info.attach('task-board-state', { body: JSON.stringify({ cards: await list({ archived: true }), notices: await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板')) }), contentType: 'application/json' });
