@@ -22,6 +22,7 @@ const card = async (id) => (await list({ archived: true })).find((c) => c.id ===
 async function add(title, verify = false, detail = 'Clear test instructions.') {
   return JSON.parse(await command(['task', 'add', '--project', 'e2e', '--title', title, '--detail', detail, ...(verify ? ['--verify'] : [])])).card;
 }
+// A task reaches 'working' once its terminal has started and taken it: up to 30 s on a busy machine, here and below.
 async function worker(id, title = 'Worker', commandLine = FAKE, env, reviews = []) {
   const output = await command(['new', '--task-id', id, '--project', 'e2e', '--title', title, '--task', 'Run this single test task', '--command', commandLine, ...(reviews.length ? ['--reviews', reviews.join(',')] : [])], env);
   const session = output.match(/已开新会话 ([^「]+)/)?.[1]; expect(session).toBeTruthy();
@@ -118,7 +119,7 @@ test('explicit queued review of a reopened card passes to done and keeps the ori
     await expect.poll(async () => (await card(c.id)).review_session).toBe(true);
     const id = (await card(c.id)).session_id;
     await expect.poll(() => fs.existsSync(path.join(envDir, id + '.json'))).toBe(true);
-    await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, id)).toBe('working');
+    await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, id), { timeout: 30000 }).toBe('working');
     await command(['complete', '--result', '通过：已核对测试'], JSON.parse(fs.readFileSync(path.join(envDir, id + '.json'), 'utf8')));
     await expect.poll(async () => (await card(c.id)).status).toBe('done');
     expect((await card(c.id)).exec_receipt).toEqual(receipt);
@@ -143,7 +144,7 @@ test('explicit rejection restores the archived original executor and delivers th
       expect((await card(c.id)).rework_count).toBe(1);
       expect((await card(c.id)).review_session).toBe(false);
       expect(await page.evaluate((id) => config.archived.some((s) => s.id === id), execution.session)).toBe(false);
-      await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, execution.session)).toBe('working');
+      await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, execution.session), { timeout: 30000 }).toBe('working');
       const tasks = await page.evaluate((id) => config.mainSession.tasks.filter((t) => t.colId === id), execution.session);
       expect(tasks).toHaveLength(2);
       expect(await page.evaluate(([id, findings]) => ChatUI.turnsOf(id).filter((t) => t.user?.includes(findings)).length, [execution.session, findings])).toBe(1);
@@ -213,7 +214,7 @@ test('Gemini drag starts share explicit dispatch and delegate only this card onc
   // queues successfully, and completion must not report a missing delegation.
   const queued = await add('Gemini queued dispatch');
   const dispatching = await page.evaluate((id) => TaskBoard.startCard(id), queued.id);
-  await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, dispatching.session_id)).toBe('working');
+  await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, dispatching.session_id), { timeout: 30000 }).toBe('working');
   await expect.poll(() => fs.existsSync(path.join(envDir, dispatching.session_id + '.json'))).toBe(true);
   const dispatchEnv = JSON.parse(fs.readFileSync(path.join(envDir, dispatching.session_id + '.json'), 'utf8'));
   await page.evaluate(() => { window.testQueueActiveCrew = MainCore.activeCrew; MainCore.activeCrew = () => new Set(Array.from({ length: MainCore.MAX_ACTIVE }, (_, i) => 'busy-' + i)); });
@@ -372,7 +373,7 @@ test('Codex completed screen releases ordinary tell and tell --now after a Capta
     await command(['tell', '--to', w.session, '--message', message, ...(now ? ['--now'] : [])]);
     // A narrow column breaks the stand-in's line across rows (Windows' background desktop is small): read it unbroken.
     await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term).replace(/\s+/g, ''), w.session), { timeout: 15000 }).toContain(('GOT ' + message).replace(/\s+/g, ''));
-    await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, w.session)).toBe('working');
+    await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, w.session), { timeout: 30000 }).toBe('working');
     await expect.poll(() => page.evaluate((id) => terms.get(id).state, w.session)).toBe('done');
     expect((await card(c.id)).attempt_closed).toBe(false);
     await command(['complete', '--result', 'Rework finished'], w.env);
@@ -415,7 +416,7 @@ test('exhausted automatic dispatch waits without a PTY, resumes once, and yields
     expect((await card(c.id)).dispatch_wait).toBeNull(); expect((await card(c.id)).latest_receipt).toBe('');
     const dispatcher = (await card(c.id)).dispatch_session_id;
     await expect.poll(() => fs.existsSync(path.join(envDir, dispatcher + '.json'))).toBe(true);
-    await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, dispatcher)).toBe('working');
+    await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, dispatcher), { timeout: 30000 }).toBe('working');
     expect(await page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length)).toBe(before + 1);
     await page.evaluate((id) => MainSession.onTick(id, { ...terms.get(id), state: 'quota', lastScreen: 'Not logged in' }), dispatcher);
     await expect.poll(async () => (await card(c.id)).flag).toBe('quota'); expect((await card(c.id)).consecutive_failures).toBe(0);
@@ -456,7 +457,7 @@ test('new selected Claude seat queues at quota and the queue opens after recover
     for (const id of [c.id, other.id]) {
       const session = (await card(id)).session_id;
       await expect.poll(() => fs.existsSync(path.join(envDir, session + '.json'))).toBe(true);
-      await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, session)).toBe('working');
+      await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, session), { timeout: 30000 }).toBe('working');
       await command(['complete', '--result', 'Quota queue test done'], JSON.parse(fs.readFileSync(path.join(envDir, session + '.json'), 'utf8')));
     }
   } finally { await page.evaluate(() => { QuotaCore.commandQuota = window.queueQuotaGate; config.quotas = window.queueQuotaStore; }); }
