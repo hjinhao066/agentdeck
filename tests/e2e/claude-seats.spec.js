@@ -422,7 +422,10 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
   await board(['quota'], '未登录（席位 us2）');
   await board(['new', '--title', 'US2 not logged', '--task', 'finish', '--seat', 'us2', '--command', FAKE], 'US2 未登录');
   // An account no directory holds: refused, with every directory and its account, nothing opened.
-  await board(['new', '--title', 'Nobody there', '--task', 'finish', '--seat', 'nobody.here', '--command', FAKE], '没有哪个目录登着这个账号，没有派。当前各目录登录的账号：cn → cn；us → us；us2 → 未登录。');
+  await idle(cn);
+  await page.evaluate(([id, command]) => window.deck.ptyInput(id, 'BOARD ' + JSON.stringify(command) + '\r'), [cn, ['new', '--title', 'Nobody there', '--task', 'finish', '--seat', 'nobody.here', '--command', FAKE]]);
+  // The terminal wraps the line wherever it is full (a wide character can leave a gap): compare without spaces.
+  await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term).replace(/\s/g, ''), cn), { timeout: 20000 }).toContain('没有哪个目录登着这个账号，没有派。当前各目录登录的账号：cn→cn；us→us；us2→未登录。');
   expect(await page.evaluate(() => columns.some((c) => c.displayTitle === 'Nobody there'))).toBe(false);
   expect(await page.evaluate(() => columns.some((c) => c.displayTitle === 'US2 not logged'))).toBe(false);
   const dir = path.join(home, '.claude-us2');
@@ -440,7 +443,8 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-plan')).toHaveCount(0);
   await expect(row.getByRole('tooltip', { includeHidden: true })).toContainText(/账号paid\.account2@example\.test.*套餐Max 20x.*席位us2.*目录~\/\.claude-us2/);
   await expect(row).toHaveAttribute('aria-label', /^paid\.account2 Max 20x：/);
-  await board(['quota'], '账号：paid.account2@example.test（Max 20x）');
+  await board(['quota'], '（Max 20x）');
+  expect(await page.evaluate((id) => dumpScreen(terms.get(id).term).replace(/\s/g, ''), cn)).toContain('账号：paid.account2@example.test（Max20x）');
   await board(['new', '--title', 'US2 startup input', '--task', 'input is ready', '--seat', 'us2', '--command', `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --onboarding-probe`], '已开新会话');
   const startupWorker = await page.evaluate(() => columns.find((c) => c.displayTitle === 'US2 startup input').id);
   await expect.poll(() => capture('prompt-columns.jsonl')).toContain('input is ready');
@@ -470,7 +474,8 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find((r) => r.colId === worker)).toMatchObject({ configDir: dir, authOverridePresent: false });
   await page.evaluate(() => { config.crewOpen = true; Sidebar.render(); });
   await expect(page.locator('.nav-crew .crew-model-flag[aria-label^="当前账号：paid.account2@example.test · 套餐 Max 20x · 席位 us2"]')).toHaveText('paid.account2');
-  await board(['ledger'], '账号:paid.account2（us2）');
+  await board(['ledger'], '（us2）');
+  expect(await page.evaluate((id) => dumpScreen(terms.get(id).term).replace(/\s/g, ''), cn)).toContain('账号:paid.account2（us2）');
   await idle(cn);
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us2'))).toBe(true);
   await expect(page.locator('.captain-item .agent-seat-label')).toHaveText('paid.account2');
