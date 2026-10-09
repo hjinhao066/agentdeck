@@ -105,7 +105,7 @@ test('the phone shows the AI state and file names only, never the internal ids o
   const [item] = phoneView([{ ...todo({ status: 'done', files: ['/Users/me/r/book.epub'], message: '好了', updated: '2026-10-08T04:01:00.000Z' }),
     created: '2026-10-08T04:00:00.000Z', updated: '2026-10-08T04:01:00.000Z', doneAt: null }]);
   const [clean] = Hub.cleanTodos({ items: [item] });
-  assert.deepEqual(clean.ai, { status: 'done', delivered: true, message: '好了', files: ['book.epub'] });
+  assert.deepEqual(clean.ai, { status: 'done', delivered: true, updated: '2026-10-08T04:01:00.000Z', message: '好了', files: ['book.epub'] });
   const [odd] = Hub.cleanTodos({ items: [{ ...item, ai: { status: 'guessed' } }] });
   assert.equal(odd.ai, undefined);
   const [plain] = Hub.cleanTodos({ items: [{ ...item, ai: null }] });
@@ -132,4 +132,83 @@ test('a copy built from what the phone saw waits for the original before anyone 
   const merged = win.list().find((i) => i.id === item.id);
   assert.equal(merged.awaitingOrigin, false);
   assert.equal(merged.textDevice, DEV, 'the computer that recorded it hands it to AI');
+});
+
+test('phone merge: a later tick on a stale copy keeps the AI state of the same version, as the desktop does', () => {
+  const { merge } = require('../todo-store');
+  const version = { id: 'td-ai-phone-merge-1', text: '@ai 找书', created: '2026-10-08T08:00:00.000Z', textUpdated: '2026-10-08T08:00:00.000Z', textDevice: DEV, done: false, doneAt: null };
+  const queued = { revision: 'a'.repeat(64), taskId: TASK, ownerDevice: DEV, status: 'queued', updated: '2026-10-08T08:00:30.000Z', deliveredAt: null, files: [], message: '' };
+  const mac = { ...version, updated: '2026-10-08T08:02:00.000Z', ai: { ...queued, status: 'done', round: 1, updated: '2026-10-08T08:02:00.000Z', deliveredAt: '2026-10-08T08:01:00.000Z', files: ['/Users/me/reports/book.epub'] } };
+  const tick = { ...version, done: true, doneAt: '2026-10-08T08:03:00.000Z', updated: '2026-10-08T08:03:00.000Z', ai: queued };
+  const untick = { ...version, updated: '2026-10-08T08:04:00.000Z', ai: queued };
+  for (const stale of [tick, untick]) {
+    const desktop = merge([[mac], [stale]]).get(version.id);
+    for (const order of [[mac, stale], [stale, mac]]) {
+      const sources = order.map((item, i) => ({ id: i ? 'win' : 'mac', todos: Hub.cleanTodos({ items: phoneView([item]) }) }));
+      const { open, done } = Hub.mergeTodos(sources);
+      const [phone] = [...open, ...done];
+      assert.equal(phone.done, stale.done, 'the later tick still wins');
+      assert.equal(phone.ai.status, desktop.ai.status);
+      assert.equal(phone.ai.status, 'done');
+      assert.deepEqual(phone.ai.files, ['book.epub']);
+    }
+  }
+  // The answer to a phone tick (no textUpdated, no ai) is the same version by its text.
+  const answer = { id: version.id, text: version.text, done: true, doneAt: '2026-10-08T08:07:00.000Z', created: version.created, updated: '2026-10-08T08:07:00.000Z' };
+  const ticked = Hub.mergeTodos([{ id: 'mac', todos: Hub.cleanTodos({ items: phoneView([mac]) }) }, { id: 'win', todos: Hub.cleanTodos({ items: [answer] }) }]).done[0];
+  assert.equal(ticked.done, true);
+  assert.equal(ticked.ai.status, 'done');
+  // A different content version never inherits the old AI state.
+  const edited = { ...version, text: '@ai 找另一本书', textUpdated: '2026-10-08T08:05:00.000Z', updated: '2026-10-08T08:05:00.000Z', ai: null };
+  const sources = [mac, edited].map((item, i) => ({ id: i ? 'win' : 'mac', todos: Hub.cleanTodos({ items: phoneView([item]) }) }));
+  const [phone] = Hub.mergeTodos(sources).open;
+  assert.equal(phone.text, '@ai 找另一本书');
+  assert.equal(phone.ai, undefined);
+  // The same text written again later is a new version too.
+  const rewritten = { ...version, textUpdated: '2026-10-08T08:06:00.000Z', updated: '2026-10-08T08:06:00.000Z', ai: null };
+  const again = [mac, rewritten].map((item, i) => ({ id: i ? 'win' : 'mac', todos: Hub.cleanTodos({ items: phoneView([item]) }) }));
+  assert.equal(Hub.mergeTodos(again).open[0].ai, undefined);
+});
+
+test('rounds: waiting or failing again after the AI went back to work is filed again; a refresh or same-state retry is not', async (t) => {
+  const { TaskStore } = require('../task-board');
+  const { TodoAI, taskId } = require('../todo-ai');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-todo-rounds-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const todos = new TodoStore(path.join(root, 'todos'), { deviceId: DEV });
+  const ai = new TodoAI({ todos, tasks: new TaskStore(path.join(root, 'tasks')), deliver: () => {}, notify: async () => {} });
+  const s = A.normalize({});
+  let clock = T0;
+  const sync = () => A.syncTodos(s, todos.list(), DEV, (clock += 1000));
+  const needs = () => open(s).filter((i) => i.kind === 'need');
+  for (const [state, message] of [['failed', '网络错误'], ['needs_user', '等你提供体检报告']]) {
+    const item = todos.add({ text: `@ai ${state} 轮次` });
+    ai.scan();
+    const set = (status, msg = '') => ai.status({ id: item.id, taskId: taskId(item), status, message: msg });
+    await set(state, message);
+    assert.equal(sync(), 1);
+    assert.equal(sync(), 0, 'a refresh files nothing');
+    await set(state, message);
+    assert.equal(sync(), 0, 'a same-state retry with the same answer is the same item');
+    const [first] = needs();
+    A.reply(s, first.id, '重试', 'desktop', clock, 'r-1');
+    assert.equal(needs().length, 0);
+    await set('working');
+    sync();
+    await set(state, message);
+    assert.equal(sync(), 1, 'the second ' + state + ' is a new round');
+    assert.equal(needs().length, 1);
+    assert.notEqual(needs()[0].id, first.id);
+    assert.equal(needs()[0].ask.startsWith(message), true);
+    // Missing the working state in between (no refresh then) still counts:
+    // the open one of the earlier round is settled, the new round filed.
+    const second = needs()[0];
+    await set('working');
+    await set(state, message);
+    assert.equal(sync(), 2);
+    assert.equal(needs().length, 1);
+    assert.notEqual(needs()[0].id, second.id);
+    assert.equal(s.items.find((i) => i.id === second.id).doneNote, 'AI 已接着办');
+    A.resolve(s, needs()[0].id, 'user', '', clock);
+  }
 });

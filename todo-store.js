@@ -103,7 +103,8 @@ const PHONE_DONE_LIMIT = 200;
 function phoneView(items) {
   const live = sorted(items.filter((t) => !t.deleted));
   const open = live.filter((t) => !t.done), done = live.filter((t) => t.done).slice(0, PHONE_DONE_LIMIT);
-  const pick = (t) => ({ id: t.id, text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated, ...(t.ai ? { ai: t.ai } : {}) });
+  // textUpdated names the content version: the phone merges AI state by it, as merge() does.
+  const pick = (t) => ({ id: t.id, text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated, textUpdated: t.textUpdated, ...(t.ai ? { ai: t.ai } : {}) });
   return [...open.map(pick), ...done.map(pick), ...items.filter((t) => t.deleted).map((t) => ({ id: t.id, deleted: true, updated: t.updated }))];
 }
 

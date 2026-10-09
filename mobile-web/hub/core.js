@@ -470,7 +470,7 @@
   const TODO_AI = ['queued', 'working', 'needs_user', 'done', 'failed'];
   function cleanTodoAi(ai) {
     if (!ai || typeof ai !== 'object' || !TODO_AI.includes(ai.status)) return null;
-    return { status: ai.status, delivered: time(ai.deliveredAt),
+    return { status: ai.status, delivered: time(ai.deliveredAt), updated: time(ai.updated) ? ai.updated : '',
       message: typeof ai.message === 'string' ? ai.message.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500) : '',
       files: ai.status !== 'done' || !Array.isArray(ai.files) ? [] : ai.files.filter((f) => typeof f === 'string').slice(0, 10)
         .map((f) => (f.split(/[\\/]/).filter(Boolean).pop() || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200)).filter(Boolean) };
@@ -483,15 +483,30 @@
       if (item.deleted === true) { out.push({ id: item.id, deleted: true, updated: item.updated }); continue; }
       if (typeof item.text !== 'string' || !item.text.trim()) continue;
       out.push({ id: item.id, text: item.text.slice(0, 500), done: item.done === true, doneAt: item.done === true && time(item.doneAt) ? item.doneAt : null,
-        created: time(item.created) ? item.created : item.updated, updated: item.updated, ...(cleanTodoAi(item.ai) ? { ai: cleanTodoAi(item.ai) } : {}) });
+        created: time(item.created) ? item.created : item.updated, updated: item.updated, ...(time(item.textUpdated) ? { textUpdated: item.textUpdated } : {}),
+        ...(cleanTodoAi(item.ai) ? { ai: cleanTodoAi(item.ai) } : {}) });
     }
     return out;
   }
   function mergeTodos(sources) {
-    const merged = new Map();
+    const merged = new Map(), copies = new Map();
     for (const source of sources) for (const item of source.todos || []) {
       const kept = merged.get(item.id);
       if (!kept || Date.parse(item.updated) > Date.parse(kept.item.updated)) merged.set(item.id, { item, from: source.id });
+      if (!copies.has(item.id)) copies.set(item.id, []);
+      copies.get(item.id).push(item);
+    }
+    // AI state goes by its own time within one content version, as on the desktop
+    // (todo-store merge): a later tick on a stale copy never rolls back what 队长 wrote.
+    // A copy without textUpdated (a tick's answer, an older build) is matched by its text.
+    const sameVersion = (a, b) => !a.deleted && !b.deleted && a.text === b.text && (!a.textUpdated || !b.textUpdated || a.textUpdated === b.textUpdated);
+    for (const [id, entry] of merged) {
+      let ai = entry.item.ai;
+      for (const copy of copies.get(id)) {
+        if (!copy.ai || !copy.ai.updated || !sameVersion(copy, entry.item)) continue;
+        if (!ai || !ai.updated || Date.parse(copy.ai.updated) > Date.parse(ai.updated)) ai = copy.ai;
+      }
+      if (ai !== entry.item.ai) merged.set(id, { ...entry, item: { ...entry.item, ai } });
     }
     const live = [...merged.values()].filter(({ item }) => !item.deleted).map(({ item, from }) => ({ ...item, seenOn: from }));
     const open = live.filter((t) => !t.done).sort((a, b) => Date.parse(b.created) - Date.parse(a.created) || a.id.localeCompare(b.id));

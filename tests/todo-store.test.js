@@ -224,7 +224,7 @@ test('merge and the phone view: deletions travel as bare marks, ties do not depe
   ]]).values()];
   const view = phoneView(items);
   assert.deepEqual(view.find((x) => x.id === 'td-gone-item-1'), { id: 'td-gone-item-1', deleted: true, updated: '2026-10-06T08:00:00.000Z' });
-  assert.deepEqual(Object.keys(view.find((x) => x.id === 'td-open-item-1')).sort(), ['created', 'done', 'doneAt', 'id', 'text', 'updated']);
+  assert.deepEqual(Object.keys(view.find((x) => x.id === 'td-open-item-1')).sort(), ['created', 'done', 'doneAt', 'id', 'text', 'textUpdated', 'updated']);
 });
 
 test('newer stale peer checkboxes cannot roll back AI status, artifacts or delivery/notification markers', () => {

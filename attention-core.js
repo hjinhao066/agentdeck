@@ -270,6 +270,9 @@
   //   needs_user → 要你处理 (等你回答): the user's reply goes to 队长 with the card;
   //   failed     → 要你处理 (等你拍板): retry or leave it;
   //   done       → 结果汇报 with the files.
+  // Once per round (`ai.round`, counted by todo-ai.js each time the state is
+  // entered) and answer: a refresh files nothing new, but waiting or failing
+  // again after the AI went back to work is a new item.
   // Only on the computer that handed the item to AI (`ai.ownerDevice`): the phone
   // hub merges both computers' pages, and the other desktop shows the state on
   // its 待办 page. A need is ticked once the AI state moves on (or the card is
@@ -278,7 +281,8 @@
     // FNV-1a over what was written back: the same answer filed twice is one item.
     let h = 0x811c9dc5;
     for (const ch of [ai.status, line(ai.message), ...(Array.isArray(ai.files) ? ai.files : [])].join('\n')) h = Math.imul(h ^ ch.codePointAt(0), 16777619) >>> 0;
-    return `todo:${ai.taskId}:${ai.status}:${h.toString(36)}`;
+    const round = Number.isSafeInteger(ai.round) ? ai.round : 0;
+    return `todo:${ai.taskId}:${ai.status}:${round}:${h.toString(36)}`;
   }
   const TODO_STATES = ['needs_user', 'failed', 'done'];
   function syncTodos(store, todos, device, now) {

@@ -96,7 +96,10 @@ class TodoAI {
     catch (error) { error.code ||= 'TODO_BOARD_WRITE'; throw error; }
     const next = this.todos.writeAi(id, (t) => {
       if (t.ai?.taskId !== cardId || t.ai.revision !== revision(t)) throw new Error('待办已编辑或任务版本过期，请重新读取 todo list。');
-      return { ...t.ai, status, message: message.trim(), files: status === 'done' ? [...new Set(files)] : [], updated: at,
+      // `round` counts entries into a state: failed → working → failed again is a
+      // new round (待我处理 files it again); a same-state retry is not.
+      const round = (Number.isSafeInteger(t.ai.round) ? t.ai.round : 0) + (t.ai.status === status ? 0 : 1);
+      return { ...t.ai, status, round, message: message.trim(), files: status === 'done' ? [...new Set(files)] : [], updated: at,
         exceptionNotifiedAt: t.ai.exceptionNotifiedAt };
     });
     this.changed();

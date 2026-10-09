@@ -1611,6 +1611,12 @@
     const [clean] = Core.cleanTodos({ items: [item] });
     if (!clean || !Array.isArray(m.todos)) return;
     const at = m.todos.findIndex((t) => t.id === clean.id);
+    // A tick's answer has no AI fields: the copy it replaces keeps them.
+    const before = at >= 0 ? m.todos[at] : null;
+    if (before && !before.deleted && before.text === clean.text) {
+      if (before.textUpdated && !clean.textUpdated) clean.textUpdated = before.textUpdated;
+      if (before.ai && !clean.ai) clean.ai = before.ai;
+    }
     if (at >= 0) m.todos[at] = clean; else m.todos.push(clean);
   }
   let todoHintTimer = 0;
