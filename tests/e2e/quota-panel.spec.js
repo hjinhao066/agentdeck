@@ -9,6 +9,15 @@ const row = (key) => page.locator(`#quotaBar [data-quota-key="${key}"]`);
 const cell = (key, w) => row(key).locator(`[data-window="${w}"]`);
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-quota-panel-'));
+  // Who is signed in behind each seat directory. They do not line up with the seat names on purpose:
+  // the Max account sits in the CN directory, and nobody is signed in to US2.
+  const home = path.join(profile, 'seats-home');
+  for (const [dir, meta, account] of [['.claude-cn', '.claude-cn/.claude.json', { emailAddress: 'paid.account20@example.test', organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x' }],
+    ['.claude', '.claude.json', { emailAddress: 'second.account@example.test', organizationType: 'claude_pro', organizationRateLimitTier: 'default_claude_ai' }]]) {
+    fs.mkdirSync(path.join(home, dir), { recursive: true });
+    fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}');   // stand-in credential existence only
+    fs.writeFileSync(path.join(home, meta), JSON.stringify({ oauthAccount: account }));
+  }
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2,
     claudeSeats: [{ id: 'cn', name: '🇨🇳 CN', configDir: '~/.claude-cn' }, { id: 'us', name: '🇺🇸 US', configDir: '~/.claude' }],
@@ -23,10 +32,12 @@ test.beforeAll(async () => {
 test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
 
 test('compact quota rows: header once, used-up / low / no-data cells, brand icons and full details on hover', async () => {
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
     const at = Date.now(), H = 3600000, D = 24 * H;
-    const seat = (id, dir, w5, w7) => ({ scope: 'claude', account: `${id}***@example.com`, accountKey: `k-${id}`, configDir: dir,
-      sample: { provider: 'Claude', scope: 'claude', seatId: id, at, accountBound: true, accountKey: `k-${id}`, configDir: dir, source: 'Claude 席位用量（/usage）', confidence: '高（按账号 ID 归属）',
+    // The numbers belong to the account signed in behind each seat, so they carry that account's own key.
+    const infos = await ClaudeSeats.refresh(), key = (id) => infos.find((s) => s.id === id).accountKey;
+    const seat = (id, dir, w5, w7) => ({ scope: 'claude', account: infos.find((s) => s.id === id).accountEmail, accountKey: key(id), configDir: dir,
+      sample: { provider: 'Claude', scope: 'claude', seatId: id, at, accountBound: true, accountKey: key(id), configDir: dir, source: 'Claude 席位用量（/usage）', confidence: '高（按账号 ID 归属）',
         windows: [{ key: 'fiveHour', label: '5 小时', remaining: w5[0], used: 100 - w5[0], exhausted: w5[0] <= 0, resetAt: at + w5[1] }, { key: 'weekly', label: '每周', remaining: w7[0], used: 100 - w7[0], exhausted: w7[0] <= 0, resetAt: at + w7[1] }] } });
     config.quotas = {
       'Claude:cn': seat('cn', '~/.claude-cn', [0, 2 * H + 20 * 60000], [64, 3 * D]),
@@ -63,12 +74,34 @@ test('compact quota rows: header once, used-up / low / no-data cells, brand icon
     await expect(cell(key, w).locator('.quota-meter')).toHaveAttribute('style', '--pct: 0%;');
   }
   await expect(cell('Cursor', '5h')).toHaveText('正常');
-  // Claude rows are icon + flag and name (US and US2 share a flag) plus a crown on the Captain's seat.
-  await expect(row('Claude:cn').locator('.quota-name')).toHaveText('🇨🇳 CN');
-  await expect(row('Claude:us').locator('.quota-name')).toHaveText('🇺🇸 US');
-  await expect(row('Claude:us2').locator('.quota-name')).toHaveText('🇺🇸 US2');
-  await expect(row('Claude:us').locator('.quota-captain svg')).toBeVisible();
+  // Claude rows go by the account signed in behind the seat (the part before the @), never by the
+  // fixed CN / US / US2 or a flag. The Max mark follows the account; the crown leads 队长's row.
+  await expect(row('Claude:cn').locator('.seat-acct')).toHaveText('paid.account20');
+  await expect(row('Claude:cn').locator('.quota-plan')).toHaveText('Max');
+  await expect(row('Claude:us').locator('.quota-name')).toHaveText('second.account');
+  await expect(row('Claude:us2').locator('.quota-name')).toHaveText('未登录');
+  await expect(page.locator('#quotaBar .quota-name')).not.toContainText([/🇨🇳|🇺🇸|CN|US/]);
+  await expect(row('Claude:us').locator('.quota-icon.quota-captain svg')).toBeVisible();
   await expect(row('Claude:cn').locator('.quota-captain')).toHaveCount(0);
+  await expect(row('Claude:cn').locator('.quota-icon svg')).toBeVisible();   // its provider mark
+  // A long name never pushes a value out: whatever the width, it is the name that gives way, from the left.
+  for (const width of [200, 252, 320]) {
+    await page.evaluate((w) => { config.navWidth = w; applyNavWidth(); renderQuotaBar(); }, width);
+    const fit = await page.locator('#quotaBar .quota-item').evaluateAll((els) => els.map((e) => {
+      const label = e.querySelector('.quota-label').getBoundingClientRect(), first = e.querySelector('.quota-cell').getBoundingClientRect(), box = e.getBoundingClientRect();
+      const acct = e.querySelector('.seat-acct'), plan = e.querySelector('.quota-plan');
+      return { key: e.dataset.quotaKey, inside: e.scrollWidth <= e.clientWidth, order: label.right <= first.left + 0.5,
+        values: [...e.querySelectorAll('.quota-pct, .quota-reset')].every((n) => n.getBoundingClientRect().right <= box.right + 0.5 && n.scrollWidth <= n.clientWidth),
+        acct: acct ? Math.round(acct.getBoundingClientRect().width) : null, cut: acct ? acct.scrollWidth > acct.clientWidth : false,
+        plan: plan ? plan.getBoundingClientRect().right <= label.right + 0.5 : true, dir: acct ? getComputedStyle(acct).direction : '' };
+    }));
+    for (const r of fit) expect(r.inside && r.order && r.values && r.plan, JSON.stringify({ width, r })).toBe(true);
+    const paid = fit.find((r) => r.key === 'Claude:cn');
+    expect(paid.dir).toBe('rtl');                       // cut from the left: the end of the name stays
+    expect(paid.acct, JSON.stringify({ width, paid })).toBeGreaterThanOrEqual(36);   // room for the last letters of the name
+    if (width >= 320) expect(fit.some((r) => r.cut), JSON.stringify({ width, fit })).toBe(false);   // wide enough: nothing is cut
+  }
+  await page.evaluate(() => { config.navWidth = 252; applyNavWidth(); renderQuotaBar(); });
   for (const [key, name] of [['Codex', 'ChatGPT'], ['Cursor', 'Grok 4.7'], ['Antigravity', 'Gemini']]) await expect(row(key).locator('.quota-name')).toHaveText(name);
   // 4. Columns line up under the header, and 5h starts right after the widest name.
   const geo = await page.evaluate(() => {
@@ -105,10 +138,12 @@ test('compact quota rows: header once, used-up / low / no-data cells, brand icon
   // 3. Hover / keyboard focus shows the full explanation; the row is labelled and described by it.
   const tip = row('Claude:cn').getByRole('tooltip');
   await expect(row('Claude:cn')).toHaveAttribute('aria-describedby', 'quota-tip-Claude-cn');
-  await expect(row('Claude:cn')).toHaveAttribute('aria-label', /^🇨🇳 CN：已用尽，.*5 小时剩余 0%.*每周剩余 64%/);
+  await expect(row('Claude:cn')).toHaveAttribute('aria-label', /^paid\.account20 Max 20x：已用尽，.*5 小时剩余 0%.*每周剩余 64%/);
   await row('Claude:cn').focus();
   await expect(tip).toBeVisible();
-  for (const text of ['账号', 'cn***@example.com', '席位', '🇨🇳 CN', '5 小时', '已用尽', '每周', '剩余 64%', '来源', 'Claude 席位用量（/usage）', '采样', '可信度', '高（按账号 ID 归属）']) await expect(tip).toContainText(text);
+  // The detail carries what the row leaves out: the whole address, the plan, the seat code and its directory.
+  await expect(tip.locator('.qt-name')).toHaveText('paid.account20');
+  for (const text of ['账号', 'paid.account20@example.test', '套餐', 'Max 20x', '席位', 'cn', '目录', '~/.claude-cn', '5 小时', '已用尽', '每周', '剩余 64%', '来源', 'Claude 席位用量（/usage）', '采样', '可信度', '高（按账号 ID 归属）']) await expect(tip).toContainText(text);
   await expect(tip).toContainText(/每周剩余 64%\d\d-\d\d 周[日一二三四五六] \d\d:\d\d（3 天后）重置/);
   await expect(row('Antigravity').getByRole('tooltip', { includeHidden: true })).toContainText(/已用尽，预计 \d\d:\d\d（1 小时 39 分后）恢复/);
   await expect(row('Cursor').getByRole('tooltip', { includeHidden: true })).toContainText('未见用尽，此来源不提供百分比');

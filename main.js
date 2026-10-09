@@ -1246,8 +1246,9 @@ app.whenReady().then(async () => {
     const seat = configuredAuthSeat(sample);
     if (!seat) return;
     try {
-      seatAuth.observe(seat, sample);
       const key = sample.provider === 'Claude' ? QuotaCore.seatKey(seat.id) : sample.provider;
+      // A lost-login alert names the account that was signed in there, not the fixed seat name.
+      seatAuth.observe(sample.provider === 'Claude' ? { ...seat, account: seatConfig().quotas?.[key]?.account } : seat, sample);
       if (!seatAuth.needsConfirmation(seat, sample.provider)) {
         clearTimeout(seatAuthChecks.get(key)); seatAuthChecks.delete(key);
       } else if (!tudArg && !seatAuthChecks.has(key)) {

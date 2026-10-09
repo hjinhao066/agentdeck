@@ -283,6 +283,6 @@ test('US2 idle warmup uses its own directory exactly once and skips its missing 
   expect((await runs()).map((r) => r.seatId)).toEqual(['us2']);
   expect((await snapshot()).find((s) => s.seatId === 'us2')).toMatchObject({ status: 'succeeded', attempts: 1 });
   await refresh();
-  await expect(page.locator('#quotaBar [data-seat-id="us2"] .quota-name')).toHaveText('🇺🇸 US2');
+  await expect(page.locator('#quotaBar [data-seat-id="us2"] .quota-name')).toHaveText('us2');   // the account behind the seat (us2@example.test)
   await expect(page.locator('.column')).toHaveCount(1);
 });

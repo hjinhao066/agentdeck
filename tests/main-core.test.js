@@ -693,3 +693,10 @@ test('answer --key keeps the one-key forms and can move a menu cursor before Ent
     assert.throws(() => M.answerKeys(bad), /answer 的 --key 只能是/, JSON.stringify(bad));
   }
 });
+
+test('ledger says which account a Claude session runs on', () => {
+  const text = M.ledgerText([{ id: 'c1', title: '修登录', state: 'working', account: 'hjinhao066us', folder: '网站' }, { id: 'c2', title: '写文档', state: 'done' }]);
+  const [first, second] = text.split('\n');
+  assert.match(first, /^c1  「修登录」  .*  账号:hjinhao066us  文件夹:网站$/);
+  assert.doesNotMatch(second, /账号/);
+});

@@ -24,8 +24,10 @@ were left running. Quota probes made no inference requests.
   the actual `mainSession.colId` column's `claudeSeatId`, not
   `activeClaudeSeatId` (the next-launch preference). Legacy untagged columns
   bind only to the `~/.claude` seat; unknown explicit seat IDs are ignored.
-- Each item is one compact row in the sidebar quota block: provider icon, seat flag
-  (plus a crown on the seat the running Captain uses), then one cell per window the
+- Each item is one compact row in the sidebar quota block: provider icon, then for a
+  Claude seat the account signed in behind its directory (the part before the @; a
+  `Max` mark follows a Max-plan account; the row the running Captain uses leads with
+  a crown instead of the provider icon), then one cell per window the
   source actually reports, in 5-hour then weekly order. A cell shows the remaining %,
   its reset time and a thin bar; a window that does not exist leaves that column empty
   rather than a dash. A sidebar too narrow for the reset times keeps the percentages
@@ -92,7 +94,13 @@ were left running. Quota probes made no inference requests.
   Redirects are rejected. There is no credential renewal, login or model call.
 - Only `five_hour` and `seven_day.utilization` (0–100) and parseable absolute
   resets become canonical `{at, source: 'Claude OAuth usage', windows}` records.
-  Incomplete or invalid responses fail the whole sample. Failed reads update only
+  A window with no reset time (`resets_at: null`: the account has not been used
+  since its last reset, so no window is running) is kept with an unknown reset; a
+  window that is absent is left out and the other one is still shown. An answer
+  with no usable window is still proof that the seat is signed in (the service
+  accepted its token), so a seat that was just signed in is never left as 未登录
+  until its first use. An impossible percentage, a reset that is not an absolute
+  time, or a body with neither window key fails the whole sample. Failed reads update only
   safe failure metadata; the last successful windows, resets and sampling time
   remain intact, marked 数据已旧 after three failures. No denominator or post-reset percentage is inferred.
 - A 30-second main-process heartbeat starts due reads independently of the

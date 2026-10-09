@@ -150,8 +150,10 @@ the middle:
   separate terminal status if that agent is still running or waiting. Cursor's
   session status stays working while its terminal is busy, retaining the receipt.
 - **Subscription quota**: a compact 额度 block at the bottom of the sidebar has
-  one row per provider: a brand-coloured icon plus name (Claude seats show only
-  the flag, with a crown on the Captain's seat), then a 5h and a 7d cell, with
+  one row per provider: a brand-coloured icon plus name (a Claude seat shows the
+  account signed in behind its directory, the part before the @, with a small
+  `Max` mark on a Max plan; the row the Captain is on leads with a crown instead
+  of the provider icon), then a 5h and a 7d cell, with
   "5h / 7d" named once in the header. Each cell is remaining % + reset time over
   a thin bar; used up is ⊘ + reset time in red with the row tinted red, a window
   with no number is — over an empty bar. If the whole row has no numeric windows
@@ -359,7 +361,8 @@ Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；�
 队长行的 Relay 图标可选 CN 🇨🇳、US 🇺🇸、US2 🇺🇸（美国二号）三个独立 Claude 席位，
 或 ChatGPT（Codex GPT-6.1 Sol）：
 先存进度看板，再重开队长读看板继续，运行中的队员保持原席位。
-侧边栏底部齿轮统一配置席位名称、目录和 Relay 名称。旧 CN/US 配置自动补 US2，额度区同时显示旗帜与名称以区分 US/US2；未登录 US2 不影响现有席位。
+侧边栏底部齿轮统一配置席位名称、目录和 Relay 名称。旧 CN/US 配置自动补 US2；未登录 US2 不影响现有席位。
+侧边栏里出现席位的地方（额度行、队长行和会话上的席位标签、队员分组、Relay 面板、席位设置、轮换和额度用尽提示）都显示这个目录里实际登录的账号名（邮箱 @ 前那段），不显示固定的 CN / US / US2；席位代号只在悬停提示和 `--seat us2` 里出现。账号名放不下时从左边省略、保住结尾，悬停看完整邮箱、套餐、席位代号和目录。目录里没人登录、也没有账号记录时显示「未登录」。Max 套餐的账号在额度行带一个小的 `Max` 标记，跟账号走，不跟目录走；皇冠只表示队长正在用这一行。
 用户登录步骤见 [Claude 席位](CLAUDE_SEATS.md)；队长 `new --agent claude --seat us2` 可指定席位，`quota` 显示三席独立额度。默认开启「永动机」：
 当前 Claude 的可信 5 小时剩余 ≤3% 或真实限流时，在队长空闲后自动接力
 下一个可用 Claude 席位（US2 → US → CN → US2，未登录或用尽跳过）；没有已确认可用的 Claude 席位时交给 Codex GPT-6.1 Sol，恢复后优先回 Claude。

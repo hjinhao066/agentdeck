@@ -2397,7 +2397,10 @@
       const cursorWorking = /\bcursor-agent\b/i.test(c.cmd || '') && entry?.alive &&
         (terminalState === 'working' || M.terminalActivity(entry.lastScreen, c.cmd) === 'working');
       const resumedState = window.RestartResume ? window.RestartResume.ledgerState(terminalState, !!(entry && entry.alive), task) : terminalState;
+      // Which account a Claude session runs on (the seat's signed-in account, not the seat's name).
+      const seat = window.AgentInfo?.resolveAgentInfo?.(c, entry)?.seat;
       return {
+        ...(seat && window.ClaudeSeats?.seatName ? { account: window.ClaudeSeats.seatName(seat.id) } : {}),
         id: c.id, title: host.columnLabel(c), state: c.executor === 'chatgpt-web' ? webTaskState(task) : cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [], important: sessionHigh(c),

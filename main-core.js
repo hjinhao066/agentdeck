@@ -1057,6 +1057,7 @@
     return rows.map((r) => {
       let line = `${r.id}  ${r.important ? PRIORITY_MARK : ''}「${oneLine(r.title, 60)}」  ${statusLabel(r.state)}`;
       if (r.terminalState && r.terminalState !== r.state) line += `  终端:${statusLabel(r.terminalState)}`;
+      if (r.account) line += `  账号:${oneLine(r.account, 60)}`;
       if (r.folder) line += `  文件夹:${oneLine(r.folder, 30)}`;
       if (r.project) line += `  项目:${oneLine(r.project, 120)}`;
       if (r.reviews && r.reviews.length) line += `  审查:${r.reviews.join(',')}`;

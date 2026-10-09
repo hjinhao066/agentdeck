@@ -3831,7 +3831,7 @@ const deckHost = {
   // 队长
   createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen,
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
-  quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
+  quotaText: () => QuotaCore.text(config.quotas, Date.now(), ClaudeSeats.described(config.claudeSeats), claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
 };
@@ -3953,7 +3953,7 @@ function updateAgentIdentityBadge(id, entry, screenText) {
   const info = window.AgentInfo.resolveAgentInfo(col, entry, screenText, footer, replies);
   if (entry.badgeEl) window.AgentInfo.renderBadge(entry.badgeEl, info, 'header');
   const nav = navItems.get(id);
-  if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar', config.claudeSeats);
+  if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar', ClaudeSeats.described(config.claudeSeats));
   if (info.provider && (col.agentProvider !== info.provider ||
       (info.rawModel && col.agentModel !== info.rawModel) ||
       (info.effort && col.agentEffort !== info.effort))) {
@@ -4041,7 +4041,8 @@ function claudeCaptainSeatId() {
 // Quota rows live at the bottom of the sidebar (#quotaBar) and, for the
 // collapsed sidebar, in the popover under the top-bar gauge (#quotaPopList).
 function renderQuotaBar() {
-  const items = QuotaCore.items(config.claudeSeats);
+  // Seat rows go by the account signed in behind each directory, not by the seat's fixed name.
+  const items = QuotaCore.items(ClaudeSeats.described(config.claudeSeats));
   const captainSeatId = claudeCaptainSeatId();
   const captainProvider = columns.find((c) => c.id === config.mainSession?.colId)?.agentProvider;
   const now = Date.now();
@@ -4128,12 +4129,17 @@ function renderQuotaBar() {
         item.addEventListener('mouseenter', () => { clearTimeout(item.tipHoldTimer); item.classList.remove('tip-hold'); });
       }
       const q = summaries[index];
-      // Include the seat name: multiple subscriptions can share the same flag.
-      const seatLabel = seat ? seat.name : '';
       const captain = seat ? seat.id === captainSeatId : !!captainProvider && captainProvider === provider;
       const name = item.querySelector('.quota-name');
-      const crown = el('span', 'quota-captain'); crown.innerHTML = ICONS.crown;
-      fill(name, [seat ? seatLabel : NAMES[provider], ...(captain ? [crown] : [])]);
+      // The row 队长 is on leads with the crown instead of the provider mark, so the name keeps its width.
+      const lead = item.querySelector('.quota-icon');
+      if (lead.classList.contains('quota-captain') !== captain) {
+        lead.classList.toggle('quota-captain', captain);
+        lead.innerHTML = captain ? ICONS.crown : AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
+      }
+      // The paid plan follows the account, whichever directory it is signed in to. Full address,
+      // plan, seat code and directory are in the row's own detail (no second native tooltip).
+      fill(name, seat ? [AgentInfo.accountLabel(q.accountLabel), ...(q.planMark ? [el('span', 'quota-plan', q.planMark)] : [])] : [NAMES[provider]]);
       const state = q.authStatus === 'logged-out' ? 'danger' : q.out ? 'exhausted' : q.state;
       // Signed in to an account other than the one this seat is set to hold.
       const wrong = seat && ClaudeSeats.accountCheck(seat.id)?.state === 'mismatch' ? ClaudeSeats.accountCheck(seat.id).text : '';
@@ -4158,7 +4164,7 @@ function renderQuotaBar() {
       // reset times, source, sample time and confidence. Diagnostics stay in data-detail.
       const tip = item.querySelector('.quota-tooltip');
       const head = el('span', 'qt-head');
-      head.append(el('span', 'qt-name', seat ? `Claude ${seat.name}` : NAMES[provider]));
+      head.append(el('span', 'qt-name', seat ? q.accountLabel : NAMES[provider]));
       if (captain) { const who = el('span', 'qt-captain'); who.innerHTML = ICONS.crown; who.append('队长在用'); head.append(who); }
       const badge = el('span', 'qt-badge', q.statusText); badge.dataset.state = state; head.append(badge);
       const lines = q.cells.map((c) => {
@@ -4192,8 +4198,8 @@ function renderQuotaBar() {
       }
       const sampled = q.sampledAt ? `采样 ${Math.abs(q.sampledAt - now) > 86400000 ? `${pad(new Date(q.sampledAt).getMonth() + 1)}-${pad(new Date(q.sampledAt).getDate())} ` : ''}${hm(new Date(q.sampledAt))}${q.stale ? '（数据已旧）' : ''}` : '暂无采样';
       const meta = el('span', `qt-meta${q.stale ? ' stale' : ''}`);
-      for (const [k, v] of [['账号', q.account || '未识别'], seat && ['席位', `${seat.name}${captain ? '（队长在用）' : ''}`],
-        ['来源', [q.source || '暂无', sampled].join(' · ')], ['可信度', q.confidence || '未知']].filter(Boolean)) meta.append(el('span', 'qt-k', k), el('span', 'qt-v', v));
+      for (const [k, v] of [['账号', q.account || '未识别'], q.plan && ['套餐', q.plan], seat && ['席位', `${q.seatCode}${captain ? '（队长在用）' : ''}`],
+        seat && ['目录', seat.configDir], ['来源', [q.source || '暂无', sampled].join(' · ')], ['可信度', q.confidence || '未知']].filter(Boolean)) meta.append(el('span', 'qt-k', k), el('span', 'qt-v', v));
       const copyFocused = document.activeElement?.classList.contains('quota-login-copy') && tip.contains(document.activeElement);
       fill(tip, [head, ...lines, meta]);
       if (copyFocused) {
@@ -4209,8 +4215,8 @@ function renderQuotaBar() {
       item.dataset.account = wrong ? 'mismatch' : '';
       item.dataset.loginCommand = q.loginCommand || '';
       tip.dataset.loginCommand = q.loginCommand ? 'true' : '';
-      item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${wrong ? wrong + '，' : ''}${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
-      // Config dir, model and the full evidence line: kept for diagnosis, never shown on hover.
+      item.setAttribute('aria-label', `${seat ? q.accountLabel + (q.planMark ? ` ${q.plan}` : '') : NAMES[provider]}${captain ? '（队长）' : ''}：${wrong ? wrong + '，' : ''}${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
+      // Model and the full evidence line: kept for diagnosis, never shown on hover.
       item.dataset.detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + warm;
       if (bar.children[index + 1] !== item) bar.insertBefore(item, bar.children[index + 1] || null);
     }
@@ -4533,7 +4539,7 @@ CrewMap.init({
   isHigh: (item) => MainSession.isHigh(item),
   activityLine: lastActivityLine,
   agentInfo: (col, entry) => window.AgentInfo.resolveAgentInfo(col, entry || null, null),
-  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', config.claudeSeats),
+  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', ClaudeSeats.described(config.claudeSeats)),
   visible: () => activeView === 'board',
   save: saveConfig,
   enterCanvas: () => { if (activeView === 'board') renderBoardGraph(); },
@@ -4571,7 +4577,7 @@ TaskBoardUI.init({
   prefs: () => config.taskBoardView,
   savePrefs: (prefs) => { config.taskBoardView = prefs; saveConfig(); },
   copy: (text) => window.deck.clipboardWrite(text),
-  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', config.claudeSeats),
+  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', ClaudeSeats.described(config.claudeSeats)),
   openSession: openTaskSession,
   showBoard: (mode) => {
     TaskBoardUI.close();

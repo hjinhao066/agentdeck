@@ -358,30 +358,41 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 :root:not([data-theme="light"]) .fleet-notice.error { color: #f08a7e; }
 :root:not([data-theme="light"]) .fleet-notice.warn { color: #e8b44f; }
 .fleet-history { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#navQuota { flex: 0 0 auto; padding: 6px 8px 6px; border-top: 1px solid var(--hairline); -webkit-app-region: no-drag; }
+#navQuota { flex: 0 0 auto; padding: 6px 8px 6px; border-top: 1px solid var(--hairline); -webkit-app-region: no-drag; container-type: inline-size; }
 .quota-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 .nq-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
 /* One grid for the 5h/7d header and every row (each row is a subgrid): the name
-   column is exactly as wide as the longest name, so 5h starts right after it and
-   both value columns sit to the left; spare width stays empty on the right. */
-#quotaBar, #quotaPopList { --qw: 60px; --qg: 10px; display: grid; grid-template-columns: max-content repeat(2, minmax(0, calc(var(--qw) + var(--qg)))) minmax(0, 1fr); row-gap: 1px; container-type: inline-size; }
+   column is as wide as the longest name, so 5h starts right after it and both value
+   columns sit to the left; spare width stays empty on the right. The value columns
+   keep their width: when the sidebar is too narrow, a long account name is what gets
+   cut (from the left, see .seat-acct), never a percentage or a reset time. */
+#quotaBar, #quotaPopList { --qw: 60px; --qg: 8px; display: grid; grid-template-columns: minmax(0, max-content) repeat(2, calc(var(--qw) + var(--qg))) minmax(0, 1fr); row-gap: 1px; container-type: inline-size; }
+/* Without the reset times (see the 215px rule below) a value column only holds a percentage or 未登录. */
+@container (max-width: 215px) { #quotaBar { --qw: 36px; --qg: 7px; } }
 .quota-cols, .quota-item { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; padding: 0 6px; }
 .quota-cols { height: 14px; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .02em; }
 .quota-col { padding-left: var(--qg); }
 .quota-item { position: relative; min-width: 0; height: 30px; border-radius: 6px; color: var(--text); font-size: 11.5px; cursor: default; white-space: nowrap; overflow: visible; }
-.quota-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.quota-label { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
 .quota-icon { display: flex; flex: 0 0 auto; color: var(--text-2); }
-.quota-name { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--text-2); line-height: 1; }
-/* Seat rows show flag and name (US and US2 share a flag). 11.5px keeps three
-   names inside the compact subgrid; a grid gap here would shift the columns. */
+.quota-name { display: inline-flex; align-items: center; gap: 3px; min-width: 0; color: var(--text-2); line-height: 1; }
+/* Seat rows show the account signed in behind the seat (the part before the @), then
+   a small plan mark on a Max account. A grid gap here would shift the columns. */
 .quota-item[data-seat-id] .quota-name { font-size: 11.5px; }
-.quota-captain { display: inline-flex; color: #e0a91c; }
-.quota-captain svg { width: 11px; height: 11px; }
+/* An account name cut for width keeps its end, the part that tells hjinhao066 from
+   hjinhao066us: the ellipsis goes on the left. The full name is in the hover text. */
+.seat-acct { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; line-height: 1.35; }
+.seat-acct > bdi { direction: ltr; unicode-bidi: isolate; }
+.quota-plan { flex: 0 0 auto; padding: 0 1.5px; border-radius: 3px; background: var(--pill-bg); color: var(--text-2); font-size: 9px; font-weight: 700; line-height: 13px; letter-spacing: .02em; }
 .quota-item[data-provider="Claude"] .quota-icon { color: var(--brand-claude); }
 .quota-item[data-provider="Codex"] .quota-icon { color: var(--brand-chatgpt); }
 .quota-item[data-provider="Cursor"] .quota-icon { color: var(--text); }
 .quota-item[data-provider="Antigravity"] .quota-icon { color: var(--brand-gemini-a); }
 .quota-item[data-provider="Antigravity"] .quota-icon path { fill: url(#quotaGeminiGradient); }
+/* The row 队长 is on: the crown takes the provider mark's place. */
+.quota-item[data-provider] .quota-icon.quota-captain { color: #e0a91c; }
+.quota-item[data-provider] .quota-icon.quota-captain svg { width: 14px; height: 14px; }
+.quota-item[data-provider] .quota-icon.quota-captain path { fill: none; }
 
 /* Cell: remaining % + reset time, a thin bar underneath. Used up = ⊘ + reset time in red; no number = —. */
 .quota-values { display: contents; }
@@ -537,7 +548,10 @@ body.nav-collapsed #quotaRailBtn { display: inline-flex; }
   line-height: 1; vertical-align: middle;
 }
 .agent-badge[hidden] { display: none !important; }
-.agent-seat-label { display: inline-flex; flex-shrink: 0; align-items: center; font-size: 12px; line-height: 1; border-radius: 3px; }
+/* Beside a model name the account gives way first, down to its last few letters; only
+   then does the model name shrink (the huge ratio keeps it from losing even a fraction
+   of a pixel before that, which would already turn its end into an ellipsis). */
+.agent-seat-label { display: block; flex: 0 100000 auto; min-width: 4em; font-size: 12px; line-height: 1.25; border-radius: 3px; color: var(--text-2); }
 .agent-seat-label:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .col-badge {
   margin-right: 5px; padding: 2px 5px;
@@ -561,6 +575,9 @@ body.nav-collapsed #quotaRailBtn { display: inline-flex; }
   font-size: calc(10.5px * var(--sidebar-scale, 1)); max-width: 70px;
   overflow: hidden; text-overflow: ellipsis;
 }
+/* With an account name beside the model the badge may be a little wider; the name is cut first. */
+.cn-badge:has(.agent-seat-label) { max-width: 128px; }
+.cn-badge .agent-seat-label { font-size: calc(10.5px * var(--sidebar-scale, 1)); }
 .agent-badge.provider-cursor { color: #00d8ff; }
 .agent-badge.provider-claude { color: #d97706; }
 .agent-badge.provider-antigravity { color: #3b82f6; }
@@ -2230,7 +2247,7 @@ body.linking-board .board-port.out::before {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: calc(12px * var(--sidebar-scale, 1)); font-weight: 600; color: var(--text); max-width: none;
 }
-.crew-model-flag { flex: 0 0 auto; }
+.crew-model-flag { flex: 0 100000 auto; font-size: calc(11.5px * var(--sidebar-scale, 1)); }
 .crew-model-stat {
   margin-left: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px;
   color: var(--muted); font-size: calc(11px * var(--sidebar-scale, 1));

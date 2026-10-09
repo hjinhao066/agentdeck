@@ -245,7 +245,7 @@
     host.navItems.set(col.id, { el: item, dot, label, sub, meta, badge });
     if (window.AgentInfo) {
       const entry = host.terms && host.terms.get(col.id);
-      window.AgentInfo.renderBadge(badge, window.AgentInfo.resolveAgentInfo(col, entry), 'sidebar', host.config.claudeSeats);
+      window.AgentInfo.renderBadge(badge, window.AgentInfo.resolveAgentInfo(col, entry), 'sidebar', seatList());
     }
     captainMirror.observe(dot, { attributes: true, attributeFilter: ['class'] });
     captainHead = { col, item, counts, sub };
@@ -276,9 +276,11 @@
     return box;
   }
   const waitlist = () => window.MainSession.state()?.waitlist || [];
+  // The configured seats with who is signed in behind each: seats are shown by account name.
+  const seatList = () => window.ClaudeSeats?.described ? window.ClaudeSeats.described(host.config.claudeSeats) : host.config.claudeSeats;
   // One place builds the crew groups: the list and the status-tick check must read the
   // same seat config, or a renamed seat never matches its own key and re-renders every tick.
-  const crewGroups = (cols) => SC.crewModelGroups(cols.map(memberIdentity), host.config.claudeSeats);
+  const crewGroups = (cols) => SC.crewModelGroups(cols.map(memberIdentity), seatList());
   function memberIdentity(col) {
     const entry = host.terms && host.terms.get ? host.terms.get(col.id) : null;
     const info = window.AgentInfo && window.AgentInfo.resolveAgentInfo(col, entry, entry && entry.lastScreen);
@@ -309,7 +311,7 @@
   }
   function crewShownKey(groups, waiting) {
     const held = window.MainSession.memoryHeld() ? ':mem' : '';
-    return groups.map((g) => g.key + ':' + g.seatName + ':' + g.flag + ':' + g.working + ':' + g.urgent + ':' + g.ids.join(',')).join('|') + '|q:' + waiting.map((w) => (window.MainSession.isHigh(w) ? '!' : '') + (w.title || '')).join(',') + held;
+    return groups.map((g) => g.key + ':' + g.account + ':' + g.accountTitle + ':' + g.working + ':' + g.urgent + ':' + g.ids.join(',')).join('|') + '|q:' + waiting.map((w) => (window.MainSession.isHigh(w) ? '!' : '') + (w.title || '')).join(',') + held;
   }
   function cssId(key) {
     return String(key).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 80);
@@ -330,7 +332,7 @@
       icon.innerHTML = window.AgentInfo.PROVIDER_ICONS[g.iconProvider] || '';
     }
     const name = el('span', 'crew-model-name agent-model-label', g.label);
-    name.title = g.flag ? g.label + ' ' + g.flag : g.label;
+    name.title = g.seat ? g.label + ' · ' + g.account : g.label;
     const stat = el('span', 'crew-model-stat');
     const dotMark = el('span', 'crew-model-dot', '·');
     dotMark.setAttribute('aria-hidden', 'true');
@@ -340,10 +342,11 @@
     count.setAttribute('aria-label', g.label + '：' + countText);
     stat.append(dotMark, count);
     head.append(fold, icon, name);
-    if (g.flag) {
-      const flag = el('span', 'agent-seat-label crew-model-flag', g.flag + ' ' + g.seatName);
-      const seatName = g.seatName;
-      flag.title = '当前账号：' + seatName;
+    if (g.seat) {
+      // The account behind the seat; cut for width it keeps its end (.seat-acct).
+      const flag = el('span', 'seat-acct agent-seat-label crew-model-flag');
+      flag.appendChild(el('bdi', '', g.account));
+      flag.title = '当前账号：' + g.accountTitle;
       flag.setAttribute('aria-label', flag.title);
       flag.setAttribute('role', 'img');
       head.appendChild(flag);
@@ -507,7 +510,7 @@
     if (!crew && window.AgentInfo) {
       const entry = host.terms && host.terms.get ? host.terms.get(col.id) : null;
       const info = window.AgentInfo.resolveAgentInfo(col, entry, entry?.lastScreen);
-      window.AgentInfo.renderBadge(badge, info, 'sidebar', host.config.claudeSeats);
+      window.AgentInfo.renderBadge(badge, info, 'sidebar', seatList());
     }
     return item;
   }

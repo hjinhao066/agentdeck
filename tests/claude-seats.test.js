@@ -501,3 +501,85 @@ test('credentials on disk do not make a seat signed in when the CLI says loggedI
   // The CLI says signed in: unchanged.
   assert.equal((await M.seatInfo(us, home, 'darwin', present, M.authStatusCache(async () => ({ loggedIn: true, email: 'us@example.com' })))).loggedIn, true);
 });
+
+// ---- seats are shown by the account signed in behind their directory ----
+test('a seat goes by the account behind its directory: name before the @, plan, and the seat code only in the hover text', () => {
+  assert.equal(S.accountName('hjinhao066us@example.com'), 'hjinhao066us');
+  assert.equal(S.accountName('first.last+tag@mail.example.co'), 'first.last+tag');
+  for (const bad of ['', 'no-at', 'h***@example.com', null, 5, 'a b@example.com']) assert.equal(S.accountName(bad), '');
+  assert.equal(S.planName('claude_max', 'default_claude_max_20x'), 'Max 20x');
+  assert.equal(S.planName('claude_max', 'default_claude_max_5x'), 'Max 5x');
+  assert.equal(S.planName('claude_max', 'default_claude_ai'), 'Max');
+  assert.equal(S.planName('claude_pro', 'default_claude_ai'), 'Pro');
+  assert.equal(S.planName('max'), 'Max');            // `claude auth status` subscriptionType
+  assert.equal(S.planName('pro'), 'Pro');
+  for (const unknown of [undefined, '', 'something_new', 7]) assert.equal(S.planName(unknown, 'default_claude_max_20x'), '');
+
+  // Directory and account do not line up: the CN directory holds the paid account, as on the Windows PC.
+  const [cn, us, us2] = S.normalize();
+  const paid = S.seatDisplay(cn, { loggedIn: true, loginEmail: 'hjinhao066us@example.com', accountEmail: 'hjinhao066us@example.com', plan: 'Max 20x' });
+  assert.deepEqual(paid, { label: 'hjinhao066us', email: 'hjinhao066us@example.com', plan: 'Max 20x', mark: 'Max', code: 'cn',
+    title: 'hjinhao066us@example.com · 套餐 Max 20x · 席位 cn · ~/.claude' });
+  const pro = S.seatDisplay(us2, { loggedIn: true, loginEmail: 'jinhao.h.sub@example.com', plan: 'Pro' });
+  assert.equal(pro.label, 'jinhao.h.sub'); assert.equal(pro.mark, ''); assert.equal(pro.code, 'us2');
+  for (const shown of [paid, pro]) assert.doesNotMatch(shown.label, /CN|US|🇨🇳|🇺🇸/);
+  // Nobody signed in and no account on record: 未登录, with the seat code and directory in the hover text.
+  assert.deepEqual(S.seatDisplay(us, { loggedIn: false, loginEmail: '', accountEmail: '', plan: 'Pro' }),
+    { label: '未登录', email: '', plan: '', mark: '', code: 'us', title: '未登录 · 席位 us · ~/.claude-us' });
+  // Login lost but the directory still records whose it was: the name stays, so the row says which account dropped.
+  assert.equal(S.seatDisplay(us, { loggedIn: false, loginEmail: '', accountEmail: 'jinhao.h.sub@example.com' }).label, 'jinhao.h.sub');
+  // Signed in, address unreadable.
+  assert.equal(S.seatDisplay(us, { loggedIn: true, loginEmail: '' }).label, '账号未识别');
+  // Before the first answer: what the last run remembered, else 识别中. A masked address from an older version is not a name.
+  assert.equal(S.seatDisplay(us, { accountEmail: 'jinhao.h.sub@example.com', plan: 'Pro' }).label, 'jinhao.h.sub');
+  assert.equal(S.seatDisplay(us, { accountEmail: 'j***@example.com' }).label, '识别中');
+  assert.equal(S.seatDisplay(us, null).label, '识别中');
+  // A seat the user renamed keeps that name as its code, beside the id `--seat` takes.
+  assert.equal(S.seatDisplay({ id: 'us', name: '🇺🇸 工作号', configDir: '~/.claude-us' }, { loggedIn: true, loginEmail: 'a@example.com' }).code, '工作号（us）');
+});
+test('seat info carries the account and plan recorded in each directory, follows a changed account, and reads Windows paths', async (t) => {
+  const home = fixture(t), seats = S.normalize(); setup(home);
+  const meta = (seat, account) => fs.writeFileSync(M.credentialLocation(seat, home).metadataPath, JSON.stringify({ oauthAccount: account }));
+  for (const seat of seats) fs.mkdirSync(M.credentialLocation(seat, home).dir, { recursive: true });
+  // The paid account sits in the CN directory, a Pro account in US2: nothing here follows the directory name.
+  meta(seats[0], { emailAddress: 'hjinhao066us@example.com', accountUuid: 'u-paid', organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x' });
+  meta(seats[2], { emailAddress: 'jinhao.h.sub@example.com', accountUuid: 'u-sub', organizationType: 'claude_pro', organizationRateLimitTier: 'default_claude_ai' });
+  const present = async () => true, absent = async () => false;
+  const cn = await M.seatInfo(seats[0], home, 'darwin', present);
+  assert.equal(cn.loginEmail, 'hjinhao066us@example.com'); assert.equal(cn.accountEmail, 'hjinhao066us@example.com'); assert.equal(cn.plan, 'Max 20x');
+  assert.equal(S.seatDisplay(seats[0], cn).label, 'hjinhao066us'); assert.equal(S.seatDisplay(seats[0], cn).mark, 'Max');
+  const us2 = await M.seatInfo(seats[2], home, 'darwin', present);
+  assert.equal(us2.plan, 'Pro'); assert.equal(S.seatDisplay(seats[2], us2).label, 'jinhao.h.sub'); assert.equal(S.seatDisplay(seats[2], us2).mark, '');
+  // US: no credentials and no account on record.
+  const us = await M.seatInfo(seats[1], home, 'darwin', absent);
+  assert.equal(us.loggedIn, false); assert.equal(us.accountEmail, ''); assert.equal(S.seatDisplay(seats[1], us).label, '未登录');
+  // Credentials gone, account still on record: not signed in, but the row still says whose seat it was.
+  const dropped = await M.seatInfo(seats[2], home, 'darwin', absent);
+  assert.equal(dropped.loggedIn, false); assert.equal(dropped.loginEmail, ''); assert.equal(dropped.accountEmail, 'jinhao.h.sub@example.com');
+
+  // Another account signs in to the CN directory: the next read shows it, with its own plan.
+  meta(seats[0], { emailAddress: 'hjinhao066@example.com', accountUuid: 'u-066', organizationType: 'claude_pro', organizationRateLimitTier: 'default_claude_ai' });
+  const swapped = await M.seatInfo(seats[0], home, 'darwin', present);
+  assert.equal(S.seatDisplay(seats[0], swapped).label, 'hjinhao066'); assert.equal(swapped.plan, 'Pro'); assert.notEqual(swapped.accountKey, cn.accountKey);
+  // The CLI's answer wins over a stale record: the old record's plan is not pinned on the new account.
+  meta(seats[0], { emailAddress: 'hjinhao066us@example.com', accountUuid: 'u-paid', organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x' });
+  const stale = await M.seatInfo(seats[0], home, 'darwin', present, M.authStatusCache(async () => ({ loggedIn: true, email: 'hjinhao066@example.com', plan: 'Pro' })));
+  assert.equal(stale.loginEmail, 'hjinhao066@example.com'); assert.equal(stale.plan, 'Pro');
+  const silent = await M.seatInfo(seats[0], home, 'darwin', present, M.authStatusCache(async () => ({ loggedIn: true, email: 'hjinhao066@example.com' })));
+  assert.equal(silent.plan, '');   // plan unknown rather than borrowed
+  // Same account: the fuller record (Max 20x) beats the CLI's bare "max".
+  const same = await M.seatInfo(seats[0], home, 'darwin', present, M.authStatusCache(async () => ({ loggedIn: true, email: 'HJinhao066us@example.com', plan: 'Max' })));
+  assert.equal(same.plan, 'Max 20x');
+
+  // `claude auth status` reports the plan as subscriptionType; signed out reports none.
+  const run = (stdout) => (file, args, options, done) => done(null, stdout);
+  assert.deepEqual(await M.readAuthStatus(seats[1], home, {}, run('{"loggedIn":true,"email":"a@example.com","subscriptionType":"max"}')), { loggedIn: true, email: 'a@example.com', plan: 'Max' });
+  assert.deepEqual(await M.readAuthStatus(seats[1], home, {}, run('{"loggedIn":false,"subscriptionType":"max"}')), { loggedIn: false, email: '' });
+
+  // Windows: the stored directory is a backslash path; the hover text shows it as configured.
+  const win = { id: 'us2', name: 'US2', configDir: 'C:\\Users\\tester\\.claude-us2' };
+  assert.equal(S.configDir(win, 'C:\\Users\\tester', 'win32'), 'C:\\Users\\tester\\.claude-us2');
+  assert.equal(S.seatDisplay(win, { loggedIn: true, loginEmail: 'jinhao.h.sub@example.com', plan: 'Pro' }).title,
+    'jinhao.h.sub@example.com · 套餐 Pro · 席位 us2 · C:\\Users\\tester\\.claude-us2');
+  assert.equal(S.seatDisplay({ ...win, configDir: '~\\.claude-us2' }, { loggedIn: false }).title, '未登录 · 席位 us2 · ~\\.claude-us2');
+});

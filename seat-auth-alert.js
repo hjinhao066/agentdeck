@@ -52,6 +52,8 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, onRec
     const next = { ...(previous || { receipts: state[key]?.receipts || [] }), provider: sample.provider, seatId: seat.id, name: seat.name,
       configDir: seat.configDir, lastAt: sample.at };
     if (sample.provider === 'Claude') next.email = S.cleanEmail(seat.email);
+    // seat.account: the address last seen signed in behind this directory. The alert names the seat by it.
+    if (sample.provider === 'Claude' && S.accountName(seat.account)) next.account = S.accountName(seat.account);
     let changedStatus = false, alert, recovered;
     if (sample.authStatus === 'logged-in') {
       if (next.status === 'logged-out') recovered = { provider: sample.provider, seatId: seat.id, configDir: seat.configDir, alertId: next.alertId };
@@ -66,7 +68,7 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, onRec
         next.status = 'logged-out'; next.statusAt = sample.at; next.outSince ??= sample.at;
         if (next.wasLoggedIn && !next.notified) {
           const command = loginCommand(sample.provider, seat, home, platform);
-          const name = sample.provider === 'Claude' ? `Claude ${seat.name}（${seat.id}）席位` : 'Codex 席位';
+          const name = sample.provider === 'Claude' ? `Claude ${next.account || seat.name}（${seat.id}）席位` : 'Codex 席位';
           alert = { id: id(), provider: sample.provider, seatId: seat.id,
             message: `${name}掉登录了，派到这里的任务会失败或排队。请现在打开终端运行：\n${command}\n${loginHint(sample.provider === 'Claude' && seat.email)}完成网页登录后，AgentDeck 会自动检查恢复；队长请把受影响的任务改派到其他已登录席位。` };
           next.notified = true; next.receipts = [...(next.receipts || []), alert];
@@ -107,7 +109,7 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, onRec
       const entry = key && state[key];
       const reported = kind === 'cancel' ? 'cancellationFailureReported' : 'deliveryFailureReported';
       if (!entry?.alertId || entry[reported]) return false;
-      const name = entry.provider === 'Claude' ? `Claude ${entry.name}（${entry.seatId}）席位` : 'Codex 席位';
+      const name = entry.provider === 'Claude' ? `Claude ${entry.account || entry.name}（${entry.seatId}）席位` : 'Codex 席位';
       const receipt = { id: id(), provider: entry.provider, seatId: entry.seatId,
         message: `${name}掉登录提醒异常：${message.trim().slice(0, 500)}` };
       const saved = { ...state, [key]: { ...entry, [reported]: true, receipts: [...(entry.receipts || []), receipt] } };

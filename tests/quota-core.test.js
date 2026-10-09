@@ -232,7 +232,7 @@ test('configured Claude seats discard shared screen numbers and persisted unboun
   assert.match(cn.detail, /已用尽 ↻/);
   assert.match(cn.detail, /报错会话：cn-captain/);
   assert.doesNotMatch(cn.detail, /剩余 53|剩余 55/);
-  assert.match(Q.text(store, now, seats), /Claude \/ 🇨🇳 CN：已用尽/);
+  assert.match(Q.text(store, now, seats), /Claude \/ 识别中（席位 cn）：已用尽 · 席位：cn；/);
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20 }, now), seatId: 'cn', configDir: '~/.claude', accountBound: true, accountKey: 'cn-account' }, now);
   assert.match(Q.summary(store, 'Claude', now, seats[0]).detail, /5h 80% ↻/);
 });
@@ -348,7 +348,7 @@ test('configured Claude seats discard shared screen numbers and persisted unboun
   assert.match(cn.detail, /已用尽 ↻/);
   assert.match(cn.detail, /报错会话：cn-captain/);
   assert.doesNotMatch(cn.detail, /剩余 53|剩余 55/);
-  assert.match(Q.text(store, now, seats), /Claude \/ 🇨🇳 CN：已用尽/);
+  assert.match(Q.text(store, now, seats), /Claude \/ 识别中（席位 cn）：已用尽 · 席位：cn；/);
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20 }, now), seatId: 'cn', configDir: '~/.claude', accountBound: true, accountKey: 'cn-account' }, now);
   const retained = Q.summary(store, 'Claude', now, seats[0]);
   assert.equal(retained.label, '已用尽');
@@ -960,4 +960,70 @@ test('只有周窗口数据: 5 小时缺失时退回周数字，周剩 16% 和�
   const ok60Auto = Q.quotaFallback(ok60Store, opus, seats, 'cn', now, { explicit: false });
   assert.equal(ok60Auto.action, 'open');
   assert.equal(ok60Auto.reason, 'ok');
+});
+
+// ---- seat rows and 队长's quota text go by the account behind each seat ----
+test('quota rows and text name a seat by its signed-in account and plan; the phone still gets a masked address', () => {
+  const now = Date.parse('2026-10-08T22:00:00Z');
+  // Directory and account do not line up: CN holds the paid account, US2 a Pro one, US nobody.
+  const seats = Q.claudeSeats([
+    { id: 'cn', name: 'CN', icon: '🇨🇳', configDir: '~/.claude', info: { loggedIn: true, loginEmail: 'hjinhao066us@example.com', accountEmail: 'hjinhao066us@example.com', plan: 'Max 20x' } },
+    { id: 'us', name: 'US', icon: '🇺🇸', configDir: '~/.claude-us', info: { loggedIn: false, loginEmail: '', accountEmail: '', plan: '' } },
+    { id: 'us2', name: 'US2', icon: '🇺🇸', configDir: '~/.claude-us2', info: { loggedIn: true, loginEmail: 'jinhao.h.sub@example.com', accountEmail: 'jinhao.h.sub@example.com', plan: 'Pro', secret: 'never-kept' } },
+  ]);
+  assert.deepEqual(Object.keys(seats[2].info).sort(), ['accountEmail', 'loggedIn', 'loginEmail', 'plan']);
+  const store = {};
+  const official = (id, key) => ({ provider: 'Claude', scope: 'claude', official: true, source: Q.CLAUDE_OAUTH_SOURCE, seatId: id, configDir: seats.find((s) => s.id === id).configDir,
+    accountBound: true, accountKey: key, credentialKey: 'cred-' + id, at: now, confidence: '高（官方采样）',
+    windows: [{ key: 'fiveHour', label: '5 小时', remaining: 88, resetAt: now + 3600000 }, { key: 'weekly', label: '每周', remaining: 93, resetAt: now + 4 * 86400000 }] });
+  for (const [id, key, account, plan] of [['cn', 'k-paid', 'hjinhao066us@example.com', 'Max 20x'], ['us2', 'k-sub', 'jinhao.h.sub@example.com', 'Pro']]) {
+    Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: id, at: now, identityOnly: true, configDir: seats.find((s) => s.id === id).configDir, accountKey: key, account, plan, credentialKey: 'cred-' + id }, now);
+    Q.observe(store, official(id, key), now);
+  }
+  assert.equal(store['Claude:cn'].account, 'hjinhao066us@example.com'); assert.equal(store['Claude:cn'].plan, 'Max 20x');
+
+  const paid = Q.summary(store, 'Claude', now, seats[0], 'cn');
+  assert.equal(paid.accountLabel, 'hjinhao066us'); assert.equal(paid.account, 'hjinhao066us@example.com');
+  assert.equal(paid.plan, 'Max 20x'); assert.equal(paid.planMark, 'Max'); assert.equal(paid.seatCode, 'cn');
+  assert.equal(paid.seatTitle, 'hjinhao066us@example.com · 套餐 Max 20x · 席位 cn · ~/.claude');
+  assert.equal(paid.name, 'hjinhao066us · 队长');
+  const sub = Q.summary(store, 'Claude', now, seats[2], 'cn');
+  assert.equal(sub.accountLabel, 'jinhao.h.sub'); assert.equal(sub.plan, 'Pro'); assert.equal(sub.planMark, '');
+  const nobody = Q.summary(store, 'Claude', now, seats[1], 'cn');
+  assert.equal(nobody.accountLabel, '未登录'); assert.equal(nobody.account, ''); assert.equal(nobody.planMark, '');
+  assert.equal(nobody.seatTitle, '未登录 · 席位 us · ~/.claude-us');
+
+  // 队长's `quota`: the account name and the whole address, not masked; the seat only as its code.
+  const text = Q.text(store, now, seats, 'cn');
+  assert.match(text, /^Claude \/ hjinhao066us：88% · 席位：cn；当前队长使用此席位；配置目录：~\/\.claude · 模型：[^·]*；账号：hjinhao066us@example\.com（Max 20x） · 5h 88% /);
+  assert.match(text, /\nClaude \/ 未登录（席位 us）：未知 · 席位：us；配置目录：~\/\.claude-us · 模型：[^·]*；账号：未识别（此席位）/);
+  assert.match(text, /\nClaude \/ jinhao\.h\.sub：88% · 席位：us2；配置目录：~\/\.claude-us2 · 模型：[^·]*；账号：jinhao\.h\.sub@example\.com（Pro）/);
+  assert.doesNotMatch(text, /\*\*\*|🇨🇳|🇺🇸|Claude \/ (?:CN|US)/);
+
+  // A confirmed lost login keeps saying which account it was.
+  Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'us2', configDir: '~/.claude-us2', at: now + 1, authOnly: true, authStatus: 'logged-out', loginCommand: 'CLAUDE_CONFIG_DIR=~/.claude-us2 claude auth login' }, now + 1);
+  const out = Q.summary(store, 'Claude', now + 1, seats[2], 'cn');
+  assert.equal(out.authStatus, 'logged-out'); assert.equal(out.accountLabel, 'jinhao.h.sub'); assert.equal(out.seatCode, 'us2');
+  assert.equal(out.detail, 'Claude / jinhao.h.sub：未登录\n此席位无法继续任务，请重新登录\n席位：us2；配置目录：~/.claude-us2');
+
+  // Without fresh seat info (main process, the first seconds after launch) the remembered account stands in;
+  // nothing remembered is said as such, with the seat code.
+  const plain = Q.claudeSeats([{ id: 'cn', name: 'CN', icon: '🇨🇳', configDir: '~/.claude' }, { id: 'us', name: 'US', icon: '🇺🇸', configDir: '~/.claude-us' }]);
+  assert.equal(plain[0].info, undefined);
+  const remembered = Q.summary(store, 'Claude', now, plain[0]);
+  assert.equal(remembered.accountLabel, 'hjinhao066us'); assert.equal(remembered.plan, 'Max 20x'); assert.equal(remembered.account, 'hjinhao066us@example.com');
+  assert.match(Q.summary(store, 'Claude', now, plain[1]).detail, /^Claude \/ 识别中（席位 us）：/);
+  // A masked address saved by an older version is not a name, and is not shown as one.
+  const legacy = { 'Claude:cn': { ...store['Claude:cn'], account: 'h***@example.com', plan: undefined } };
+  assert.equal(Q.summary(legacy, 'Claude', now, plain[0]).accountLabel, '识别中');
+
+  // The account changes in the same directory: the old account's plan and numbers do not follow it.
+  Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'cn', at: now + 2, identityOnly: true, configDir: '~/.claude', accountKey: 'k-066', account: 'hjinhao066@example.com', plan: 'Pro', credentialKey: 'cred-cn' }, now + 2);
+  assert.equal(store['Claude:cn'].account, 'hjinhao066@example.com'); assert.equal(store['Claude:cn'].plan, 'Pro'); assert.equal(store['Claude:cn'].sample, undefined);
+
+  // The phone page: seat rows unchanged, addresses masked whatever is stored.
+  const rows = Q.mobile(store, now, seats, 'cn');
+  assert.equal(rows.find((r) => r.key === 'Claude:us2').account, 'j***@example.com');
+  assert.equal(rows.find((r) => r.key === 'Claude:cn').account, 'h***@example.com');
+  assert.ok(!JSON.stringify(rows).includes('hjinhao066'));
 });

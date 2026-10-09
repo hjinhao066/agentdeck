@@ -39,12 +39,12 @@ test.afterAll(async () => { if (app) await closeElectron(app); if (profile) fs.r
 test('each Claude seat keeps its own windows and reset times, marks the real Captain seat and survives reload', async () => {
   await agentsReady();
   await expect(seat('us').locator('[data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
-  await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
+  await expect(seat('us')).toHaveAttribute('aria-label', /^us（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'unknown');
   await expect(seat('cn')).toHaveAttribute('data-detail', /7d 无数据 ↻未知/);
 
   await page.evaluate(() => { config.activeClaudeSeatId = 'cn'; renderQuotaBar(); });
-  await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/); // Switching the next seat is not switching the running Captain.
+  await expect(seat('us')).toHaveAttribute('aria-label', /^us（队长）：/); // Switching the next seat is not switching the running Captain.
   // The same shared footer cannot populate the other seat.
   await page.evaluate(() => window.deck.ptyInput('cn-column', 'quota-data\r'));
   await expect.poll(() => page.evaluate(() => terms.get('cn-column')?.lastScreen || '')).toContain('Session: 35%');
@@ -76,7 +76,7 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await page.reload();
   // The US replay is deliberately held; screen readiness is checked after
   // releasing it so this wait cannot deadlock the replay race fixture.
-  await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
+  await expect(seat('us')).toHaveAttribute('aria-label', /^us（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   await expect(seat('us')).toHaveAttribute('data-detail', /us\*\*\*@example.com/);
   const text = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);

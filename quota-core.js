@@ -68,11 +68,20 @@
     }).map((s) => {
       const flag = s.icon || S.normalize().find((seat) => seat.id === s.id)?.icon;
       const name = String(s.name || (flag ? s.id.toUpperCase() : s.id)).slice(0, 80);
-      return { id: s.id, name: flag && !name.includes(flag) ? `${flag} ${name}` : name, configDir: s.configDir.trim() };
+      // info: who is signed in behind this directory right now (seats:list), when the caller has it.
+      const info = s.info && typeof s.info === 'object' ? { ...(typeof s.info.loggedIn === 'boolean' ? { loggedIn: s.info.loggedIn } : {}),
+        loginEmail: S.cleanEmail(s.info.loginEmail), accountEmail: S.cleanEmail(s.info.accountEmail), plan: typeof s.info.plan === 'string' ? s.info.plan.slice(0, 20) : '' } : null;
+      return { id: s.id, name: flag && !name.includes(flag) ? `${flag} ${name}` : name, configDir: s.configDir.trim(), ...(info ? { info } : {}) };
     });
     return seats.length ? seats : [{ id: 'default', name: 'Claude', configDir: '~/.claude' }];
   }
   function seatKey(id) { return id && id !== 'default' ? `Claude:${id}` : 'Claude'; }
+  // A seat goes by the account signed in behind its directory, never by its fixed name.
+  // Without fresh seat info, the account remembered in the store stands in.
+  function seatShown(seat, entry) {
+    if (!seat || seat.id === 'default') return null;
+    return S.seatDisplay(seat, seat.info || { accountEmail: entry?.account, plan: entry?.plan });
+  }
   function seatForColumn(column, seats) {
     if (!column) return null;
     if (column.claudeSeatId) return seats.find((s) => s.id === column.claudeSeatId && (!column.claudeConfigDir || s.configDir === column.claudeConfigDir)) || null;
@@ -311,7 +320,7 @@
     if (officialNotBefore) out.officialNotBefore = officialNotBefore;
 
     out.scope = next.scope;
-    for (const key of ['account', 'accountKey', 'credentialKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
+    for (const key of ['account', 'plan', 'accountKey', 'credentialKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
     if (next.authOnly) {
       if (!['logged-in', 'logged-out'].includes(next.authStatus) || next.at < (out.auth?.at || 0)) return false;
       out.auth = { status: next.authStatus, at: next.at,
@@ -389,12 +398,19 @@
   function summary(store, provider, now = Date.now(), seat = null, captainSeatId = null) {
     const saved = store[seat ? seatKey(seat.id) : provider] || {};
     const entry = saved.scope === SCOPES[provider] && (!seat || !saved.configDir || saved.configDir === seat.configDir) ? saved : {}, sample = entry.sample;
+    const shown = seatShown(seat, entry), seatName = shown ? shown.label : seat ? seat.name : '';
+    // The row's own fields: account name, full address, plan, and the seat code for the hover text.
+    const who = { accountLabel: shown ? shown.label : seat ? seat.name : '', plan: shown?.plan || '', planMark: shown?.mark || '', seatCode: shown?.code || '', seatTitle: shown?.title || '',
+      account: shown?.email || (seat?.info ? '' : entry.account || '') };
+    const seatLine = seat ? `席位：${shown ? shown.code : `${seat.name}（${seat.id}）`}` : '';
+    // Text for 队长: a row without a recognised account still says which seat it is.
+    const head = seat ? 'Claude / ' + (shown && !shown.email ? `${shown.label}（席位 ${shown.code}）` : seatName) : NAMES[provider];
     if (entry.auth?.status === 'logged-out') {
-      const name = seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '';
+      const name = seat ? seatName + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '';
       return { provider, authStatus: 'logged-out', loginCommand: entry.auth.loginCommand || '', state: 'danger', label: '未登录', displayLabel: '未登录', sampleLabel: '', statusText: '未登录',
         fiveHour: null, weekly: null, shortText: '未登录', shortRemaining: null, out: true, recoveryAt: null, sampledAt: entry.auth.at,
-        stale: false, failures: 0, cells: [], account: entry.account || '', source: '登录状态确认', confidence: '已确认未登录', name,
-        detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：未登录\n此席位无法继续任务，请重新登录${seat ? `\n配置目录：${seat.configDir}` : ''}` };
+        stale: false, failures: 0, cells: [], ...who, source: '登录状态确认', confidence: '已确认未登录', name,
+        detail: `${head}：未登录\n此席位无法继续任务，请重新登录${seat ? `\n${shown ? seatLine + '；' : ''}配置目录：${seat.configDir}` : ''}` };
     }
     const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir && sample.at >= (entry.officialNotBefore || 0)) ||
       (sample?.official && sample.seatId === seat.id && sample.credentialKey && sample.credentialKey === entry.credentialKey &&
@@ -422,8 +438,8 @@
       return `${isWeekly ? '7d' : '5h'} ${isBlocked ? '已用尽' : w.remaining === 0 && !w.exhausted ? '<0.1%' : `${w.remaining}%`} ↻${reset ? clock(reset, isWeekly) : w.resetText || '未知'}`;
     };
     const details = windows.map((w) => provider === 'Claude' ? claudeWindow(w) : `${w.label}剩余 ${w.remaining === 0 && !w.exhausted ? '<0.1' : w.remaining}%；重置 ${w.resetAt ? new Date(w.resetAt).toLocaleString() : w.resetText || '未知'}`);
-    details.unshift(`模型：${entry.model || ({ Claude: 'Claude（账号共享额度）', Codex: 'Codex（账号共享额度）', Cursor: 'Grok 4.7', Antigravity: 'Gemini（共享分组）' }[provider])}；账号：${entry.account || (seat ? '未识别（此席位）' : '未识别（本机当前登录）')}`);
-    if (seat) details.unshift(`席位：${seat.name}（${seat.id}）${seat.id === captainSeatId ? '；当前队长使用此席位' : ''}；配置目录：${seat.configDir}`);
+    details.unshift(`模型：${entry.model || ({ Claude: 'Claude（账号共享额度）', Codex: 'Codex（账号共享额度）', Cursor: 'Grok 4.7', Antigravity: 'Gemini（共享分组）' }[provider])}；账号：${who.account ? who.account + (who.plan ? `（${who.plan}）` : '') : seat ? '未识别（此席位）' : '未识别（本机当前登录）'}`);
+    if (seat) details.unshift(`${seatLine}${seat.id === captainSeatId ? '；当前队长使用此席位' : ''}；配置目录：${seat.configDir}`);
     if (provider === 'Claude') for (const [name, short] of [['5 小时', '5h'], ['每周', '7d']]) if (!windows.some((w) => w.label === name)) details.push(`${short} 无数据 ↻未知`);
 
     if (provider === 'Cursor') details.push('仅统计 Grok 4.7；Cursor Models 池百分比暂不可可靠取得');
@@ -463,7 +479,7 @@
     const shortRemaining = fiveHour ?? weekly;
     const expired = sample && trusted && (!fresh || sample.windows?.some((w) => w.resetAt && w.resetAt <= now));
     const shortText = shortRemaining === null ? (out ? '已用尽' : expired ? '过期' : statusText) : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
-    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure ? entry.officialStatus.failures || 1 : 0, cells, account: entry.account || '', source: evidence?.source || '', confidence: confidence || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure ? entry.officialStatus.failures || 1 : 0, cells, ...who, source: evidence?.source || '', confidence: confidence || '', name: seat ? seatName + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${head}：${label}\n${details.join('\n')}` };
   }
   const LAUNCH_WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
   function commandIdentity(command) {

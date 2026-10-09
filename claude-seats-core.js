@@ -23,6 +23,36 @@
     if (want && actual.toLowerCase() !== want.toLowerCase()) return { state: 'mismatch', text: `登成了 ${actual}，应为 ${want}` };
     return { state: 'ok', text: actual };
   }
+  // The name a seat goes by everywhere: the part of its sign-in address before the @.
+  function accountName(email) {
+    const clean = cleanEmail(email);
+    return clean ? clean.slice(0, clean.lastIndexOf('@')) : '';
+  }
+  // The subscription as Claude Code records it: oauthAccount.organizationType with
+  // organizationRateLimitTier, or `claude auth status` subscriptionType. '' when unknown.
+  function planName(type, tier) {
+    const kind = String(type || '').toLowerCase().replace(/^claude_/, '');
+    if (kind === 'max') {
+      const times = String(tier || '').toLowerCase().match(/max_(\d{1,3})x/);
+      return times ? `Max ${times[1]}x` : 'Max';
+    }
+    return { pro: 'Pro', team: 'Team', enterprise: 'Enterprise', free: 'Free' }[kind] || '';
+  }
+  // What every seat list shows for a seat: the account behind its directory, never the
+  // fixed seat name. The seat code stays in the hover text and in `--seat`.
+  // info: seats:list row, or { accountEmail, plan } remembered from the last run (no loggedIn yet).
+  function seatDisplay(seat, info) {
+    const email = cleanEmail(info?.loginEmail) || cleanEmail(info?.accountEmail);
+    const name = accountName(email);
+    const known = typeof info?.loggedIn === 'boolean';
+    const label = name || (!known ? '识别中' : info.loggedIn ? '账号未识别' : '未登录');
+    const plan = name && typeof info?.plan === 'string' ? info.plan.slice(0, 20) : '';
+    // The seat's own name without its icon (the quota rows carry "🇺🇸 US2", the settings "US2").
+    const id = String(seat?.id || ''), named = String(seat?.name || '').replace(/^[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D\s]+/u, '').trim();
+    const code = named && named.toLowerCase() !== id.toLowerCase() ? `${named}（${id}）` : id;
+    const title = [email || label, plan && '套餐 ' + plan, '席位 ' + code, seat?.configDir].filter(Boolean).join(' · ');
+    return { label, email, plan, mark: /^Max\b/.test(plan) ? 'Max' : '', code, title };
+  }
   function codexCommand(effort = 'high') {
     return `codex --model gpt-6.1-sol --no-daemon -c model_reasoning_effort=${effort === 'xhigh' ? 'xhigh' : 'high'} --dangerously-bypass-approvals-and-sandbox`;
   }
@@ -107,6 +137,6 @@
     }
     return windows.length ? { at: now, source: 'Claude 会话状态行', windows } : null;
   }
-  return { normalize, cleanEmail, accountCheck, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
+  return { normalize, cleanEmail, accountCheck, accountName, planName, seatDisplay, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
 
 });

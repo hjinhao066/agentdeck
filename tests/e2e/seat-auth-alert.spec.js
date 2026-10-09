@@ -48,7 +48,7 @@ test('confirmed logout sends one critical Bark, red 未登录 and a Captain ques
   expect(await alerts()).toHaveLength(0); await expect(row).not.toHaveAttribute('aria-label', /未登录/);
   await observe([['logged-out', base + 120000], ['logged-out', base + 130000]]);
   await expect.poll(async () => (await alerts()).length).toBe(1);
-  expect((await alerts())[0]).toMatchObject({ level: 'critical', volume: 4, body: expect.stringMatching(/US（us）席位掉登录.*任务会失败或排队/s) });
+  expect((await alerts())[0]).toMatchObject({ level: 'critical', volume: 4, body: expect.stringMatching(/Claude us（us）席位掉登录.*任务会失败或排队/s) });   // named by the account (us@example.test) that was signed in
   const command = require('../../seat-auth-alert').loginCommand('Claude', { configDir: '~/.custom-us-seat' }, os.homedir(), process.platform);
   expect((await alerts())[0].body).toContain(command);
   await expect(row).toHaveAttribute('data-state', 'danger');
