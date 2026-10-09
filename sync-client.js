@@ -119,6 +119,7 @@ class FleetClient {
     this.timer = null;
     this.dirty = false;
     this.writtenHistory = new Map();
+    this.historyStamps = new Map();
     // Transcripts an older build left in the state file, kept one file each
     // until the hub has them. Ones that could not be written stay in the state file.
     this.outboxDir = path.join(path.dirname(stateFile), path.basename(stateFile, '.json') + '-history-outbox');
@@ -350,14 +351,35 @@ class FleetClient {
     }
     return failure;
   }
-  async _writeHistory(records) {
+  // A transcript the hub names by hash and time: the local copy stands while both
+  // match; it is fetched again only when they changed.
+  async _fetchedRecord(token, head, name) {
+    const stamp = head.contentHash + '|' + (head.updatedAt || '');
+    if (this.historyStamps.get(name) === stamp) return null;
+    try {
+      const local = JSON.parse(fs.readFileSync(path.join(this.historyDir, name), 'utf8'));
+      if (local.contentHash + '|' + (local.updatedAt || '') === stamp) { this.historyStamps.set(name, stamp); return null; }
+    } catch (_) {}
+    const query = new URLSearchParams({ sessionId: head.sessionId, deviceId: head.deviceId });
+    const record = (await this._send(token, 'GET', '/v1/history?' + query)).body.record;
+    return record && record.sessionId === head.sessionId && record.deviceId === head.deviceId ? record : null;
+  }
+  async _writeHistory(records, token) {
     fs.mkdirSync(this.historyDir, { recursive: true, mode: 0o700 });
     const keep = new Set();
     const summaries = [];
-    for (const record of records) {
+    for (let record of records) {
       if (!record || !isSessionId(record.sessionId) || !isDeviceId(record.deviceId)) continue;
       const name = record.sessionId + '--' + record.deviceId + '.json';
       keep.add(name);
+      const head = record;
+      if (!Array.isArray(head.turns)) {
+        record = await this._fetchedRecord(token, head, name);
+        if (!record) {
+          summaries.push({ sessionId: head.sessionId, deviceId: head.deviceId, summary: clip(head.summary, 200), updatedAt: head.updatedAt || null, startedAt: head.startedAt || null, endedAt: head.endedAt || null });
+          continue;
+        }
+      }
       // Each round brings every transcript again; only changed ones are written.
       const text = JSON.stringify(stripSecrets(record)) + '\n';
       const hash = crypto.createHash('sha256').update(text).digest('hex');
@@ -369,15 +391,18 @@ class FleetClient {
         this.writtenHistory.set(name, hash);
         if (current !== text) await yieldLoop();
       }
+      if (head !== record) this.historyStamps.set(name, head.contentHash + '|' + (head.updatedAt || ''));
       summaries.push({ sessionId: record.sessionId, deviceId: record.deviceId, summary: clip(record.summary, 200), updatedAt: record.updatedAt || null, startedAt: record.startedAt || null, endedAt: record.endedAt || null });
     }
     for (const name of fs.readdirSync(this.historyDir)) {
-      if (!keep.has(name) && name.endsWith('.json')) { fs.unlinkSync(path.join(this.historyDir, name)); this.writtenHistory.delete(name); }
+      if (!keep.has(name) && name.endsWith('.json')) { fs.unlinkSync(path.join(this.historyDir, name)); this.writtenHistory.delete(name); this.historyStamps.delete(name); }
     }
     if (!same(this.history, summaries)) { this.history = summaries; this.dirty = true; }
   }
   async _pull(token) {
-    const result = await this._send(token, 'GET', '/v1/snapshot');
+    // Transcripts come named by hash; only changed ones are fetched (an older hub
+    // ignores the query and sends them whole, which is read as before).
+    const result = await this._send(token, 'GET', '/v1/snapshot?history=hash');
     const snap = result.body || {};
     this.devices = Array.isArray(snap.devices) ? snap.devices : [];
     // Local writers (including the board heartbeat) can edit while HTTP waits.
@@ -396,7 +421,7 @@ class FleetClient {
       if (!this.taskOutbox.has(card.id)) this._setBase(card.id, card);
     }
     await yieldLoop();
-    await this._writeHistory(Array.isArray(snap.history) ? snap.history : []);
+    await this._writeHistory(Array.isArray(snap.history) ? snap.history : [], token);
   }
   async syncOnce() {
     const run = (this.tail || Promise.resolve()).then(() => this._syncBody());

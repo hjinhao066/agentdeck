@@ -69,14 +69,31 @@ function stripSecrets(value, depth = 0) {
   return out;
 }
 
-function turnExtends(next, previous) {
+// moving: a dispatch card's state (doing, review, done) is updated in place as its
+// worker runs. That is the same turn moving on, not a divergent save to keep a copy of.
+function turnExtends(next, previous, moving = false) {
   if (!next || !previous) return same(next, previous);
   return Object.entries(previous).every(([key, value]) => {
     if (key === 'reply' && typeof value === 'string' && typeof next[key] === 'string') return next[key].startsWith(value);
     if (key === 'done' && value === false && next[key] === true) return true;
     if (key === 'end' && value == null) return true;
+    if (moving && key === 'task') return true;
     return same(next[key], value);
   });
+}
+function savedOver(previous, next) {
+  const turns = Array.isArray(previous && previous.turns) ? previous.turns : [];
+  const later = Array.isArray(next && next.turns) ? next.turns : [];
+  return turns.every((turn, i) => turnExtends(later[i], turn, true));
+}
+// Copies an older hub kept each time only card states moved: each is dropped when
+// the version saved after it carries it on. A version a later save rewrote stays.
+function withoutMovedCopies(record) {
+  const alternatives = Array.isArray(record.alternatives) ? record.alternatives : [];
+  if (!alternatives.length) return record;
+  const chain = [...alternatives, record];
+  const kept = alternatives.filter((alt, i) => !savedOver(alt, chain[i + 1]));
+  return kept.length === alternatives.length ? record : { ...record, alternatives: kept };
 }
 
 // The answer kept for a replayed transcript upload names the record, it does not
@@ -164,6 +181,7 @@ class SharedStore {
       if (record && typeof record === 'object') saved.body = historyReceipt(record, saved.body.duplicate);
       if (typeof saved.at !== 'string') saved.at = at;
     }
+    for (const [key, record] of Object.entries(data.history)) if (record && typeof record === 'object') data.history[key] = withoutMovedCopies(record);
     data.seq = Number.isInteger(data.seq) ? data.seq : 0;
     return data;
   }
@@ -312,7 +330,7 @@ class SharedStore {
     };
     if (existing) {
       record.alternatives = existing.alternatives || [];
-      if (!existing.turns.every((turn, i) => turnExtends(cleanTurns[i], turn))) {
+      if (!existing.turns.every((turn, i) => turnExtends(cleanTurns[i], turn, true))) {
         const { alternatives, ...previous } = existing;
         record.alternatives = [...record.alternatives, previous];
       }
@@ -322,13 +340,25 @@ class SharedStore {
     this._save();
     return saved;
   }
-  snapshot() {
+  // hashesOnly: each transcript is named by its hash and time, without its turns;
+  // a client fetches only the ones that changed (record()) instead of every
+  // transcript every round.
+  snapshot({ hashesOnly = false } = {}) {
     return {
       cursor: this.data.seq,
       devices: this.devices(),
       cards: Object.values(this.data.cards).map(publicCard),
-      history: Object.values(this.data.history).map((record) => clone(record)),
+      history: Object.values(this.data.history).map((record) => {
+        if (!hashesOnly) return clone(record);
+        const { turns, alternatives, ...head } = record;
+        return clone(head);
+      }),
     };
+  }
+  record(sessionId, deviceId) {
+    if (!isSessionId(sessionId) || !isDeviceId(deviceId)) return null;
+    const record = this.data.history[sessionId + '@' + deviceId];
+    return record ? clone(record) : null;
   }
 }
 

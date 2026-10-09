@@ -1402,7 +1402,13 @@ file written by an older hub has its whole-record receipts shrunk when it loads.
 Node can read, on 2026-10-09.)
 All conflicting alternatives and captain turns are retained. Older transcript
 prefixes cannot shorten newer history; divergent saves retain the prior version
-in the history record's `alternatives`. Credential-shaped fields are stripped,
+in the history record's `alternatives`. A dispatch card's state moving on inside
+a turn (its `task` field) is the same turn going on, not a divergent save, so no
+copy is kept; copies an older hub kept that way are dropped when it loads. A
+round asks for transcripts by hash (`/v1/snapshot?history=hash`) and fetches
+only the ones whose hash or time changed (`/v1/history`); an older client still
+gets whole transcripts, and every answer over 1 KB is gzipped for a client that
+asks (Node's fetch does). Credential-shaped fields are stripped,
 but transcript prose is preserved, so sync only to a trusted private service.
 Requests time out after 10 seconds and retry on subsequent sync rounds.
 If the hub loses a card or rolls back behind a pending edit's revision, the

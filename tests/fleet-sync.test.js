@@ -210,7 +210,7 @@ test('edits during a task POST or snapshot pull survive and synchronize on the n
     if (stage === 'post' && url.endsWith('/v1/tasks')) {
       stage = 'pull';
       edit(mac, { title: 'second' });
-    } else if (stage === 'pull' && url.endsWith('/v1/snapshot')) {
+    } else if (stage === 'pull' && new URL(url).pathname === '/v1/snapshot') {
       stage = 'done';
       // A separate local writer does not go through the renderer's noteResult.
       const card = mac.tasks.list()[0];

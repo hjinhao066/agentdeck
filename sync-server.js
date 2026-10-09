@@ -7,6 +7,7 @@ const http = require('http');
 const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
+const zlib = require('zlib');
 const { SharedStore } = require('./shared-store');
 
 const MAX_BODY = 2_000_000;
@@ -49,12 +50,21 @@ function startSyncServer({ store, token, host = '127.0.0.1', port = 0, log = () 
   if (typeof token !== 'string' || !token.trim() || token.length > 4096) throw new Error('Sync server requires a token.');
   const server = http.createServer(async (req, res) => {
     let pathname = '/';
-    try { pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname; } catch (_) {}
+    let query = new URLSearchParams();
+    try { const url = new URL(req.url || '/', 'http://127.0.0.1'); pathname = url.pathname; query = url.searchParams; } catch (_) {}
     const finish = (status, body) => {
       if (res.headersSent || res.writableEnded) return;
       try { log(`${req.method} ${pathname} ${status}`); } catch (_) {}
-      const text = JSON.stringify(body);
-      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(text) });
+      let text = Buffer.from(JSON.stringify(body));
+      const headers = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', vary: 'accept-encoding' };
+      // Clients of every version fetch with Node's fetch, which asks for gzip and
+      // unpacks it: whole transcripts cost a fraction of their size on the wire.
+      if (text.length > 1024 && /\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''))) {
+        text = zlib.gzipSync(text);
+        headers['content-encoding'] = 'gzip';
+      }
+      headers['content-length'] = text.length;
+      res.writeHead(status, headers);
       res.end(text);
     };
     try {
@@ -63,7 +73,11 @@ function startSyncServer({ store, token, host = '127.0.0.1', port = 0, log = () 
       const match = /^Bearer (\S+)$/.exec(header);
       if (!match || !tokensEqual(match[1], token)) return finish(401, { error: 'unauthorized' });
       if (req.method === 'GET' && pathname === '/v1/devices') return finish(200, { devices: store.devices() });
-      if (req.method === 'GET' && pathname === '/v1/snapshot') return finish(200, store.snapshot());
+      if (req.method === 'GET' && pathname === '/v1/snapshot') return finish(200, store.snapshot({ hashesOnly: query.get('history') === 'hash' }));
+      if (req.method === 'GET' && pathname === '/v1/history') {
+        const record = store.record(query.get('sessionId'), query.get('deviceId'));
+        return record ? finish(200, { record }) : finish(404, { error: 'not-found' });
+      }
       if (req.method === 'POST' && pathname === '/v1/heartbeat') return finish(200, store.heartbeat(await readBody(req)));
       if (req.method === 'POST' && pathname === '/v1/tasks') {
         const saved = store.pushTask(await readBody(req));
