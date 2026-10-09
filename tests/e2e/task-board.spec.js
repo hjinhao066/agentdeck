@@ -168,8 +168,10 @@ test('process and quota events update data automatically and a stale execution c
   expect((await card(crash.id)).latest_receipt).toContain('exit 7');
   const auth = await add('Login failure exits before status tick'); const a = await worker(auth.id);
   // The agent prints the error through its PTY: text written only into the page's terminal is wiped by ConPTY's next repaint on Windows.
+  // (once it has answered the task: a line typed while it still gathers the task's lines joins that task)
+  await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term, 40).replace(/\s+/g, ''), a.session), { timeout: 15000 }).toContain('GOTRunthissingletesttask');
   await page.evaluate((id) => window.deck.ptyInput(id, 'print auth error\r'), a.session);
-  await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term, 40), a.session)).toContain('API Error: 401 Unauthorized');
+  await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term, 40), a.session), { timeout: 15000 }).toContain('API Error: 401 Unauthorized');
   await command(['session-exit', '--code', '1'], a.env);
   await expect.poll(async () => (await card(auth.id)).flag).toBe('quota'); expect((await card(auth.id)).resource_failure).toBe('auth');
   expect((await card(auth.id)).consecutive_failures).toBe(0);
