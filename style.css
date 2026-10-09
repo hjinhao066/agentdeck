@@ -2458,8 +2458,10 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   --project-hue: 228;                     /* the legend's lines; every project sets its own */
   --cm-space: #0f0f12;                    /* the canvas */
   --cm-grain: rgba(255, 255, 255, .085);  /* its dot grid */
-  --cm-zone: #131317;                     /* a project's frame: a sheet laid on the grid */
-  --cm-zone-rim: rgba(255, 255, 255, .07);
+  --cm-zone: #131317;                     /* a project's frame: a sheet laid on the grid, */
+  --cm-zone-rim: #25252c;
+  --cm-zone-tint: 4%;                     /* taking this much of its project's colour */
+  --cm-zone-edge: 24%;                    /* and this much in its hairline */
   --cm-pane: #151519;                     /* tray, controls, popover */
   --cm-card: #1a1a1f;
   --cm-card-hi: #1f1f25;
@@ -2496,7 +2498,9 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   --cm-space: #f3f3f5;
   --cm-grain: rgba(26, 26, 38, .13);
   --cm-zone: #f9f9fa;
-  --cm-zone-rim: rgba(20, 20, 34, .075);
+  --cm-zone-rim: #e4e4ea;
+  --cm-zone-tint: 2.5%;
+  --cm-zone-edge: 28%;
   --cm-pane: #ffffff;
   --cm-card: #ffffff;
   --cm-card-hi: #ffffff;
@@ -2577,8 +2581,9 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--project-color) 20%, transparent);
 }
 
-/* Project: a quiet zone on the grid, a hairline round it, its colour only in its swatch, its line
-   and its stops. The zone sits under the wiring; the frame with the title strip sits over it. The
+/* Project: a quiet sheet on the grid, faintly of its project's colour, with a hairline of that colour
+   round it; the colour proper is in its swatch, its line and its stops. The sheet sits under the
+   wiring; the frame with the title strip sits over it. The
    title strip has two lines: the name (and the fold arrow on the right), then the tally; the
    project's line comes down the left gutter beside them and never crosses them. */
 .cm-pane, .cm-project {
@@ -2587,11 +2592,10 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 }
 .cm-pane {
   pointer-events: none;
-  background-color: var(--cm-zone);
-  background-image: linear-gradient(180deg, hsl(var(--project-hue) 70% 62% / 0.04), transparent 64px);
-  border: 1px solid var(--cm-zone-rim);
+  background-color: color-mix(in srgb, var(--project-color) var(--cm-zone-tint), var(--cm-zone));
+  border: 1px solid color-mix(in srgb, var(--project-color) var(--cm-zone-edge), var(--cm-zone-rim));
 }
-:root[data-theme="light"] .cm-pane { background-image: none; box-shadow: 0 1px 2px rgba(24, 24, 40, .03); }
+:root[data-theme="light"] .cm-pane { box-shadow: 0 1px 2px rgba(24, 24, 40, .03); }
 .cm-project { pointer-events: auto; touch-action: none; cursor: grab; background: transparent; }
 .cm-projects { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .cm-project-head {

@@ -264,7 +264,7 @@ test('智能一页 is the default and follows the window; a first drag leaves it
   await expect(fit).toHaveAttribute('data-state', 'auto');
   await expect(fit).toHaveAttribute('aria-label', /^智能一页：已开启/);
   // the dot grid under the map is the map's own: it scales and moves with the view
-  const grid = () => page.evaluate(() => { const cs = getComputedStyle(document.querySelector('.cm-viewport')), v = CrewMap.view(); return [parseFloat(cs.backgroundSize) / v.scale, parseFloat(cs.backgroundPositionX) - v.x, parseFloat(cs.backgroundPositionY) - v.y].map((n) => Math.round(n * 100) / 100); });
+  const grid = () => page.evaluate(() => { const cs = getComputedStyle(document.querySelector('.cm-viewport')), v = CrewMap.view(); return [parseFloat(cs.backgroundSize) / v.scale, parseFloat(cs.backgroundPositionX) - v.x, parseFloat(cs.backgroundPositionY) - v.y].map((n) => Math.round(n * 100) / 100 || 0); });
   expect(await grid()).toEqual([28, 0, 0]);
   await page.locator('[data-cm="in"]').click(); await settled();
   expect(await grid()).toEqual([28, 0, 0]);

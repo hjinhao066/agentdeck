@@ -154,15 +154,24 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
   expect(base.card.w6.y, 'two rows').toBeGreaterThan(base.card.w0.bottom);
   expect(base.card.w6.bottom).toBeGreaterThan(base.vp.bottom);
   // Size the window so the edge would land 5px under the first row (1.1.8 left a row 4.4px
-  // above the tray), then 5px inside it: neither may stay flush against the tray.
-  for (const [nudge, check] of [[5, (gap) => gap >= 16 * 0.7 - 0.5], [-5, (gap) => gap <= -24 * 0.7 + 0.5]]) {
-    await open(1280, 560 - Math.round(base.vp.bottom - (base.card.w0.bottom + nudge)), 'dark'); await settled();
-    const g = await read(), gap = g.vp.bottom - g.card.w0.bottom;
+  // above the tray), then 5px inside it, then every 4px from 32px above it to 32px below: no card
+  // may stay flush against the tray, whichever way the map settles (whole with 16px to spare, or
+  // plainly cut by 24px or more). (Where the map settles depends on every row near the edge, not
+  // only the first: at 560 another row may already have moved it.)
+  const flush = (gap) => gap < 16 * 0.7 - 0.5 && gap > -24 * 0.7 + 0.5;
+  const height = (nudge) => 560 - Math.round(base.vp.bottom - (base.card.w0.bottom + nudge));
+  const seen = { whole: 0, cut: 0 };
+  for (const h of new Set([height(5), height(-5), ...Array.from({ length: 17 }, (_, i) => height(-32 + i * 4))])) {
+    await open(1280, h, 'dark'); await settled();
+    const g = await read();
     expect(g.scale).toBeCloseTo(0.7, 5);
-    expect(check(gap), `first row ends ${gap.toFixed(1)}px above the tray`).toBe(true);
+    for (const [id, c] of Object.entries(g.card)) { const gap = g.vp.bottom - c.bottom; expect(flush(gap), `${h}: ${id} ends ${gap.toFixed(1)}px above the tray`).toBe(false); }
+    const gap = g.vp.bottom - g.card.w0.bottom;
+    if (gap >= 0) seen.whole++; else seen.cut++;
     expect(g.cap.y, '队长 stays whole').toBeGreaterThanOrEqual(g.vp.y + 8 - 0.5);
     expect(g.tray.y).toBeGreaterThanOrEqual(g.vp.bottom - 0.5);
   }
+  expect(seen.whole && seen.cut, 'the first row was seen both whole and cut').toBeTruthy();
   // scrolled to the end, the last card and its project's frame rest above the tray with the fit's margin
   await open(1280, 560, 'dark'); await settled();
   const edge = 8 + 16 * 0.7;
