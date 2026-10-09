@@ -87,7 +87,9 @@ async function launch() {
 }
 test.afterEach(async () => {
   if (application) await closeElectron(application);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  // A force-closed Electron's helpers can still be writing into the profile for a few seconds on a busy
+  // machine: a temporary folder left behind is reported, it does not fail a test that passed.
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
   application = null;
 });
 
