@@ -25,11 +25,15 @@
   const validId = (id) => typeof id === 'string' && ID_RE.test(id);
 
   // Terminal controls/settings are not progress, even without a ruled input box.
-  const ACTIVITY_NOISE = /for agents|for shortcuts|bypass permissions|shift\+tab|esc to (?:interrupt|cancel)|press (?:up|esc|enter)|ctrl\+[a-z]|auto-accept|context left|⏵⏵|^Thinking:\s*(?:low|medium|high|xhigh|max)\b|^(?:Context|Session|Model|Weekly Reset):|^(?:Claude Code|OpenAI Codex)\s*$/i;
+  const ACTIVITY_NOISE = /for agents|for shortcuts|bypass permissions|shift\+tab|esc to (?:interrupt|cancel)|press (?:up|esc|enter)|ctrl\+[a-z]|auto-accept|context left|⏵⏵|^Thinking:\s*(?:low|medium|high|xhigh|max)\b|^(?:Context|Session|Model|Weekly Reset):|^(?:Claude Code|OpenAI Codex)(?:\s+\(?v?\d[\w.-]*\)?)?\s*$/i;
+  // Nor is a CLI's own update notice, or AgentDeck's own words echoed back from a prompt it typed
+  // (a restart's 重发 / 真续接 note and the receipt contract under every dispatched task).
+  const UPDATE_NOTICE = /\bupdate available\b|\bbrew upgrade\b|\bnpm (?:i|install) (?:-g|--global)\b|\bauto-?update failed\b|\bclaude doctor\b|release notes:\s*https?:/i;
+  const AGENTDECK_ECHO = /^(?:重发|真续接|续接失败)：|^下面重发卡片任务|不要当成新派的另一张卡|^AgentDeck (?:刚重启|即将重启)|^(?:卡片任务|最后回执|重启前还没送达的指令)：|^这是同一次续接的再次送达|（AgentDeck 约定）|"\$AGENTDECK_BOARD_CLI"|\$env:AGENTDECK_BOARD_CLI|AGENTDECK_ 开头的变量|改用仓库里的 board-cli|AgentDeck 提供的 board-cli|回执必须通过命令提交|回执里不要贴文件正文/;
   function activityLine(lines) {
     for (let i = lines.length - 1; i >= 0; i--) {
       const text = lines[i].trim();
-      if (!text || ACTIVITY_NOISE.test(text) || /^[>❯›]/.test(text) ||
+      if (!text || ACTIVITY_NOISE.test(text) || UPDATE_NOTICE.test(text) || AGENTDECK_ECHO.test(text) || /^[>❯›]/.test(text) ||
           /^[\s│⎿─━╌═╭╮╰╯┌┐└┘\-—·.]*$/.test(text) ||
           /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]\s*$/.test(text)) continue;
       return text.length > 60 ? text.slice(0, 59) + '…' : text;

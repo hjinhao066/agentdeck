@@ -4240,6 +4240,7 @@ battery.every('statusTick', () => {
     // the bounded reply tail can reach into old scrollback after a TUI clear.
     const cursorScreen = /\bcursor-agent\b/i.test(cmd || '') ? liveText : text;
     entry.lastScreen = cursorScreen;
+    entry.liveScreen = liveText;   // the live screen with wrapped rows joined back: the crew map's line of news reads whole lines
     if (entry.alive) {
       const isMainCol = !!columns.find((c) => c.id === id)?.isMain;
       let st = classify(liveText, entry, cmd, isMainCol);

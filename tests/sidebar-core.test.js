@@ -116,7 +116,7 @@ test('activity subtitles discard TUI controls and keep actual progress', () => {
   const activity = (text) => S.activityLine(C.cutInputBox(text.split('\n')));
   const controls = ['← for agents · ? for shortcuts ⚠…', 'Thinking: xhigh',
     'esc to interrupt', '⏵⏵ bypass permissions on (shift+tab to cycle)',
-    'Context: 23% | Session: 26.0%', 'Model: GPT-6.1 Sol', 'Claude Code'];
+    'Context: 23% | Session: 26.0%', 'Model: GPT-6.1 Sol', 'Claude Code', 'Claude Code v2.1.0', 'OpenAI Codex (v0.160.0)'];
   for (const hint of controls) {
     assert.equal(activity(hint), '', hint);
     assert.equal(activity('正在跑侧边栏回归测试\n' + hint), '正在跑侧边栏回归测试', hint);
@@ -126,6 +126,25 @@ test('activity subtitles discard TUI controls and keep actual progress', () => {
   assert.equal(activity('Thinking: how to preserve the progress line'), 'Thinking: how to preserve the progress line');
   assert.equal(activity('Proceed with the change? (y/n)'), 'Proceed with the change? (y/n)');
   assert.equal(activity('✻ Doing…\nPress up to edit queued messages'), '✻ Doing…');
+});
+
+test('activity subtitles skip a CLI update notice and AgentDeck\'s own words echoed back from a prompt it typed', () => {
+  const C = require('../chat-core');
+  const activity = (text) => S.activityLine(C.cutInputBox(text.split('\n')));
+  const noise = ['  Update available! Run: brew upgrade claude-code', '✗ Auto-update failed · Try claude doctor or npm i -g @anthropic-ai/claude-code',
+    '✨⬆️ Update available! 0.46.0 -> 0.47.0', 'Run npm install -g @openai/codex@latest to update.',
+    '重发：Claude 无法续上原对话，这是新会话。', '下面重发卡片任务和最后回执，不要当成新派的另一张卡。', '真续接：Claude 已用原会话号恢复同一条对话，接着干，不要另开任务。',
+    'AgentDeck 刚重启。从停下的地方接着干。停在安全点不要用 complete；那会把卡片标成已完成。', '卡片任务：任务看板星图视觉', '最后回执：（没有回执）',
+    '（AgentDeck 约定）这是队长派给你的活：直接干完，不要停下来等用户确认。', '做完运行：node "$AGENTDECK_BOARD_CLI" complete --result "一到三句话结果"',
+    '提交回执的那条命令不要 unset、覆盖或清掉 AGENTDECK_ 开头的变量，也不要改用仓库里的 board-cli.js。', '回执里不要贴文件正文。'];
+  for (const line of noise) {
+    assert.equal(activity(line), '', line);
+    assert.equal(activity('⏺ 正在跑端到端测试（3/8 组）\n' + line), '⏺ 正在跑端到端测试（3/8 组）', line);
+  }
+  // work on those very files is still progress
+  assert.equal(activity('⏺ Update(board-cli.js)'), '⏺ Update(board-cli.js)');
+  assert.equal(activity('⏺ Bash(echo $AGENTDECK_COL_ID)'), '⏺ Bash(echo $AGENTDECK_COL_ID)');
+  assert.equal(activity('⏺ 重发逻辑改好了'), '⏺ 重发逻辑改好了');
 });
 
 
