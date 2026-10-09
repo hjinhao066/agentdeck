@@ -1034,11 +1034,11 @@ npm run dist:mac
 - **发版**（小版本打包前）：跑 `npm test` 和 `npm run test:smoke`。冒烟复用现有用例，用 Playwright 标签 `@smoke` 标出，不另抄一份测试。命令是 `playwright test --grep @smoke --workers=1`，单 worker，目标 5 分钟内。覆盖：应用能启动并显示主界面；队长用 board-cli `new` / `tell` 派活且队员收到；队员回执回到队长；会话归档后能恢复；终端能显示输出；额度区能显示；任务看板能打开。
 - **全量**：`npm run test:e2e` 夜里跑，或换一台机器跑。冒烟通过不能代替全量。
 
-**Mac 压力下的 E2E 分流：** 跑 E2E 时用 `node scripts/e2e-auto.js tests/e2e/spec.js [playwright args]`，自动判断：不是 Mac 专属的 spec 且 Windows 在线时，派到 Windows；否则用本机排队锁 `e2e-queue.js`。这样 Mac 只跑必须在 Mac 上的用例，减轻负担。单独查队列：`node scripts/e2e-auto.js --status`。
+**Mac 压力下的 E2E 分流：** 跑 E2E 时用 `node scripts/e2e-auto.js tests/e2e/a.spec.js [b.spec.js] [-- playwright 参数]`：带 Windows 平台跳过标记（`test.skip(process.platform === 'win32', …)`）的 spec 走本机排队锁；其余 spec 在 Windows 在线时合成一组、经 ssh 在后台（非桌面会话，不弹窗）派到 Windows 跑，ssh 或远端准备失败时自动改走本机排队锁。Windows 测的是当前工作区（没提交的改动也会带过去）；测试在 Windows 上真失败就是失败，不会悄悄换 Mac 重跑，只在 Windows 才不通过的 spec 要加上面的跳过标记。看本机队列：`node scripts/e2e-auto.js --status`。
 
-**Windows 后台执行：** 远程 E2E 通过 SSH 运行在 Windows 隔离会话中（已与桌面分离），不会在用户屏幕上创建窗口。进程优先级设为 BelowNormal，避免占用用户前台工作的 CPU。验证方法：`powershell -ExecutionPolicy Bypass -File scripts/verify-windows-background.ps1`（在 Windows 上另开 PowerShell 运行，可实时检测新窗口和进程优先级）。
+**Windows 后台执行：** Windows 上每组任务有自己的检出目录（`agentdeck-e2e-win\checkouts\<运行号>`，共用一份 node_modules），所以 `AGENTDECK_E2E_SLOTS` 大于 1 时几组可以同时跑，互不覆盖。进程优先级没有调低。验证没有窗口跑到桌面的办法：`scripts/verify-windows-background.ps1`（ssh 登录在会话 0，看不到桌面会话的窗口，所以证据是「所有测试进程都在会话 0、桌面会话里没有新的测试进程」）。
 
-**性能基准测试：** 对比 Mac 队列 vs Windows 后台的执行时间和吞吐量，`node scripts/perf-e2e-benchmark.js tests/e2e/chat.spec.js tests/e2e/quota-warmup.spec.js` 会在两个平台各跑一次指定的 spec 并生成提速倍数表（格式：spec 名，Mac 秒数，Windows 秒数，加速倍数）。总耗时 30-60 分钟。
+**性能基准：** `node scripts/perf-e2e-benchmark.js --mode win --groups N --sha <提交> --out <目录> <spec…>` 与 `--mode mac …` 对同一提交实测，只输出实测值。实测结果和建议的并发数见 `docs/e2e-windows-background.md`。
 
 冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 

@@ -17,6 +17,9 @@ const { execFileSync, spawn } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const BASE = 'agentdeck-e2e-win'; // relative to the Windows home
+// The shared repository + node_modules. Not "work": dispatchers from older branches still install
+// into and clean "work" while their jobs run, which wrecks any job sharing that folder.
+const HUB = 'hub';
 const TOOLS = ['e2e-queue.js', 'e2e-queue-core.js', 'e2e-remote-job.js'];
 const say = (message) => console.log(`[e2e-remote-win] ${message}`);
 
@@ -59,10 +62,17 @@ function queueCommand(home, runId, o) {
   return `node ${tools}\\e2e-queue.js --queue-wait-timeout ${o.waitMinutes} --queue-run-timeout ${o.runMinutes} -- node ${tools}\\e2e-remote-job.js ${base}\\inbox\\${runId}\\job.json`;
 }
 
+const knownBasesCommand = (base) => `git -C %USERPROFILE%\\${base}\\${HUB} for-each-ref refs/e2e --format=%(objectname)`;
+
+function makeJob({ runId, sha, ref, winBase, needBundle, specs, playwrightArgs, install }) {
+  return { runId, sha, ref, bundle: needBundle ? `${winBase}\\inbox\\${runId}\\commit.bundle` : null,
+    workDir: `${winBase}\\${HUB}`, runDir: `${winBase}\\runs\\${runId}`, specs, playwrightArgs, install };
+}
+
 // Commits Windows already has, so the bundle only carries what is new.
 function knownBases(host) {
   let listing = '';
-  try { listing = ssh(host, `git -C %USERPROFILE%\\${BASE}\\work for-each-ref refs/e2e --format=%(objectname)`, { stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return []; }
+  try { listing = ssh(host, knownBasesCommand(BASE), { stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return []; }
   return listing.split(/\r?\n/).map((s) => s.trim()).filter((s) => /^[0-9a-f]{40}$/.test(s))
     .filter((sha) => { try { git('cat-file', '-e', `${sha}^{commit}`); return true; } catch { return false; } });
 }
@@ -99,9 +109,7 @@ async function main(argv = process.argv.slice(2)) {
     const known = knownBases(o.host);
     const needBundle = !known.includes(sha); // Windows may already hold this exact commit
     if (needBundle) git('bundle', 'create', bundle, tempRef, ...known.map((b) => `^${b}`));
-    const job = { runId, sha, ref: tempRef, bundle: needBundle ? `${winBase}\\inbox\\${runId}\\commit.bundle` : null,
-      workDir: `${winBase}\\work`, runDir: `${winBase}\\runs\\${runId}`, specs: o.specs,
-      playwrightArgs: o.playwrightArgs, install: o.install };
+    const job = makeJob({ runId, sha, ref: tempRef, winBase, needBundle, specs: o.specs, playwrightArgs: o.playwrightArgs, install: o.install });
     fs.writeFileSync(path.join(tmp, 'job.json'), JSON.stringify(job, null, 2));
     for (const file of TOOLS) scp(path.join(__dirname, file), `${o.host}:${BASE}/inbox/${runId}/tools/${file}`);
     const inbox = `${o.host}:${BASE}/inbox/${runId}`;
@@ -138,4 +146,4 @@ if (require.main === module) {
   main().then((code) => process.exit(code), (error) => { console.error(`[e2e-remote-win] ${error.message}`); process.exit(2); });
 }
 
-module.exports = { parseArgs, makeRunId, queueCommand };
+module.exports = { parseArgs, makeRunId, queueCommand, makeJob, knownBasesCommand, HUB };
