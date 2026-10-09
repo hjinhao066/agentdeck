@@ -10,6 +10,10 @@ const { MUTABLE_KEYS, isDeviceId, isSessionId, stripSecrets, LEASE_MS } = requir
 
 const SYNC_MS = 10_000;
 const HEARTBEAT_MS = 15_000;
+// The window comes first: the first round starts this long after launch.
+const START_DELAY_MS = 15_000;
+// Task uploads are marked attempted, saved and accepted this many at a time.
+const FLUSH_BATCH = 50;
 
 function clip(value, max) {
   const text = String(value ?? '').replace(/[\u0000-\u001f]/g, ' ').trim();
@@ -70,7 +74,9 @@ function readFleetSettings({ env = {}, fleetFile } = {}) {
   if (url.username || url.password) return { error: '两机同步地址不能带令牌' };
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return { error: '两机同步地址无效' };
   const pathname = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
-  return { baseUrl: url.origin + pathname, tokenFile, syncMs: clampMs(env.AGENTDECK_FLEET_SYNC_MS, SYNC_MS) };
+  const delay = Number(env.AGENTDECK_FLEET_START_DELAY_MS);
+  const startDelayMs = env.AGENTDECK_FLEET_START_DELAY_MS !== undefined && Number.isInteger(delay) && delay >= 0 && delay <= 600_000 ? delay : START_DELAY_MS;
+  return { baseUrl: url.origin + pathname, tokenFile, syncMs: clampMs(env.AGENTDECK_FLEET_SYNC_MS, SYNC_MS), startDelayMs };
 }
 function loadDevice(file) {
   try {
@@ -81,6 +87,8 @@ function loadDevice(file) {
   atomicWrite(file, JSON.stringify(device) + '\n');
   return device;
 }
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
 function summaryOf(turns) {
   const first = Array.isArray(turns) ? turns[0] || {} : {};
   const text = first.prompt || first.user || first.text || first.content || '';
@@ -109,42 +117,97 @@ class FleetClient {
     this.error = null;
     this.lastSyncAt = null;
     this.timer = null;
+    this.dirty = false;
+    this.writtenHistory = new Map();
+    // Transcripts an older build left in the state file, kept one file each
+    // until the hub has them. Ones that could not be written stay in the state file.
+    this.outboxDir = path.join(path.dirname(stateFile), path.basename(stateFile, '.json') + '-history-outbox');
+    this.keptHistory = new Set();
+    this.unmigrated = [];
+    this.savedSyncAt = null;
     this._load();
     this._seedTasks();
   }
   _load() {
+    let legacy = [];
     try {
       const saved = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
       for (const [id, base] of saved.bases || []) this.bases.set(id, base);
       for (const item of saved.taskOutbox || []) if (item && item.cardId) this.taskOutbox.set(item.cardId, item);
-      for (const item of saved.historyOutbox || []) if (item && item.sessionId) this.historyOutbox.set(item.sessionId, item);
+      legacy = saved.historyOutbox;
       this.lastSyncAt = typeof saved.lastSyncAt === 'string' ? saved.lastSyncAt : null;
+      this.savedSyncAt = this.lastSyncAt;
       this.devices = Array.isArray(saved.devices) ? saved.devices : [];
       this.history = Array.isArray(saved.history) ? saved.history : [];
     } catch (_) {}
+    this._migrateHistory(legacy);
   }
+  _outboxFile(sessionId) {
+    return path.join(this.outboxDir, crypto.createHash('sha256').update(sessionId).digest('hex') + '.json');
+  }
+  // Older builds kept whole transcripts in the state file. Each goes to its own
+  // file first; the state file drops it only on a save after that file is on
+  // disk, and the file goes once the hub has it, so a crash loses none.
+  _migrateHistory(legacy) {
+    let names = [];
+    try { names = fs.readdirSync(this.outboxDir).filter((name) => name.endsWith('.json')); } catch (_) {}
+    for (const name of names) {
+      try {
+        const item = JSON.parse(fs.readFileSync(path.join(this.outboxDir, name), 'utf8'));
+        if (item && isSessionId(item.sessionId) && Array.isArray(item.turns)) { this.historyOutbox.set(item.sessionId, item); this.keptHistory.add(item.sessionId); }
+      } catch (_) {}
+    }
+    for (const item of Array.isArray(legacy) ? legacy : []) {
+      if (!item || !isSessionId(item.sessionId) || !Array.isArray(item.turns)) continue;
+      this.historyOutbox.set(item.sessionId, item);
+      try {
+        atomicWrite(this._outboxFile(item.sessionId), JSON.stringify(item));
+        this.keptHistory.add(item.sessionId);
+      } catch (_) { this.unmigrated.push(item); }
+      this.dirty = true;
+    }
+  }
+  _delivered(sessionId) {
+    if (this.keptHistory.delete(sessionId)) {
+      try { fs.unlinkSync(this._outboxFile(sessionId)); } catch (_) {}
+    }
+    const left = this.unmigrated.filter((item) => item.sessionId !== sessionId);
+    if (left.length !== this.unmigrated.length) { this.unmigrated = left; this.dirty = true; }
+  }
+  // Captain transcripts noted by this build are not saved here: main.js notes
+  // every captain chat again at launch from userData/chats.
   _persist() {
     atomicWrite(this.stateFile, JSON.stringify({
       bases: [...this.bases],
       taskOutbox: [...this.taskOutbox.values()],
-      historyOutbox: [...this.historyOutbox.values()],
+      ...(this.unmigrated.length ? { historyOutbox: this.unmigrated } : {}),
       devices: this.devices,
       history: this.history,
       lastSyncAt: this.lastSyncAt,
     }));
+    this.dirty = false;
+    this.savedSyncAt = this.lastSyncAt;
   }
+  _setBase(id, card) {
+    const base = { revision: card.revision || 0, fields: pick(card) };
+    if (!same(this.bases.get(id), base)) { this.bases.set(id, base); this.dirty = true; }
+  }
+  // Queues every local card the hub has not seen; writes nothing. Unsent
+  // operations are rebuilt from the board and bases on the next launch, so only
+  // an attempted operation has to reach disk (before its request goes out).
   _seedTasks() {
     let cards = [];
     try { cards = this.taskStore.list({ archived: true }); }
-    catch (_) { this.error = '同步失败：本地任务看板读不出来'; return; }
+    catch (_) { this.error = '同步失败：本地任务看板读不出来'; return null; }
     for (const card of cards) {
       const base = this.bases.get(card.id);
       if (base) {
         if (Object.keys(diff(base.fields, pick(card))).length) this.noteCard(card);
       } else if (!this.taskOutbox.has(card.id) && Number.isInteger(card.revision) && card.revision > 0) {
-        this.bases.set(card.id, { revision: card.revision, fields: pick(card) });
+        this._setBase(card.id, card);
       } else this.noteCard(card);
     }
+    return cards;
   }
   noteCard(card) {
     if (!card || typeof card.id !== 'string') return;
@@ -155,19 +218,17 @@ class FleetClient {
     // An attempted operation is immutable: the server may already have applied
     // it even if its response was lost. Save later edits separately until ack.
     if (previous?.attempted) {
-      previous.nextSet = diff({ ...(base?.fields || {}), ...previous.set }, fields);
-      this._persist();
+      const nextSet = diff({ ...(base?.fields || {}), ...previous.set }, fields);
+      if (!same(previous.nextSet || {}, nextSet)) { previous.nextSet = nextSet; this.dirty = true; }
       return;
     }
-    if (!Object.keys(set).length) { this.taskOutbox.delete(card.id); this._persist(); return; }
-    this.taskOutbox.set(card.id, {
-      opId: 'op-' + crypto.randomUUID(),
-      cardId: card.id,
-      // A Git-restored older cache is not a fresh edit on our newer base.
-      expectedRevision: base ? Math.min(base.revision, Number.isInteger(card.revision) ? card.revision : base.revision) : 0,
-      set,
-    });
-    this._persist();
+    if (!Object.keys(set).length) { if (this.taskOutbox.delete(card.id)) this.dirty = true; return; }
+    // A Git-restored older cache is not a fresh edit on our newer base.
+    const expectedRevision = base ? Math.min(base.revision, Number.isInteger(card.revision) ? card.revision : base.revision) : 0;
+    // The same unsent change keeps its operation ID.
+    if (previous && previous.expectedRevision === expectedRevision && same(previous.set, set)) return;
+    this.taskOutbox.set(card.id, { opId: 'op-' + crypto.randomUUID(), cardId: card.id, expectedRevision, set });
+    this.dirty = true;
   }
   noteResult(result) {
     if (!result) return;
@@ -189,7 +250,6 @@ class FleetClient {
       startedAt: times.length ? new Date(Math.min(...times)).toISOString() : null,
       endedAt: times.length ? new Date(Math.max(...times)).toISOString() : null,
     });
-    this._persist();
   }
   _safeError(err, token) {
     let message = err && err.message ? String(err.message) : '同步失败';
@@ -220,41 +280,62 @@ class FleetClient {
     if (!response.ok) throw new Error('同步失败：服务状态 ' + response.status);
     return { status: response.status, body: payload };
   }
-  _accept(card) {
-    this.taskStore.upsertSynced(card);
-    this.bases.set(card.id, { revision: card.revision || 0, fields: pick(card) });
-  }
   async _flushTasks(token) {
     let failure = null;
-    for (const item of [...this.taskOutbox.values()]) {
-      try {
-        item.attempted = true;
-        this._persist();
-        const result = await this._send(token, 'POST', '/v1/tasks', {
-          opId: item.opId, cardId: item.cardId, expectedRevision: item.expectedRevision, set: item.set, deviceId: this.device.id,
-        });
-        this._seedTasks();
+    const queue = [...this.taskOutbox.values()];
+    for (let start = 0; start < queue.length; start += FLUSH_BATCH) {
+      const batch = queue.slice(start, start + FLUSH_BATCH).filter((item) => this.taskOutbox.get(item.cardId) === item);
+      // The server may apply a request whose answer never arrives, so the
+      // whole batch is saved as attempted once, before the first one goes out.
+      const fresh = batch.filter((item) => !item.attempted);
+      if (fresh.length) {
+        for (const item of fresh) item.attempted = true;
+        try { this._persist(); } catch (err) { for (const item of fresh) delete item.attempted; return failure || err; }
+      }
+      const answered = [];
+      for (const item of batch) {
+        try {
+          answered.push({ item, result: await this._send(token, 'POST', '/v1/tasks', {
+            opId: item.opId, cardId: item.cardId, expectedRevision: item.expectedRevision, set: item.set, deviceId: this.device.id,
+          }) });
+        } catch (err) { failure = failure || err; }
+      }
+      // Edits made while the requests were out become each card's nextSet.
+      const local = new Map((this._seedTasks() || []).map((card) => [card.id, card]));
+      const accepted = [];
+      for (const { item, result } of answered) {
         if (result.status === 409 && !result.body.card) {
           // The hub lost this card or rolled back behind our base. The rejected
           // operation cannot be rebased; queue the latest complete local copy
           // with a new ID, preserving edits made while the request was in flight.
-          const local = this.taskStore.list({ archived: true }).find((card) => card.id === item.cardId);
-          if (!local) throw new Error('同步失败：待补传的本地任务不存在');
+          if (!local.has(item.cardId)) { failure = failure || new Error('同步失败：待补传的本地任务不存在'); continue; }
           this.bases.delete(item.cardId);
           this.taskOutbox.delete(item.cardId);
-          this.noteCard(local);
+          this.dirty = true;
+          this.noteCard(local.get(item.cardId));
           continue;
         }
         const nextSet = item.nextSet || {};
-        this._accept(result.body.card);
-        this.taskOutbox.delete(item.cardId);
-        if (Object.keys(nextSet).length) {
-          const next = { ...result.body.card, ...nextSet };
-          this.taskStore.upsertSynced(next);
-          this.noteCard(next);
+        accepted.push({ item, card: result.body.card, next: Object.keys(nextSet).length ? { ...result.body.card, ...nextSet } : null });
+      }
+      if (accepted.length) {
+        let written = accepted;
+        try { this.taskStore.upsertSyncedMany(accepted.map(({ card, next }) => next || card)); }
+        catch (_) {
+          // One card the board refuses must not hold back the rest of the batch.
+          written = accepted.filter(({ card, next }) => {
+            try { this.taskStore.upsertSynced(next || card); return true; }
+            catch (err) { failure = failure || err; return false; }
+          });
         }
-        this._persist();
-      } catch (err) { failure = failure || err; }
+        for (const { item, card, next } of written) {
+          this._setBase(card.id, card);
+          this.taskOutbox.delete(item.cardId);
+          this.dirty = true;
+          if (next) this.noteCard(next);
+        }
+      }
+      await yieldLoop();
     }
     return failure;
   }
@@ -264,12 +345,12 @@ class FleetClient {
       try {
         await this._send(token, 'POST', '/v1/history', { ...item, deviceId: this.device.id });
         if (this.historyOutbox.get(item.sessionId)?.opId === item.opId) this.historyOutbox.delete(item.sessionId);
-        this._persist();
+        this._delivered(item.sessionId);
       } catch (err) { failure = failure || err; }
     }
     return failure;
   }
-  _writeHistory(records) {
+  async _writeHistory(records) {
     fs.mkdirSync(this.historyDir, { recursive: true, mode: 0o700 });
     const keep = new Set();
     const summaries = [];
@@ -277,13 +358,23 @@ class FleetClient {
       if (!record || !isSessionId(record.sessionId) || !isDeviceId(record.deviceId)) continue;
       const name = record.sessionId + '--' + record.deviceId + '.json';
       keep.add(name);
-      atomicWrite(path.join(this.historyDir, name), JSON.stringify(stripSecrets(record)) + '\n');
+      // Each round brings every transcript again; only changed ones are written.
+      const text = JSON.stringify(stripSecrets(record)) + '\n';
+      const hash = crypto.createHash('sha256').update(text).digest('hex');
+      if (this.writtenHistory.get(name) !== hash) {
+        const file = path.join(this.historyDir, name);
+        let current = null;
+        try { current = fs.readFileSync(file, 'utf8'); } catch (_) {}
+        if (current !== text) atomicWrite(file, text);
+        this.writtenHistory.set(name, hash);
+        if (current !== text) await yieldLoop();
+      }
       summaries.push({ sessionId: record.sessionId, deviceId: record.deviceId, summary: clip(record.summary, 200), updatedAt: record.updatedAt || null, startedAt: record.startedAt || null, endedAt: record.endedAt || null });
     }
     for (const name of fs.readdirSync(this.historyDir)) {
-      if (!keep.has(name) && name.endsWith('.json')) fs.unlinkSync(path.join(this.historyDir, name));
+      if (!keep.has(name) && name.endsWith('.json')) { fs.unlinkSync(path.join(this.historyDir, name)); this.writtenHistory.delete(name); }
     }
-    this.history = summaries;
+    if (!same(this.history, summaries)) { this.history = summaries; this.dirty = true; }
   }
   async _pull(token) {
     const result = await this._send(token, 'GET', '/v1/snapshot');
@@ -295,16 +386,17 @@ class FleetClient {
     for (const card of this.taskStore.list({ archived: true })) {
       if (!remoteIds.has(card.id) && !this.taskOutbox.has(card.id)) {
         // A restored cache can outlive its client state or an empty hub.
-        this.bases.delete(card.id);
+        if (this.bases.delete(card.id)) this.dirty = true;
         this.noteCard(card);
       }
     }
     const keep = [...this.taskOutbox.keys()];
     this.taskStore.replaceSynced(Array.isArray(snap.cards) ? snap.cards : [], keep);
     for (const card of snap.cards || []) {
-      if (!this.taskOutbox.has(card.id)) this.bases.set(card.id, { revision: card.revision || 0, fields: pick(card) });
+      if (!this.taskOutbox.has(card.id)) this._setBase(card.id, card);
     }
-    this._writeHistory(Array.isArray(snap.history) ? snap.history : []);
+    await yieldLoop();
+    await this._writeHistory(Array.isArray(snap.history) ? snap.history : []);
   }
   async syncOnce() {
     const run = (this.tail || Promise.resolve()).then(() => this._syncBody());
@@ -334,13 +426,16 @@ class FleetClient {
     } catch (err) {
       this.error = this._safeError(err, token);
     }
-    this._persist();
+    // One save per round, and none when nothing that must survive changed.
+    if (this.dirty) {
+      try { this._persist(); } catch (err) { this.error = this._safeError(err, token); }
+    }
     try { this.onChange(); } catch (_) {}
     return this.snapshot();
   }
   start() {
     if (this.timer) return;
-    const tick = () => { this.syncOnce().catch((err) => { this.error = this._safeError(err, ''); this._persist(); }); };
+    const tick = () => { this.syncOnce().catch((err) => { this.error = this._safeError(err, ''); }); };
     this.timer = setInterval(tick, this.syncMs);
     if (this.timer.unref) this.timer.unref();
     return tick();
@@ -348,6 +443,11 @@ class FleetClient {
   stop() {
     clearInterval(this.timer);
     this.timer = null;
+    // Idle rounds skip the save, so the latest sync time is kept here.
+    // It never recreates a data folder that has been removed.
+    if ((this.dirty || this.lastSyncAt !== this.savedSyncAt) && fs.existsSync(path.dirname(this.stateFile))) {
+      try { this._persist(); } catch (_) {}
+    }
   }
   snapshot() {
     let conflictCount = 0;
@@ -358,4 +458,4 @@ class FleetClient {
   }
 }
 
-module.exports = { FleetClient, readFleetSettings, loadDevice, readToken, SYNC_MS, HEARTBEAT_MS, LEASE_MS };
+module.exports = { FleetClient, readFleetSettings, loadDevice, readToken, SYNC_MS, HEARTBEAT_MS, LEASE_MS, START_DELAY_MS };

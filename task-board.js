@@ -752,20 +752,26 @@ class TaskStore {
   }
   // One card from the fleet server. Other projects stay put.
   upsertSynced(card) {
-    const next = syncedCard(card);
+    return { card: this.upsertSyncedMany([card]).cards[0] };
+  }
+  // Several cards from the fleet server in one locked read and write.
+  upsertSyncedMany(cards) {
+    const list = cards.map(syncedCard);
     return this.mutate((docs) => {
-      for (const [project, { doc }] of [...docs.entries()]) {
-        const index = doc.cards.findIndex((item) => item.id === next.id);
-        if (index < 0) continue;
-        if (project === next.project) doc.cards[index] = next;
-        else doc.cards.splice(index, 1);
-      }
-      if (![...docs.values()].some(({ doc }) => doc.cards.some((item) => item.id === next.id))) {
-        if (!docs.has(next.project)) docs.set(next.project, { raw: null, doc: { version: 1, project: next.project, cards: [] } });
-        docs.get(next.project).doc.cards.push(next);
+      for (const next of list) {
+        for (const [project, { doc }] of [...docs.entries()]) {
+          const index = doc.cards.findIndex((item) => item.id === next.id);
+          if (index < 0) continue;
+          if (project === next.project) doc.cards[index] = next;
+          else doc.cards.splice(index, 1);
+        }
+        if (![...docs.values()].some(({ doc }) => doc.cards.some((item) => item.id === next.id))) {
+          if (!docs.has(next.project)) docs.set(next.project, { raw: null, doc: { version: 1, project: next.project, cards: [] } });
+          docs.get(next.project).doc.cards.push(next);
+        }
       }
       for (const [, { doc }] of docs) if (!doc.cards.length) doc._drop = true;
-      return { card: next };
+      return { cards: list };
     });
   }
   // Full server snapshot. keepIds are local edits still waiting to upload;

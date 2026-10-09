@@ -2047,19 +2047,28 @@ function startFleet(configPath) {
   }
   let version = '';
   try { version = require('./package.json').version; } catch (_) {}
-  fleetClient = new FleetClient({
-    baseUrl: settings.baseUrl, tokenFile: settings.tokenFile, device, taskStore,
-    historyDir: path.join(userData, 'fleet-history'), stateFile: path.join(userData, 'fleet-state.json'),
-    sessions: () => fleetSessions(configPath), version, syncMs: settings.syncMs,
-    onChange: () => send('task-board:changed', {}),
-  });
-  try {
-    const captain = fleetSessions(configPath).find((item) => item.role === 'captain');
-    for (const chat of loadAllChats(CHAT_DIR)) {
-      if (chat && (chat.captainArchive === true || chat.id === captain?.id)) fleetClient.noteCaptain(chat.id, chat);
-    }
-  } catch (_) {}
-  fleetClient.start();
+  // The window comes first (2.0.1 black window): reading the sync state, the
+  // board and every captain chat waits until it has had time to start. Board
+  // edits made meanwhile are picked up from the board files when sync starts.
+  const startTimer = setTimeout(() => {
+    fleetClient = new FleetClient({
+      baseUrl: settings.baseUrl, tokenFile: settings.tokenFile, device, taskStore,
+      historyDir: path.join(userData, 'fleet-history'), stateFile: path.join(userData, 'fleet-state.json'),
+      sessions: () => fleetSessions(configPath), version, syncMs: settings.syncMs,
+      onChange: () => send('task-board:changed', {}),
+    });
+    try {
+      const captain = fleetSessions(configPath).find((item) => item.role === 'captain');
+      for (const chat of loadAllChats(CHAT_DIR)) {
+        if (chat && (chat.captainArchive === true || chat.id === captain?.id)) fleetClient.noteCaptain(chat.id, chat);
+      }
+    } catch (_) {}
+    fleetClient.start();
+  }, settings.startDelayMs);
+  fleetClient = {
+    snapshot: () => ({ configured: true, devices: [], history: [], error: null, conflictCount: 0, selfId: device.id, lastSyncAt: null }),
+    stop() { clearTimeout(startTimer); }, noteResult() {}, noteCaptain() {},
+  };
 }
 
 // Ask the page to record in-flight crew, then quit on a later turn. A nested
