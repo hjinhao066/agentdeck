@@ -906,12 +906,15 @@
     if (!block || rows.slice(block.end).some((row) => !/^\s*$|^\s*[─━═]{3,}\s*$|^\s*Update available\b/i.test(row))) return false;
     return CLAUDE_BG_RUNNING.test(block.text) || CLAUDE_BG_WAITING.test(block.text);
   }
-  // Claude's status rows are never a spinner, live or history, even when a narrow
-  // column leaves "running" alone on a row. Blanked before the spinner patterns run.
+  // Claude's completed-turn rows and its background-agent wait are never a spinner,
+  // live or history, even when a narrow column leaves "running" alone on a row.
+  // Blanked before the spinner patterns run; any other "Waiting for …" stays.
   function claudeStatusRowsBlanked(screen, cmd) {
     const lines = String(screen || '').split('\n');
     if (cmd && !/\bclaude\b/i.test(cmd)) return lines.join('\n');
-    for (const block of claudeStatusBlocks(lines)) lines.fill('', block.start, block.end);
+    for (const block of claudeStatusBlocks(lines)) {
+      if (CLAUDE_DONE_ROW.test(lines[block.start]) || CLAUDE_BG_WAITING.test(block.text)) lines.fill('', block.start, block.end);
+    }
     return lines.join('\n');
   }
   // The footer counts background work as "· 1 shell ·". A narrow column cuts it at

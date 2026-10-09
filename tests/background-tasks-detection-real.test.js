@@ -75,6 +75,13 @@ test('after the work ended, the old folded "running" row does not keep the sessi
   assert.equal(terminalIdle({ cmd: CMD }, { ...entry, lastScreen: ENDED }), true);
 });
 
+test('only the background-agent wait is blanked: another live "Waiting for …" spinner is still work', () => {
+  const live = worker(['⏺ 正在调接口。', '', '✻ Waiting for the API response… (12s · esc to interrupt)']);
+  assert.equal(tick(live).state, 'working');
+  assert.equal(M.claudeBackgroundTasks(live, CMD), false);
+  assert.equal(tick(live).backgroundOnly, false);
+});
+
 test('cut footers count only a background word cut at the end, never other segments', () => {
   for (const footer of ['  ⏵⏵ bypass permissions on · 1 sh', '  ⏵⏵ bypass permissions on · 2 shells', '  ⏵⏵ bypass permissions on · 1 mon',
     '  ⏵⏵ bypass permissions on · 1 shell still runn', '  ⏵⏵ bypass permissions on · 1 shell · es…']) {
