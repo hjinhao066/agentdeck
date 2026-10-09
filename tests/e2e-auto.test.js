@@ -98,7 +98,7 @@ test('Windows offline: everything runs on the Mac queue and Windows is never cal
   assert.equal(r.win.length, 0);
   assert.deepEqual(r.local[0].specs.sort(), ['tests/e2e/a.spec.js', 'tests/e2e/mac.spec.js']);
 });
-for (const code of [255, 75, 10, 11, 12, 13, 14]) {
+for (const code of [255, 75, 10, 11, 12, 13, 14, 15]) {
   test(`Windows setup/connection failure (exit ${code}) falls back to the Mac queue`, async () => {
     assert.ok(INFRA_EXIT_CODES.has(code));
     const r = await run(['tests/e2e/a.spec.js'], { runOnWindows: async () => code });

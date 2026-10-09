@@ -21,16 +21,17 @@ const say = (message) => console.log(`[benchmark] ${message}`);
 const mean = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
 const round = (n, d = 1) => n === null || n === undefined ? null : Math.round(n * 10 ** d) / 10 ** d;
 
-// CSV from verify-windows-background.ps1 -Mode sample -> averages and peaks.
+// CSV from verify-windows-background.ps1 -Mode sample -> averages and peaks. `maxJobs` is the most
+// e2e-remote-job runs alive at once on the machine, anyone's: a clean N-group run has maxJobs === N.
 function summarizeSamples(lines) {
-  const rows = lines.map((l) => l.trim().split(',')).filter((r) => r.length === 5 && !Number.isNaN(Date.parse(r[0])))
-    .map((r) => ({ total: Number(r[1]), defender: Number(r[2]), e2eProcs: Number(r[3]), sessions: r[4] ? r[4].split('+') : [] }));
+  const rows = lines.map((l) => l.trim().split(',')).filter((r) => r.length === 6 && !Number.isNaN(Date.parse(r[0])))
+    .map((r) => ({ total: Number(r[1]), defender: Number(r[2]), e2eProcs: Number(r[3]), sessions: r[4] ? r[4].split('+') : [], jobs: Number(r[5]) }));
   const col = (key) => rows.map((r) => r[key]).filter((n) => Number.isFinite(n));
   const sessions = [...new Set(rows.flatMap((r) => r.sessions))].sort();
   return { samples: rows.length,
     totalCpuAvg: round(mean(col('total'))), totalCpuPeak: Math.max(0, ...col('total')),
     defenderAvg: round(mean(col('defender'))), defenderPeak: Math.max(0, ...col('defender')),
-    maxE2eProcs: Math.max(0, ...col('e2eProcs')), e2eSessions: sessions };
+    maxE2eProcs: Math.max(0, ...col('e2eProcs')), maxJobs: Math.max(0, ...col('jobs')), e2eSessions: sessions };
 }
 
 // "P|id|created|name" lines from -Mode snapshot -> the processes that appeared in between.

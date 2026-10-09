@@ -4,10 +4,12 @@
 // Runs on the remote machine (Windows), inside a slot of its e2e-queue. Started by
 // scripts/e2e-remote-win.js, which uploads this file next to e2e-queue.js and a job.json:
 //   { runId, sha, ref, bundle, workDir, runDir, specs: [...], playwrightArgs: [...], install }
-// workDir is the shared repository on the Windows PC (commits, node_modules, install stamp).
-// Every job tests its own checkout, `checkouts/<runId>` next to workDir, so jobs of different
-// commits can run at the same time (AGENTDECK_E2E_SLOTS > 1). It only ever touches workDir,
-// its own checkout and runDir (this run's output).
+// workDir is the shared repository on the Windows PC (commits). Every job tests its own
+// checkout, `checkouts/<runId>` next to workDir, so jobs of different commits can run at the
+// same time (AGENTDECK_E2E_SLOTS > 1). Dependencies live in `deps/<lockfile key>` next to
+// workDir: one folder per lockfile, installed once under a lock while other jobs wait and then
+// reuse it, and never changed afterwards, so no job can pull node_modules out from under another.
+// It only ever touches those folders, its own checkout and runDir (this run's output).
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -23,9 +25,6 @@ const out = (command, args, options = {}) => {
   const r = spawnSync(command, args, { encoding: 'utf8', ...options });
   return r.status === 0 ? r.stdout.trim() : null;
 };
-const fingerprint = (file) => {
-  try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch { return 'none'; }
-};
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 function checkJob(job) {
@@ -38,6 +37,7 @@ function checkJob(job) {
 }
 
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const envMs = (name, fallback) => (Number(process.env[name]) > 0 ? Number(process.env[name]) : fallback);
 
 // git operations on the shared repository can collide for a moment (ref or config locks).
 function retry(label, attempt, times = 8) {
@@ -47,18 +47,61 @@ function retry(label, attempt, times = 8) {
   return code;
 }
 
-// One installer at a time. A lock left by a crashed job is broken after 30 minutes.
+// One folder of dependencies per lockfile (and platform, CPU, Node version).
+const depsKey = (lockfileBytes) => crypto.createHash('sha256').update(lockfileBytes).update(`-${process.platform}-${process.arch}-${process.version}`).digest('hex').slice(0, 16);
+
+class InstallWaitTimeout extends Error {}
+
+// One installer per lock. While another job holds it we log why we wait, every 30 s. A lock older
+// than the stale limit (a crashed job) is broken; waiting longer than the wait limit gives up.
 function withInstallLock(lockDir, fn) {
-  const deadline = Date.now() + 25 * 60000;
+  const waitMs = envMs('AGENTDECK_E2E_INSTALL_WAIT_MS', 25 * 60000), staleMs = envMs('AGENTDECK_E2E_INSTALL_STALE_MS', 30 * 60000);
+  const started = Date.now();
+  let lastNote = 0;
   for (;;) {
     try { fs.mkdirSync(lockDir); break; } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      try { if (Date.now() - fs.statSync(lockDir).mtimeMs > 30 * 60000) { fs.rmdirSync(lockDir); continue; } } catch {}
-      if (Date.now() > deadline) throw new Error('another job has been installing dependencies for 25 minutes');
-      sleep(2000);
+      try { if (Date.now() - fs.statSync(lockDir).mtimeMs > staleMs) { say(`breaking a stale install lock (${path.basename(lockDir)})`); fs.rmdirSync(lockDir); continue; } } catch {}
+      const waited = Date.now() - started;
+      if (waited > waitMs) throw new InstallWaitTimeout(`waited ${Math.round(waited / 1000)} s for another job's dependency install (${path.basename(lockDir)}); giving up`);
+      if (Date.now() - lastNote > 30000) { say(`waiting for another job to finish installing dependencies (${Math.round(waited / 1000)} s so far)`); lastNote = Date.now(); }
+      sleep(1000);
     }
   }
   try { return fn(); } finally { try { fs.rmdirSync(lockDir); } catch {} }
+}
+
+// The node_modules of this lockfile: reused when complete, otherwise installed here exactly once.
+// Installing needs the commit's whole tree (postinstall runs a repo script), so the folder is a
+// checkout of this commit; only its node_modules is used afterwards. Returns { modules } or { failed, code }.
+function ensureDeps({ workDir, sha, lockfile, install }) {
+  if (install === 'skip') return { modules: path.join(workDir, 'node_modules') };
+  const key = depsKey(fs.readFileSync(lockfile));
+  const base = path.join(path.dirname(workDir), 'deps');
+  const dir = path.join(base, key), done = path.join(dir, '.e2e-deps-done');
+  if (fs.existsSync(done)) { say(`dependencies already installed (${key})`); return { modules: path.join(dir, 'node_modules') }; }
+  fs.mkdirSync(base, { recursive: true });
+  try {
+    return withInstallLock(path.join(base, `${key}.lock`), () => {
+      if (fs.existsSync(done)) { say(`dependencies already installed (${key})`); return { modules: path.join(dir, 'node_modules') }; }
+      // A folder without the done marker is the leftover of a failed or crashed install.
+      spawnSync('git', ['-C', workDir, 'worktree', 'remove', '--force', dir], { stdio: 'ignore' });
+      fs.rmSync(dir, { recursive: true, force: true });
+      spawnSync('git', ['-C', workDir, 'worktree', 'prune'], { stdio: 'ignore' });
+      say(`npm ci (no install for this lockfile yet, ${key})`);
+      if (spawnSync('git', ['-C', workDir, 'worktree', 'add', '-q', '--detach', '--force', dir, sha], { stdio: 'inherit' }).status) return { failed: 'git worktree add (deps)', code: 12 };
+      if (run(npm, ['ci', '--no-audit', '--no-fund'], { cwd: dir, shell: process.platform === 'win32' })) {
+        spawnSync('git', ['-C', workDir, 'worktree', 'remove', '--force', dir], { stdio: 'ignore' });
+        fs.rmSync(dir, { recursive: true, force: true });
+        return { failed: 'npm ci', code: 13 };
+      }
+      fs.writeFileSync(done, new Date().toISOString());
+      return { modules: path.join(dir, 'node_modules') };
+    });
+  } catch (error) {
+    if (error instanceof InstallWaitTimeout) { say(error.message); return { failed: 'waiting for the dependency install lock', code: 15 }; }
+    throw error;
+  }
 }
 
 function removeCheckout(workDir, checkout) {
@@ -102,25 +145,10 @@ function main(jobFile) {
       return finish(12, { failed: 'git worktree add' });
     }
 
-    // 3. Dependencies, only when the lockfile changed since the last install here. Installing
-    // needs the commit's whole tree (postinstall runs a repo script), so it happens in the shared
-    // repository under a lock; jobs that do not need it never touch that tree.
-    const stamp = path.join(workDir, 'node_modules', '.e2e-remote-lock');
-    const lockHash = fingerprint(path.join(checkout, 'package-lock.json')) + `-${process.platform}-${process.arch}-${process.version}`;
-    const installed = () => fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8') === lockHash;
-    if (job.install !== 'skip' && !installed()) {
-      const failed = withInstallLock(path.join(workDir, '.install.lock'), () => {
-        if (installed()) return 0;
-        say('npm ci (lockfile changed or first run)');
-        if (git('checkout', '-q', '-f', '--detach', job.sha)) return 12;
-        git('clean', '-q', '-fdx', '-e', 'node_modules', '-e', 'test-results');
-        if (run(npm, ['ci', '--no-audit', '--no-fund'], { cwd: workDir, shell: process.platform === 'win32' })) return 13;
-        fs.writeFileSync(stamp, lockHash);
-        return 0;
-      });
-      if (failed) return finish(failed, { failed: failed === 12 ? 'git checkout' : 'npm ci' });
-    } else say('dependencies already installed');
-    fs.symlinkSync(path.join(workDir, 'node_modules'), path.join(checkout, 'node_modules'), 'junction');
+    // 3. Dependencies of this commit's lockfile (installed once, shared read-only).
+    const deps = ensureDeps({ workDir, sha: job.sha, lockfile: path.join(checkout, 'package-lock.json'), install: job.install });
+    if (deps.failed) return finish(deps.code, { failed: deps.failed });
+    fs.symlinkSync(deps.modules, path.join(checkout, 'node_modules'), 'junction');
 
     // 4. The specs.
     const cli = path.join(checkout, 'node_modules', '@playwright', 'test', 'cli.js');
@@ -137,4 +165,4 @@ function main(jobFile) {
 if (require.main === module) {
   try { process.exit(main(process.argv[2])); } catch (error) { console.error(`[remote-job] ${error.message}`); process.exit(14); }
 }
-module.exports = { checkJob };
+module.exports = { checkJob, depsKey };

@@ -18,8 +18,9 @@ const ROOT = path.resolve(__dirname, '..');
 const defaultSay = (message) => console.log(`[e2e-auto] ${message}`);
 
 // Exit codes of e2e-remote-win that mean "Windows could not run it", not "a test failed":
-// 255 ssh lost, 75 queue wait timed out, 10-14 setup (git init/fetch/checkout, npm ci, job file).
-const INFRA_EXIT_CODES = new Set([255, 75, 10, 11, 12, 13, 14]);
+// 255 ssh lost, 75 queue wait timed out, 10-15 setup (git init/fetch/checkout, npm ci, job file,
+// waiting for another job's dependency install).
+const INFRA_EXIT_CODES = new Set([255, 75, 10, 11, 12, 13, 14, 15]);
 
 // Check if Windows PC is reachable via SSH
 function isWindowsOnline(host = 'winpc', timeoutSecs = 5) {

@@ -40,14 +40,15 @@ if ($Mode -eq 'snapshot') {
   exit 0
 }
 
-# sample: time,machine cpu %,MsMpEng cpu % of the whole machine,E2E process count,E2E sessions
-"time,totalCpuPct,defenderCpuPct,e2eProcs,e2eSessions"
+# sample: time,machine cpu %,MsMpEng cpu % of the whole machine,E2E process count,E2E sessions,E2E jobs alive (anyone's; the queue wrapper is not counted)
+"time,totalCpuPct,defenderCpuPct,e2eProcs,e2eSessions,jobs"
 $end = (Get-Date).AddSeconds($Seconds)
 while ((Get-Date) -lt $end) {
   $total = (Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime
   $def = (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "Name='MsMpEng'" | Measure-Object -Property PercentProcessorTime -Sum).Sum
   $e2e = @(Get-E2eProcesses)
   $sess = ($e2e | ForEach-Object { $_.SessionId } | Sort-Object -Unique) -join '+'
-  "{0},{1},{2},{3},{4}" -f (Get-Date).ToString('o'), $total, [math]::Round(($def / $threads), 1), $e2e.Count, $sess
+  $jobs = @($e2e | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -like '*e2e-remote-job.js*' -and $_.CommandLine -notlike '*e2e-queue.js*' }).Count
+  "{0},{1},{2},{3},{4},{5}" -f (Get-Date).ToString('o'), $total, [math]::Round(($def / $threads), 1), $e2e.Count, $sess, $jobs
   Start-Sleep -Seconds $Interval
 }

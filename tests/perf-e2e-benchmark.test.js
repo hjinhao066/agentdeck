@@ -7,13 +7,13 @@ const SHA = 'a'.repeat(40);
 
 test('samples: averages, peaks, Defender share and the sessions E2E processes ran in', () => {
   const s = summarizeSamples([
-    'time,totalCpuPct,defenderCpuPct,e2eProcs,e2eSessions',
-    '2026-10-08T22:00:00.0000000-07:00,40,2.0,0,',
-    '2026-10-08T22:00:03.0000000-07:00,80,6.0,12,0',
-    '2026-10-08T22:00:06.0000000-07:00,60,4.0,20,0',
+    'time,totalCpuPct,defenderCpuPct,e2eProcs,e2eSessions,jobs',
+    '2026-10-08T22:00:00.0000000-07:00,40,2.0,0,,0',
+    '2026-10-08T22:00:03.0000000-07:00,80,6.0,12,0,2',
+    '2026-10-08T22:00:06.0000000-07:00,60,4.0,20,0,3',
     'half a line', '',
   ]);
-  assert.deepEqual(s, { samples: 3, totalCpuAvg: 60, totalCpuPeak: 80, defenderAvg: 4, defenderPeak: 6, maxE2eProcs: 20, e2eSessions: ['0'] });
+  assert.deepEqual(s, { samples: 3, totalCpuAvg: 60, totalCpuPeak: 80, defenderAvg: 4, defenderPeak: 6, maxE2eProcs: 20, maxJobs: 3, e2eSessions: ['0'] });
 });
 test('samples: an empty sampler output is not a number', () => {
   assert.equal(summarizeSamples([]).samples, 0);
