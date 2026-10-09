@@ -1,5 +1,5 @@
 const closeElectron = require('./fixtures/close-electron');
-const screenDensity = require('./fixtures/screen-density');
+const emulateScreen = require('./fixtures/screen-density');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -95,10 +95,8 @@ test.afterEach(async () => {
 });
 
 async function size(width, height) {
-  await page.setViewportSize({ width, height });
-  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height]);
   // a 2x screen, as on the MacBook these layouts were made on (see fixtures/screen-density)
-  await screenDensity(page, 2);
+  await emulateScreen(page, width, height, 2);
 }
 async function openMap(width, height) {
   await size(width, height);
@@ -113,7 +111,7 @@ async function shot(name) {
   if (!shots) return;
   await settled();
   fs.mkdirSync(shots, { recursive: true });
-  await page.mouse.move(Math.round(page.viewportSize().width * 0.48), 4);
+  await page.mouse.move(Math.round((await page.evaluate(() => innerWidth)) * 0.48), 4);
   await page.evaluate(() => {
     const at = { 'cm-flow': 0.3, 'cm-trail': 0.3, 'cm-flow-review': 0.3, 'cm-spin': 0.12, 'cm-ping': 0.2, 'cm-beat': 0.3, 'sky-twinkle': 0.6, 'tbv-breathe': 0.5, 'tbv-flow': 0.42, 'tbv-ping': 0.2 };
     // a line's light (head and tail) keeps one phase, picked from the line's own path

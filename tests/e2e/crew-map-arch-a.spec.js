@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const closeElectron = require('./fixtures/close-electron');
-const screenDensity = require('./fixtures/screen-density');
+const emulateScreen = require('./fixtures/screen-density');
 
 // 架构图: one busy project on the canvas; finished projects are off the map, one with a failure waits in the bottom tray.
 // Real renderer, isolated userData, stand-in TUI. Screenshots when AGENTDECK_CREW_MAP_SHOTS is set.
@@ -53,10 +53,8 @@ async function launch() {
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(crew.length + 1);
 }
 async function open(width, height, theme) {
-  await page.setViewportSize({ width, height });
-  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height]);
   // a 2x screen, as on the MacBook these layouts were made on (see fixtures/screen-density)
-  await screenDensity(page, 2);
+  await emulateScreen(page, width, height, 2);
   await page.evaluate((t) => applyTheme(t), theme);
   if (await page.locator('#crewMap').isVisible()) await page.locator('#boardViewBtn').click();
   await page.locator('#boardViewBtn').click();

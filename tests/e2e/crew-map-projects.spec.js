@@ -1,5 +1,5 @@
 const closeElectron = require('./fixtures/close-electron');
-const screenDensity = require('./fixtures/screen-density');
+const emulateScreen = require('./fixtures/screen-density');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -27,7 +27,7 @@ async function launch() {
   controls = JSON.parse(fs.readFileSync(path.join(profile, 'control.json'), 'utf8'));
   await expect.poll(() => page.evaluate(() => typeof MainSession !== 'undefined' && !!MainSession.state())).toBe(true);
   // a 2x screen, as on the MacBook these layouts were made on (see fixtures/screen-density)
-  await screenDensity(page, 2);
+  await emulateScreen(page, 0, 0, 2);
 }
 async function cli(args) {
   return exec(process.execPath, [path.resolve(__dirname, '../../board-cli.js'), ...args], { env: { ...process.env, ...controls } });

@@ -1,5 +1,5 @@
 const closeElectron = require('./fixtures/close-electron');
-const screenDensity = require('./fixtures/screen-density');
+const emulateScreen = require('./fixtures/screen-density');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -66,7 +66,7 @@ test.beforeAll(async () => {
   await expect.poll(() => page.evaluate(() => config.perpetualCaptain && config.perpetualCaptain.enabled)).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(11);
   // a 2x screen, as on the MacBook these layouts were made on (see fixtures/screen-density)
-  await screenDensity(page, 2);
+  await emulateScreen(page, 0, 0, 2);
 });
 test.afterAll(async () => {
   if (application) await closeElectron(application);

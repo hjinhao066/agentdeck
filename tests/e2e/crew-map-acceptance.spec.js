@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const closeElectron = require('./fixtures/close-electron');
-const screenDensity = require('./fixtures/screen-density');
+const emulateScreen = require('./fixtures/screen-density');
 
 // Real renderer, isolated userData and PTYs running only the stand-in TUI.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
@@ -16,10 +16,8 @@ async function screenshot(name) {
   await page.screenshot({ path: path.join(shots, name + '.png'), animations: 'disabled', scale: 'css' });
 }
 async function resize(width, height) {
-  await page.setViewportSize({ width, height });
-  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height]);
   // a 2x screen, as on the MacBook these layouts were made on (see fixtures/screen-density)
-  await screenDensity(page, 2);
+  await emulateScreen(page, width, height, 2);
 }
 // a fit glides for a moment; measure only once the canvas has landed
 async function settled() { await expect(page.locator('.cm-canvas.cm-smooth')).toHaveCount(0); }

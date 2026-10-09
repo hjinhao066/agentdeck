@@ -1,5 +1,5 @@
 const closeElectron = require('./fixtures/close-electron');
-const screenDensity = require('./fixtures/screen-density');
+const emulateScreen = require('./fixtures/screen-density');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -104,10 +104,8 @@ test.afterEach(async () => {
 });
 
 async function size(width, height, theme) {
-  await page.setViewportSize({ width, height });
-  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height]);
   // a 2x screen, as on the MacBook these layouts were made on (see fixtures/screen-density)
-  await screenDensity(page, 2);
+  await emulateScreen(page, width, height, 2);
   if (theme) await page.evaluate((t) => applyTheme(t), theme);
 }
 async function open(width, height, theme) {

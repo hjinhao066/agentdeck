@@ -1,5 +1,5 @@
 const closeElectron = require('./fixtures/close-electron');
-const screenDensity = require('./fixtures/screen-density');
+const emulateScreen = require('./fixtures/screen-density');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -60,10 +60,8 @@ test.afterEach(async () => {
 });
 
 async function size(width, height, theme) {
-  await page.setViewportSize({ width, height });
-  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height]);
   // a 1x screen, whatever this machine's (see fixtures/screen-density)
-  await screenDensity(page, 1);
+  await emulateScreen(page, width, height, 1);
   if (theme) await page.evaluate((t) => applyTheme(t), theme);
 }
 async function open(width, height, theme, cards) {
@@ -194,7 +192,8 @@ test('1x screen: the text is drawn at the scale it shows at: at 140%, on arrival
   const drawn = await card(), fresh = await afresh();
   fs.writeFileSync(test.info().outputPath('crisp-140-arrival-asdrawn.png'), drawn); fs.writeFileSync(test.info().outputPath('crisp-140-arrival-afresh.png'), fresh);
   expect(await differ(drawn, fresh), 'arrived at 140%: pixels the card as drawn differs in').toBe(0);
-  expect(await page.evaluate(() => getComputedStyle(document.querySelector('.cm-canvas')).willChange), 'no layer of its own at rest').toBe('auto');
+  // at rest (no glide, drag or wheel: a session's news can start a glide on its own) the canvas has no layer of its own
+  await expect.poll(() => page.evaluate(() => { const c = document.querySelector('.cm-canvas'); return c.matches('.cm-smooth, .panning .cm-canvas, .cm-moving .cm-canvas') ? 'moving' : getComputedStyle(c).willChange; }), { message: 'no layer of its own at rest' }).toBe('auto');
   await go();
   // 100%, then four steps in: 140% again, by hand
   for (const c of ['reset', 'in', 'in', 'in', 'in']) { await page.locator(`[data-cm="${c}"]`).click(); await page.waitForTimeout(150); }
@@ -210,9 +209,10 @@ test('1x screen: a window that changes once (the sidebar folded, then back) glid
   const crew = sessionsOf({ agentdeck: 11, 秋招: 3, skills: 1 });
   await launch(crew);
   await open(1512, 982, 'dark', crew.length); await settled();
-  // count the frames in which anything on the map is gliding: the view's own glide, or frames and cards moving
-  const watch = () => page.evaluate(() => { window.__glides = 0; const tick = () => { if (document.querySelector('.cm-canvas.cm-smooth') || [...document.querySelectorAll('.cm-pane, .cm-node')].some((n) => n.getAnimations().some((a) => a.playState === 'running' && Number.isFinite(a.effect.getComputedTiming().iterations)))) window.__glides++; if (window.__watching) requestAnimationFrame(tick); }; window.__watching = true; requestAnimationFrame(tick); });
-  const stop = () => page.evaluate(() => { window.__watching = false; return window.__glides; });
+  // count the moments (sampled every 10ms, frames or not) in which anything on the map is gliding: the view's own
+  // glide, or frames and cards moving
+  const watch = () => page.evaluate(() => { window.__glides = 0; window.__watch = setInterval(() => { if (document.querySelector('.cm-canvas.cm-smooth') || [...document.querySelectorAll('.cm-pane, .cm-node')].some((n) => n.getAnimations().some((a) => a.playState === 'running' && Number.isFinite(a.effect.getComputedTiming().iterations)))) window.__glides++; }, 10); });
+  const stop = () => page.evaluate(() => { clearInterval(window.__watch); return window.__glides; });
   for (const button of ['#navCollapseBtn', '#navExpandBtn']) {
     const before = (await read()).scale;
     await watch();
