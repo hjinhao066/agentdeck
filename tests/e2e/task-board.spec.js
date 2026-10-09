@@ -503,14 +503,18 @@ test('a verify card is reviewed automatically: one reviewer per round, rejection
     await expect.poll(async () => (await card(c.id)).attempt_id, { timeout: 40000 }).toBe(`auto-rework-${c.id}-r1`);
     const rework = await card(c.id);
     expect(rework.session_id).toBe(execution.session); expect(rework.review_session).toBe(false); expect(rework.rework_count).toBe(1);
+    expect(rework.attempt_closed).toBe(false);
+    // the card went back to execution: the round-1 reviewer's terminal is ended and archived
+    await expect.poll(() => page.evaluate((id) => (config.archived || []).some((a) => a.id === id), first.session_id), { timeout: 30000 }).toBe(true);
+    expect(await autoReviewers(c.id)).toEqual([]);
     await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, execution.session), { timeout: 30000 }).toBe('working');
     // the executor hands in again: round 2 gets a reviewer of its own
     await command(['complete', '--result', 'Fixed the assertions'], execution.env);
-    await expect.poll(async () => (await autoReviewers(c.id)).length, { timeout: 40000 }).toBe(2);
+    await expect.poll(async () => (await autoReviewers(c.id)).map((r) => r.attempt), { timeout: 40000 }).toEqual([`auto-review-${c.id}-r2`]);
     const second = await card(c.id);
     expect(second.review_round).toBe(2); expect(second.attempt_id).toBe(`auto-review-${c.id}-r2`);
     await page.waitForTimeout(1500);
-    expect((await autoReviewers(c.id)).length).toBe(2);
+    expect((await autoReviewers(c.id)).length).toBe(1);
     await command(['complete', '--result', '通过：文件在，测试我跑过'], await sessionEnv(second.session_id));
     expect((await card(c.id)).status).toBe('done');
   } finally { await autoVerifyOff(); }
