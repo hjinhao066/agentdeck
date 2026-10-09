@@ -38,7 +38,7 @@ async function launch(crew) {
   fs.writeFileSync(specFile, JSON.stringify(screens));
   // the default seat's directory records the account signed in there (no credentials): every card names it
   fs.mkdirSync(path.join(profile, 'seats-home'), { recursive: true });
-  fs.writeFileSync(path.join(profile, 'seats-home', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'agentdeck.dev@example.test' }, hasCompletedOnboarding: true }));
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'agentdeck@example.test' }, hasCompletedOnboarding: true }));
   // These are layout states, not restartable tasks with a saved instruction.
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3, columns,
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks } }));

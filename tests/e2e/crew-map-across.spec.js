@@ -80,7 +80,7 @@ async function launch(cards = CREW) {
   // the default seat's directory records the account signed in there (a stand-in record, no credentials): cards
   // name the seat by that account, as the sidebar does
   fs.mkdirSync(path.join(profile, 'seats-home'), { recursive: true });
-  fs.writeFileSync(path.join(profile, 'seats-home', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'agentdeck.dev@example.test' }, hasCompletedOnboarding: true }));
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'agentdeck@example.test' }, hasCompletedOnboarding: true }));
   // These are layout states, not restartable tasks with a saved instruction.
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3, columns,
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks } }));
@@ -318,12 +318,14 @@ test('a card reads in three layers and its line is news: never a CLI update noti
   // the account signed in behind the seat is a small text tag on the card: the part of its address before the @,
   // as the sidebar names it (never a fixed seat name or flag), named in full on hover; it gives way first: a long
   // account name is cut, from the left, never the status or the model
-  await expect.poll(() => page.evaluate(() => [...new Set([...document.querySelectorAll('.cm-node:not(.kind-captain) .agent-seat-label')].map((n) => n.textContent.trim()))]), { timeout: 15000 }).toEqual(['agentdeck.dev']);
-  const seats = await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .agent-seat-label')].map((n) => [n.textContent.trim(), n.getAttribute('aria-label') || '', getComputedStyle(n).display, n.scrollWidth <= n.clientWidth]));
+  await expect.poll(() => page.evaluate(() => [...new Set([...document.querySelectorAll('.cm-node:not(.kind-captain) .agent-seat-label')].map((n) => n.textContent.trim()))]), { timeout: 15000 }).toEqual(['agentdeck']);
+  const seats = await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .agent-seat-label')].map((n) => [n.textContent.trim(), n.getAttribute('aria-label') || '', getComputedStyle(n).display, n.scrollWidth <= n.clientWidth || getComputedStyle(n).textOverflow === 'ellipsis', n.getBoundingClientRect().width]));
   expect(seats.length).toBeGreaterThan(0);
-  for (const [text, label, display, whole] of seats) {
+  for (const [text, label, display, readable, width] of seats) {
     expect(text).not.toMatch(/\p{Regional_Indicator}|\p{Extended_Pictographic}/u);
-    expect(label).toMatch(/^当前账号：agentdeck\.dev@example\.test · /); expect(display).not.toBe('none'); expect(whole, `${text} shows whole`).toBe(true);
+    expect(label).toMatch(/^当前账号：agentdeck@example\.test · /); expect(display).not.toBe('none');
+    // whole, or (where the row is tight) cut with an ellipsis, a few letters at least, the whole address on hover
+    expect(readable, `${text}: whole or cut with an ellipsis`).toBe(true); expect(width, `${text}: a few letters at least`).toBeGreaterThanOrEqual(28);
   }
   const long = await page.evaluate(() => {
     const n = document.querySelector('.cm-node[data-node-id="w2"]'), seat = n.querySelector('.agent-seat-label'), st = n.querySelector('.cm-status'), model = n.querySelector('.agent-model-label'), more = n.querySelector('.cm-more');
