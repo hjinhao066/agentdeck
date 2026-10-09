@@ -1432,6 +1432,8 @@
       const live = host.dumpScreen(entry.term, 40);
       if (M.terminalActivity(live, col?.cmd) || M.claudeBackgroundTasks(live, col?.cmd)) return;
       if (host.screenState && !['done', 'plain'].includes(host.screenState(live, entry, col?.cmd))) return;
+      // Check if the PTY has real child processes (not just the shell itself)
+      if (host.hasChildProcesses && host.hasChildProcesses(entry.term)) return;
     }
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
