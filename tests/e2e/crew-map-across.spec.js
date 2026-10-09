@@ -355,9 +355,11 @@ test('智能一页 is the default and follows the window; a first drag leaves it
   expect(await fit.evaluate((n) => [n.title === n.getAttribute('aria-label'), !!n.querySelector('svg'), n.textContent.trim()])).toEqual([true, true, '']);
   const wide = await read();
   // the window narrows: the map arranges itself again (in lanes), and fills this window, still on its own
-  await size(1440, 900); await settled();
+  // (the window's new size reaches the map on its next frame, which a busy machine draws late)
+  await size(1440, 900);
+  await expect.poll(async () => (await read()).plan, { timeout: 15000 }).not.toEqual(wide.plan);
+  await settled();
   let g = await read();
-  expect(g.plan).not.toEqual(wide.plan);
   if (g.pageFits) fillsPage(g, '1440'); else expect(g.view.scale).toBeCloseTo(0.7, 5);
   await expect(fit).toHaveAttribute('data-state', 'auto');
   // a frame dragged by hand: the map is the user's now, and that first move can be taken back
