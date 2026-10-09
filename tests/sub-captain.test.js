@@ -17,15 +17,21 @@ function runtime() {
   const columns = [captain];
   const config = { mainSession: null, folders: [], archived: [] };
   const terms = new Map([[captain.id, { alive: true, state: 'done', lastScreen: '' }]]);
-  const sent = [], cards = [];
+  const sent = [], cards = [], prompts = [], board = [];
+  // memory: the pressure level new sessions see; failOpen: a title whose session cannot be opened
+  const h = { memory: 1, failOpen: '' };
+  const boardCard = { id: 'card-1', title: '秋招', project: '秋招', status: 'doing', session_id: null, attempt_closed: false };
   let turn = 0;
   const window = {
     MainCore: M, BoardCore: B,
     QuotaCore: { quotaFallback: (_q, cmd) => ({ action: 'open', cmd }), commandQuota: () => ({ out: false }) },
-    ChatUI: { addCard: (colId, task) => cards.push({ colId, taskId: task.id }), updateCard() {}, hasDraft: () => false, turnsOf: () => [] },
+    ChatUI: { addCard: (colId, task) => cards.push({ colId, taskId: task.id }), updateCard() {}, hasDraft: () => false, turnsOf: () => [], readFooter: () => '',
+      sendPrompt: async (col, _text, _atts, opts) => { prompts.push({ colId: col.id, text: opts.prefix, guarded: opts.guardUserInput === true }); return true; } },
+    TaskBoard: { list: async () => [boardCard] },
     deck: {
       onTaskStart() {}, onTaskReview() {}, onTaskRework() {}, saveConfigSync: () => true,
-      memoryPressure: async () => ({ level: 1 }), taskBoard: async (op) => (op === 'list' ? [] : {}),
+      memoryPressure: async () => ({ level: h.memory }),
+      taskBoard: async (op, input) => { if (op !== 'list') board.push({ op, type: input?.type }); return op === 'list' ? [boardCard] : {}; },
     },
   };
   const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] } });
@@ -47,6 +53,7 @@ function runtime() {
     lastTurnTs: () => 0, dumpScreen: (term) => term.screen || '', agentInForeground: async () => true,
     createMain: (c) => { const col = { ...c, id: 'captain' }; return col; },
     createSession: (c) => {
+      if (h.failOpen && c.title === h.failOpen) throw new Error('开不出来');
       const col = { ...c, taskId: c.id };
       columns.push(col);
       terms.set(col.id, { alive: true, state: 'done', lastScreen: '', term: { screen: 'screen of ' + col.id }, lastOutputAt: Date.now() });
@@ -77,7 +84,8 @@ function runtime() {
     await run('create-child', sub, { title, task: '做 ' + title });
     return byTitle(title);
   }
-  return { api, captain, columns, config, terms, sent, cards, run, text, byTitle, subCaptain, child, leave, state: () => config.mainSession };
+  const settleDown = () => new Promise((resolve) => setTimeout(resolve, 30));
+  return { api, h, captain, columns, config, terms, sent, cards, prompts, board, run, text, byTitle, subCaptain, child, leave, settleDown, state: () => config.mainSession };
 }
 
 test('new --sub-captain opens a marked session and hands it the sub-captain rules with its task', async () => {
@@ -260,4 +268,112 @@ test('a sub-captain filed into a folder is still the sub-captain of its children
   assert.doesNotMatch(await r.text('main-receipts', r.captain), /A 在文件夹里也归小队长/);
   assert.match(await r.text('main-receipts', sub), /A 在文件夹里也归小队长/);
   assert.match(await r.text('main-ledger', sub), new RegExp(kid.id));
+});
+
+// ---- review round 1 (review-opus.md): the three must-fix findings ----
+const fromSub = (r, sub) => ((r.state().subReceipts || {})[sub.id] || []);
+
+test('review ①: a working child the user closed reports its failure to its sub-captain, not the Captain', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  const kid = await r.child(sub, '子会话X');
+  assert.equal(r.state().tasks.findLast((t) => t.colId === kid.id).status, 'working');
+  // the user closes the child's column (not archived; it was no sub-captain, so nothing is handed back)
+  r.columns.splice(r.columns.indexOf(kid), 1);
+  r.terms.delete(kid.id);
+  r.api.onTick(r.captain.id, r.terms.get(r.captain.id));
+  await r.settleDown();
+  assert.ok(!r.state().pending.some((p) => p.colId === kid.id), 'nothing about the child waits for the Captain');
+  assert.ok(fromSub(r, sub).some((p) => p.colId === kid.id && /关掉/.test(p.failed || '')), 'the sub-captain gets the failure');
+  assert.match(await r.text('main-receipts', sub), /子会话X/);
+});
+
+test('review ①: a queued child that cannot be opened reports to its sub-captain, not the Captain', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  r.h.memory = 4; // critical memory: new sessions queue
+  assert.match(await r.text('create-child', sub, { title: '排队子会话', task: 'x' }), /排队/);
+  const waiting = r.state().tasks.findLast((t) => t.title === '排队子会话');
+  assert.equal(waiting.status, 'waiting');
+  r.h.memory = 1; r.h.failOpen = '排队子会话';
+  r.api.onTick(r.captain.id, r.terms.get(r.captain.id));
+  await r.settleDown();
+  assert.equal(waiting.status, 'failed');
+  assert.ok(!r.state().pending.some((p) => p.taskId === waiting.id), 'the Captain does not get it');
+  assert.ok(fromSub(r, sub).some((p) => p.taskId === waiting.id && /开不出来/.test(p.failed || '')), 'the sub-captain does');
+});
+
+test('review ②: child receipts nobody takes: the sub-captain is reminded once, then the Captain is told once', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  const kid = await r.child(sub, '子会话A');
+  await r.api.submit({ action: 'complete', result: 'A 做完了', files: [] }, kid);
+  await r.text('main-receipts', r.captain);
+  const entry = Object.assign(r.terms.get(sub.id), { state: 'done', lastOutputAt: Date.now() - 60 * MIN });
+  const age = (ms) => { for (const p of fromSub(r, sub)) p.ts = Date.now() - ms; };
+  // AgentDeck reports the sub-captain's own `receipts --wait`, like the Captain's.
+  const listening = (alive) => r.run('main-receipt-listener-status', sub, { alive });
+  // A listener is up: nothing to say.
+  await listening(true);
+  age(4 * MIN);
+  r.api.onTick(sub.id, entry);
+  await r.settleDown();
+  assert.equal(r.prompts.length, 0);
+  // No listener, receipts waiting three minutes, sub-captain idle: one reminder, typed with the draft guard.
+  await listening(false);
+  age(2 * MIN);
+  r.api.onTick(sub.id, entry);
+  await r.settleDown();
+  assert.equal(r.prompts.length, 0, 'not before three minutes');
+  age(4 * MIN);
+  entry.state = 'working';
+  r.api.onTick(sub.id, entry);
+  await r.settleDown();
+  assert.equal(r.prompts.length, 0, 'not while it is working');
+  entry.state = 'done';
+  r.api.onTick(sub.id, entry);
+  await r.settleDown();
+  r.api.onTick(sub.id, entry);
+  await r.settleDown();
+  assert.equal(r.prompts.length, 1, 'once');
+  assert.equal(r.prompts[0].colId, sub.id);
+  assert.equal(r.prompts[0].guarded, true);
+  assert.match(r.prompts[0].text, /receipts --wait/);
+  assert.ok(!r.state().pending.some((p) => p.colId === sub.id), 'the Captain is not bothered yet');
+  // Still untaken after ten minutes: the Captain hears about it once.
+  age(11 * MIN);
+  r.api.onTick(sub.id, entry);
+  r.api.onTick(sub.id, entry);
+  await r.settleDown();
+  const told = await r.text('main-receipts', r.captain);
+  assert.match(told, /秋招小队长/);
+  assert.match(told, /1 条子会话回执/);
+  assert.match(told, /没取/);
+  r.api.onTick(sub.id, entry);
+  assert.equal(await r.text('main-receipts', r.captain), '没有新的回执。', 'only once');
+  // Once it takes them, a later pile-up starts over.
+  await r.text('main-receipts', sub);
+  r.api.onTick(sub.id, entry);
+  await r.api.submit({ action: 'complete', result: '无关', files: [] }, kid); // ignored: no new instruction
+  assert.equal(fromSub(r, sub).length, 0);
+});
+
+test('review ③: a card-bound sub-captain\'s stage reports leave the card alone; complete --final finishes it once', async () => {
+  const r = runtime();
+  await r.run('main-new', r.captain, { title: '卡片小队长', task: '统筹', project: '秋招', subCaptain: true, boardId: 'card-1' });
+  const sub = r.byTitle('卡片小队长');
+  assert.equal(sub.boardId, 'card-1');
+  await r.api.submit({ action: 'complete', result: '阶段一', files: [] }, sub);
+  await r.api.submit({ action: 'complete', result: '阶段二', files: [] }, sub);
+  await r.settleDown();
+  const completes = () => r.board.filter((e) => e.op === 'event' && e.type === 'complete').length;
+  assert.equal(completes(), 0, 'stage reports do not complete the card');
+  const view = await r.text('main-receipts', r.captain);
+  assert.match(view, /阶段一/);
+  assert.match(view, /阶段二/);
+  await r.api.submit({ action: 'complete', result: '最终交付', files: [], final: true }, sub);
+  await r.settleDown();
+  assert.equal(completes(), 1, 'the final delivery completes it');
+  assert.match(await r.text('main-receipts', r.captain), /最终交付/);
+  assert.match(M.subCaptainBrief('darwin'), /complete --final/);
 });

@@ -219,7 +219,8 @@ function usage() {
     '  wait --task <task-id>\n' +
     '  send --task <task-id> --message "Follow-up or answer"\n' +
     '  progress --message "Current progress"\n' +
-    '  complete --result "One to three sentences" [--files path1,path2] [--failed "Reason"]\n' +
+    '  complete --result "One to three sentences" [--files path1,path2] [--failed "Reason"] [--final]\n' +
+    '                                           --final: a 小队长\'s final delivery; its other completes are stage reports that leave its card alone\n' +
     '  ask --question "Decision needed from the Captain"\n' +
     '  status\n\n' +
     'Scheduled scripts on this computer (no terminal needed; automation help for details):\n' +
@@ -386,7 +387,9 @@ async function main() {
     if (!result.trim()) fail('complete requires --result.');
     if (args.files !== undefined && typeof args.files !== 'string') fail('complete --files requires comma-separated paths.');
     if (args.failed !== undefined && (typeof args.failed !== 'string' || !args.failed.trim())) fail('complete --failed requires a reason.');
-    await request({ action, result, files: args.files ? args.files.split(',').map((p) => p.trim()).filter(Boolean) : [], failed: args.failed || '' }, false);
+    if (args.final !== undefined && args.final !== true) fail('complete --final takes no value.');
+    await request({ action, result, files: args.files ? args.files.split(',').map((p) => p.trim()).filter(Boolean) : [], failed: args.failed || '',
+      ...(args.final === true ? { final: true } : {}) }, false);
     process.stdout.write('Result delivered to the parent task.\n');
     return;
   }

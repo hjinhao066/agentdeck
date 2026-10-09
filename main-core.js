@@ -1086,7 +1086,7 @@
       `开子会话：${cli} create-child --title "一句话标题" --task "完整说明" [--agent claude|codex|cursor|agy|grok | --command "启动命令"] [--cwd 目录]。不写 --agent 就和你同一个模型；命令立刻返回子会话 id，不等它做完；同样受全局并发上限，满了自动排队。同时在干活的子会话一般不超过 4 个。`,
       `子会话的回执、提问、停在确认提示，都只进你的 receipts，不会到总队长那里。始终恰好挂一个 ${boardCli('darwin')} receipts --wait：Claude Code 用 Bash 工具 run_in_background: true（不设超时）；不能后台的就在前台 receipts --wait --timeout 540 循环。收到就处理，处理完再挂。`,
       `管子会话：${cli} ledger 只列你的子会话；tell --to 子会话id --message "…" 追加指令或回答它的提问；peek --id 子会话id 看实时输出；read --id 子会话id 读对话；answer --to 子会话id --key y|n|enter… 回答确认提示；stop / archive --id 子会话id。只能管你自己开的子会话。`,
-      '向总队长汇报：阶段结果用 complete --result（可以多次，每次都送到总队长）；要总队长或用户拍板用 ask --question。只报结论和文件路径，不转贴子会话原文。',
+      '向总队长汇报：阶段结果用 complete --result（可以多次，每次都送到总队长，不动看板卡片）；这件活绑了看板卡片的，最终交付用 complete --final --result，卡片才算完成（要验收的进待验收）。要总队长或用户拍板用 ask --question。只报结论和文件路径，不转贴子会话原文。',
       '你被归档或关掉时，子会话不会停，会交回总队长。',
     ].join('\n');
   }

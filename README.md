@@ -598,7 +598,8 @@ again with the current provider, model and effort instructions.
 
 一个项目要长期多线并行时，队长用 `new --sub-captain --project "项目" --title … --task …` 开一个小队长。
 小队长用 `create-child` 开自己的子会话；子会话的回执、提问和确认提示只进小队长的 `receipts --wait`，
-队长只收小队长自己的阶段汇报（`complete` 可多次）和它上报的问题。队长的 `ledger` 把子会话缩进在小队长下面，
+队长只收小队长自己的阶段汇报（`complete` 可多次，不动看板卡片；绑卡的最终交付用 `complete --final`）和它上报的问题。
+小队长的回执监听不在、子会话回执等了 3 分钟时，程序提醒小队长重挂；10 分钟没人取就告诉队长。队长的 `ledger` 把子会话缩进在小队长下面，
 仍可直接 `peek` / `tell` 它们；侧栏里子会话嵌在小队长行下，用行左的箭头图标折叠。小队长被归档或关掉时子会话不停，
 交回队长并附一条提示。小队长的终端有一枚受限令牌，只认 create-child、receipts、ledger、tell、peek、read、answer、
 stop、archive，且只对自己的子会话。命令、字段名和秋招试点的迁法见 [docs/sub-captain.md](docs/sub-captain.md)。

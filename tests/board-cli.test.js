@@ -634,5 +634,13 @@ test('new --sub-captain needs a project and reaches the app as subCaptain; creat
     await runCli(['create-child', '--title', '子会话', '--task', '做一件事', '--agent', 'codex'], env);
     assert.equal(server.requests[3].agent, 'codex');
     assert.match((await runCli(['help'], {})).stdout, /--sub-captain \(needs --project\)/);
+    // A 小队长's final delivery is marked; any other complete carries no such field.
+    await runCli(['complete', '--result', '阶段一'], env);
+    assert.equal('final' in server.requests[4], false);
+    await runCli(['complete', '--result', '最终交付', '--final'], env);
+    assert.equal(server.requests[5].final, true);
+    const odd = await runCli(['complete', '--result', 'x', '--final=yes'], env);
+    assert.equal(odd.code, 1);
+    assert.match(odd.stderr, /--final takes no value/);
   } finally { server.stop(); }
 });

@@ -1532,8 +1532,10 @@
     const anomaly = M.exceptionReason(item);
     // Input/exit/quota events are deduplicated by task status/blockedAsked.
     // Never suppress a new task's failure or a decision the new Captain needs.
-    // A sub-captain's child reports to the sub-captain, wherever its instruction came from.
-    const sub = subCaptainOf(host.columns().find((c) => c.id === task.colId));
+    // A sub-captain's child reports to the sub-captain, wherever its instruction came from. A child
+    // whose column is gone (closed) or never opened (queued) is known by its record's subCaptainId.
+    const col = host.columns().find((c) => c.id === task.colId);
+    const sub = col ? subCaptainOf(col) : subCaptainOf({ subCaptainId: task.subCaptainId });
     (sub ? subQueue(s, sub.id) : s.pending).push({ ...(anomaly ? { anomaly } : {}), taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
     return true;
   }
@@ -1724,7 +1726,9 @@
     const receipt = M.commandReceipt(message);
     delete task.progress; // this authenticated receipt is newer than prior progress
     task.resumeSubmission = true; // cancel delayed delivery before the asynchronous board write
-    await recordReceiptForBoard(task, receipt);
+    // A sub-captain's complete is a stage report for the Captain: only `complete --final`
+    // finishes its board card (and opens a review round when the card asks for one).
+    if (!(isSubCaptain(caller) && message.action === 'complete' && message.final !== true)) await recordReceiptForBoard(task, receipt);
     // A real submission may follow a question or the no-receipt notice. Replace
     // an unread automatic notice so the Captain sees the authoritative result.
     if (['asking', 'stopped', 'failed'].includes(task.status)) {
@@ -2109,6 +2113,41 @@
       });
     }).then((sent) => { if (sent && listenerStatus?.colId === col.id) listenerReminder = true; }, () => {}).finally(() => { listenerReminderSending = false; });
   }
+  // A sub-captain's `receipts --wait` dies with a restart, and a model can forget to hang it
+  // again. Its children's receipts then wait unread: after three minutes with no listener and
+  // the sub-captain idle, it is reminded once in its own terminal (never over a draft); receipts
+  // still untaken after ten minutes are reported to the Captain once. Both start over once it
+  // has taken them.
+  const SUB_REMIND_AFTER = 3 * 60_000, SUB_ESCALATE_AFTER = 10 * 60_000;
+  const subListeners = new Map();   // sub-captain id -> { alive, at }, from main.js's listener status
+  const subNudges = new Map();      // sub-captain id -> { reminded, sending, escalated } for the current pile
+  function watchSubReceipts(col, entry) {
+    const s = state();
+    const queue = s?.subReceipts?.[col.id] || [];
+    if (!queue.length) { subNudges.delete(col.id); return; }
+    let nudge = subNudges.get(col.id);
+    if (!nudge) subNudges.set(col.id, nudge = {});
+    const waited = Date.now() - Math.min(...queue.map((p) => p.ts || Date.now()));
+    if (!nudge.escalated && waited >= SUB_ESCALATE_AFTER) {
+      nudge.escalated = true;
+      const name = host.columnLabel(col);
+      s.pending.push({ taskId: 'sub-captain-unread-' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36), colId: col.id, title: name, ts: Date.now(), source: 'command',
+        summary: `小队长「${name}」有 ${queue.length} 条子会话回执超过 ${Math.floor(waited / 60_000)} 分钟没取（它的 receipts --wait 监听不在，或它卡住了）。可以 tell 它先运行 receipts 处理、再重挂一个后台 receipts --wait；或 peek 看它卡在哪。` });
+      save();
+    }
+    const listener = subListeners.get(col.id);
+    if (nudge.reminded || nudge.sending || !listener || listener.alive || Date.now() - listener.at > 30_000 || waited < SUB_REMIND_AFTER) return;
+    const busy = () => !entry.alive || entry.sendingPrompt || ['working', 'quota', 'input'].includes(entry.state) || M.terminalActivity(entry.lastScreen, col.cmd) || host.userComposing(col.id);
+    if (busy()) return;
+    nudge.sending = true;
+    Promise.resolve(host.agentInForeground(col, false)).then((ok) => {
+      if (!ok || !isSubCaptain(col) || subListeners.get(col.id)?.alive || !(state()?.subReceipts?.[col.id] || []).length || busy()) return false;
+      return window.ChatUI.sendPrompt(col, '', null, {
+        prefix: '【AgentDeck 子会话回执提醒】你的后台回执监听不在，子会话的回执已经等了三分钟。请立即运行 receipts 读取并处理，再用 Bash 的 run_in_background: true 重挂恰好一个 receipts --wait（不设超时）。',
+        force: true, guardUserInput: true,
+      });
+    }).then((sent) => { if (sent) nudge.reminded = true; }, () => {}).finally(() => { nudge.sending = false; });
+  }
   // The 额度用尽 receipt is provisional. Claude and Codex wait out the limit and
   // continue on their own ("Usage limit reset · continuing automatically"), but
   // the task was already closed as failed. Once the terminal has visibly worked
@@ -2223,6 +2262,7 @@
     const col = host.columns().find((c) => c.id === id);
     window.SleepResume?.clock.beat();
     if (col) reopenAfterQuota(col, entry);
+    if (col && isSubCaptain(col)) watchSubReceipts(col, entry);
     if (col?.executor === 'chatgpt-web') {
       startWebTask(col);
       if (col.captainCrew) maybeArchive(col, entry);
@@ -2661,7 +2701,10 @@
         return { done: true, result: 'Installation result recorded.' };
       }
       case 'main-receipt-listener-status':
-        if (sub) return { done: true };   // only the Captain's own listener is watched and reminded
+        if (sub) {   // a sub-captain's listener is watched for its children's receipts (watchSubReceipts)
+          if (typeof message.alive === 'boolean') subListeners.set(caller.id, { alive: message.alive, at: Date.now() });
+          return { done: true };
+        }
         if (!isMain(caller) || typeof message.alive !== 'boolean') throw new Error('无效回执监听状态');
         if (listenerStatus?.colId !== caller.id) listenerReminder = false;
         listenerStatus = { colId: caller.id, alive: message.alive, at: Date.now() };

@@ -13,6 +13,8 @@ node "$AGENTDECK_BOARD_CLI" new --sub-captain --project "秋招" --title "秋招
 - `--sub-captain` 只有总队长能用，必须带 `--project`。其余参数和普通 `new` 一样
   （`--agent`、`--command`、`--cwd`、`--worktree`、`--task-id`、`--priority`…），
   只是不能用 `chatgpt-web`（网页会话没有终端，开不了子会话）。
+- 带 `--task-id` 绑看板卡片时：小队长平时的 `complete` 是阶段汇报，不动卡片；
+  只有 `complete --final` 算最终交付，卡片才完成（带 `--verify` 的卡这时进待验收、开审查轮）。
 - 程序把「小队长规则」接在任务正文后面一起发过去：怎么开子会话、怎么挂回执监听、
   怎么汇报。重启续接时规则跟着任务一起恢复。
 
@@ -27,7 +29,7 @@ node "$AGENTDECK_BOARD_CLI" new --sub-captain --project "秋招" --title "秋招
 | `receipts [--wait] [--timeout 秒]` | 取自己子会话的回执、提问、确认提示。始终恰好挂一个 `receipts --wait`。 |
 | `ledger` | 只列自己的子会话（含已归档、排队中的）。 |
 | `tell` / `peek` / `read` / `answer` / `stop` / `archive` | 和总队长的用法一样，只能对自己的子会话。 |
-| `complete` / `ask` / `progress` | 向总队长汇报。小队长的 `complete` 可以多次，每次都作为阶段汇报送到总队长；`ask` 也随时能问。 |
+| `complete` / `ask` / `progress` | 向总队长汇报。小队长的 `complete` 可以多次，每次都作为阶段汇报送到总队长，不动看板卡片；绑了卡片的最终交付用 `complete --final`。`ask` 也随时能问。 |
 
 `new`、`task`、`inbox`、`notify-user`、`queue`、`settings`、`briefing`、`handoff`、
 `discuss`、`receipts --snapshot/--ack` 都只有总队长能用。
@@ -37,7 +39,13 @@ node "$AGENTDECK_BOARD_CLI" new --sub-captain --project "秋招" --title "秋招
 - 子会话的命令回执、提问、停在确认/权限提示、「已结束，未提交回执」、长时间无输出、
   额度用尽、进程退出、「待补充」排队超时，全部进小队长的 `receipts`。
   不管这条指令是小队长发的还是总队长直接 `tell` 的，回执都归小队长。
+- 子会话的列已经被关掉，或者还在排队、没开出来就失败了，这条失败回执也照样给小队长
+  （按派活记录上的 `subCaptainId` 认）。
 - 子会话的派活卡片显示在小队长的对话里，不在总队长的对话里。
+- 兜底：小队长的 `receipts --wait` 不在（重启后它跟着终端没了，或者模型忘了重挂），
+  子会话回执等了 3 分钟、小队长又空着时，程序往小队长终端里打一句提醒，让它取回执、重挂监听
+  （输入框里有用户没发的字就不打）；10 分钟还没人取，给总队长发一条「小队长 X 有 N 条子会话回执
+  M 分钟没取」。每堆回执各提醒一次，取走后重新计。
 - 小队长自己的回执、提问照常进总队长的 `receipts`。
 
 ## 总队长看到什么
@@ -64,6 +72,7 @@ c-board-aaa  「秋招小队长」  已完成  小队长·子会话 2 个·子�
   已归档的子会话也一并交回（以后 `tell` 恢复它，回执给总队长）。
 - 还有活着的子会话时，小队长不会被自动归档。
 - 重启 AgentDeck 不影响分层：小队长重新拿到它的令牌，子会话仍归它，没取的回执还在。
+  它的后台 `receipts --wait` 会随终端一起没掉，靠上面「兜底」的提醒重挂。
 
 ## 数据字段（给架构图等分层显示用）
 
