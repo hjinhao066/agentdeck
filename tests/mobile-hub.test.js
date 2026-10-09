@@ -156,6 +156,9 @@ test('terminal residue is taken out of a reply and the Captain\'s words are kept
     'Worked for 2m 3s • 10:22', '3 new messages (click) ↓', '下一步等截图回来就验收。  Jump to bottom (click) ↓',
   ].join('\n');
   assert.equal(Core.cleanReply(reply, said), '三件事都有结果了。\n- 额度显示：已核对。\n  第二行缩进照旧。\n\n下一步等截图回来就验收。');
+  // "· 1 shell still running" wrapped on a 49-column Windows Captain left "running" alone.
+  assert.equal(Core.cleanReply('PONG-WEBTEST-190509-3853手机公网闭环通了\n\nrunning'), 'PONG-WEBTEST-190509-3853手机公网闭环通了');
+  assert.equal(Core.cleanReply('The tests are running\nstill running fine'), 'The tests are running\nstill running fine');
   // The tail of a file diff printed above the reply.
   assert.equal(Core.cleanReply('+已归档）；c-board-1 轮换\n        + t-de2b，报告在 reports/\n    144 +\n    145  ## 卡在哪\n         保留原席位\n    147\n\n你说得对，已经派了。'), '你说得对，已经派了。');
   // Prompts AgentDeck types itself are dropped with everything in their block.

@@ -193,6 +193,7 @@
   const TERMINAL_LINES = [
     new RegExp(`^${TOOL_CLAUSE}(?:, ${TOOL_CLAUSE})*$`, 'i'),      // Read 1 file, ran 3 shell commands
     /^Running \d+ shell commands?…$/, /^⎿/,
+    /^running$/,                                                    // "· 1 shell still running" wrapped on a narrow (Windows) column
     /^Update available! Run: /, /^Welcome to Claude Code\b/,
     /^Worked for (?:\d+[hms] ?)+(?:•.*)?$/,
     /^Resume this session with:$/, /^claude --resume [\w-]+$/,

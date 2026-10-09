@@ -1092,11 +1092,13 @@
     else from = Math.max(0, buf.length - term.rows * 3);
     from = Math.max(from, buf.length - 2500);
     const lines = [];
+    let prev = '';
     for (let i = from; i < buf.length; i++) {
       const ln = buf.getLine(i);
       if (!ln) continue;
       const text = ln.translateToString(true);
-      if (ln.isWrapped && lines.length) lines[lines.length - 1] += text; else lines.push(text);
+      if (ln.isWrapped && lines.length && C.continuesRow(prev, text)) lines[lines.length - 1] += text; else lines.push(text);
+      prev = text;
     }
     return lines;
   }

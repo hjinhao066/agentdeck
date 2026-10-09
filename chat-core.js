@@ -58,6 +58,12 @@
   const FOOTER = /bypass permissions|shift\+tab|esc to (?:interrupt|cancel)|\? for shortcuts|for shortcuts|auto-accept|context left|ctrl\+[a-z] to|⏵⏵/i;
   const SPINNER = /^\s*[✻✽✢✶✳∴*·]\s+\S.*(?:…|\.\.\.|\bfor \d+[smh]|\(\d+s)/;
 
+  // ConPTY (Windows) leaves full rows to autowrap, so the row after a full one carries
+  // xterm's wrap flag although it starts a new line. A blank or ruled row never
+  // continues text and is never continued by it: glue only rows with text on both sides.
+  const LONE_ROW = /^[\s─━═]*$/;
+  function continuesRow(prev, row) { return !LONE_ROW.test(prev) && !LONE_ROW.test(row); }
+
   function isChrome(line) {
     const t = line.trim();
     if (!t) return false;
@@ -578,7 +584,7 @@
   }
 
   return {
-    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, continuesRow, pasteBusy, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
     // the reply as the chat view shows it

@@ -618,3 +618,38 @@ test('a pasted image path: Claude Code says "Pasting…" in its footer while it 
   assert.equal(C.pasteBusy('❯ Pasting… is slow\n────'), false);
   assert.equal(C.pasteBusy(['Pasting…', '[Image #1] attached'].join('\n')), false);
 });
+
+// 10-08 Windows Captain, 49 columns, 19:05: ConPTY flagged every row after a full one as
+// wrapped. Glued as soft wraps, the reply sat behind a row of padding and the rule, prompt
+// and footer became one row the input box cut could not find: the reply came out empty.
+test('Windows ConPTY: blank and ruled rows are not glued as soft wraps', () => {
+  const sent = '【连通测试 WEBTEST-190509-3853】这是 Mac 上修复会话从手机公网入口发来的测试';
+  const pad = ' '.repeat(49), rule = '─'.repeat(49);
+  const rows = [
+    ['❯ 【连通测试 WEBTEST-190509-3853】这是 Mac       ', false],
+    ['  上修复会话从手机公网入口发来的测试，不是新活， ', true],
+    [pad, false],
+    ['● PONG-WEBTEST-190509-3853手机公网闭环通了       ', true],
+    [pad, false],
+    ['✻ Cooked for 3s · done 7:05 PM · 1 shell still   ', true],
+    ['  running', false],
+    [pad, false],
+    [rule, true],
+    ['❯                                                ', true],
+    [rule, true],
+    ['  Context: [██░░░░░░░░░░░░░░] 103k/1.0M (10%) …  ', true],
+    ['  Model: Sonnet 5.5 | Thinking: high | Session…', false],
+    ['  ⏵⏵ bypass permissions on · 1 shell · ← 1 age…', false],
+  ];
+  const lines = [];
+  let prev = '';
+  for (const [text, wrapped] of rows) {
+    if (wrapped && lines.length && C.continuesRow(prev, text)) lines[lines.length - 1] += text; else lines.push(text);
+    prev = text;
+  }
+  assert.equal(lines[0], rows[0][0] + rows[1][0], 'the prompt echo still joins its continuation');
+  const reply = C.extractReply(lines, sent, 49);
+  assert.match(reply, /^PONG-WEBTEST-190509-3853手机公网闭环通了/);
+  assert.doesNotMatch(reply, /Context:|─|❯/);
+  assert.equal(C.continuesRow('a long word that runs to the ed', 'ge of the row'), true);
+});
