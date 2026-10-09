@@ -137,7 +137,7 @@ async function shot(name, keep) {
       a.currentTime = ((at[a.animationName] == null ? 0.5 : at[a.animationName]) + (['cm-flow', 'cm-trail'].includes(a.animationName) ? phase(target) : 0)) * t.duration;
     });
   });
-  const png = await page.screenshot({ animations: 'allow', scale: 'css' });
+  const png = await emulateScreen.capture(page, { scale: 'css' });
   if (shots) { fs.mkdirSync(shots, { recursive: true }); fs.writeFileSync(path.join(shots, name + '.png'), png); }
   if (keep) fs.writeFileSync(test.info().outputPath(name + '.png'), png);
   await page.evaluate(() => document.getAnimations().forEach((a) => { if (a.playState === 'paused') a.play(); }));

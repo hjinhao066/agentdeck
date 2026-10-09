@@ -100,6 +100,6 @@ test('the project title counts only what is on the map, the same as the 队长 b
   await expect(page.locator('.cm-node.kind-captain .cm-line')).toHaveText('2 干活中 · 1 待补充 · 1 失败 · 1 已完成');
   if (SHOTS) {
     fs.mkdirSync(SHOTS, { recursive: true });
-    await page.screenshot({ path: path.join(SHOTS, 'crew-map-live-only.png'), animations: 'disabled', scale: 'css' });
+    await emulateScreen.capture(page, { path: path.join(SHOTS, 'crew-map-live-only.png'), animations: 'disabled', scale: 'css' });
   }
 });

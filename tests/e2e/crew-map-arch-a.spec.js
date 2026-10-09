@@ -66,7 +66,7 @@ async function shot(name, keepMouse) {
   await settled();
   fs.mkdirSync(shots, { recursive: true });
   if (!keepMouse) await page.mouse.move(2, 2);
-  await page.screenshot({ path: path.join(shots, name + '.png'), animations: 'disabled', scale: 'css' });
+  await emulateScreen.capture(page, { path: path.join(shots, name + '.png'), animations: 'disabled', scale: 'css' });
 }
 const rgb = (c) => (/rgba?\(([^)]+)\)/.exec(c) || [])[1].split(',').slice(0, 3).map((v) => parseFloat(v));
 const lum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };

@@ -69,7 +69,7 @@ async function shot(name) {
   if (!shots) return;
   fs.mkdirSync(shots, { recursive: true });
   await page.waitForTimeout(400);
-  await page.screenshot({ path: path.join(shots, name + '.png') });
+  await emulateScreen.capture(page, { path: path.join(shots, name + '.png') });
 }
 
 test.afterEach(async () => {

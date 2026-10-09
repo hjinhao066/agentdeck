@@ -127,7 +127,7 @@ async function shot(name) {
       a.currentTime = ((at[a.animationName] == null ? 0.5 : at[a.animationName]) + (['cm-flow', 'cm-trail'].includes(a.animationName) ? phase(target) : 0)) * t.duration;
     });
   });
-  await page.screenshot({ path: path.join(shots, name + '.png'), animations: 'allow', scale: 'css' });
+  await emulateScreen.capture(page, { path: path.join(shots, name + '.png'), scale: 'css' });
   await page.evaluate(() => document.getAnimations().forEach((a) => { if (a.playState === 'paused') a.play(); }));
 }
 

@@ -35,7 +35,7 @@ async function cli(args) {
 async function shot(name) {
   if (process.env.AGENTDECK_PROJECT_SHOTS) {
     fs.mkdirSync(process.env.AGENTDECK_PROJECT_SHOTS, { recursive: true });
-    await page.screenshot({ path: path.join(process.env.AGENTDECK_PROJECT_SHOTS, name), animations: 'disabled' });
+    await emulateScreen.capture(page, { path: path.join(process.env.AGENTDECK_PROJECT_SHOTS, name), animations: 'disabled' });
   }
 }
 const group = (key) => page.locator(`.cm-project[data-project="${key}"]`);

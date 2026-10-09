@@ -93,7 +93,7 @@ async function picture(name) {
   await settled();
   await page.mouse.move(2, 2);
   await still();
-  const png = await page.screenshot({ animations: 'allow', scale: 'css' });
+  const png = await emulateScreen.capture(page, { scale: 'css' });
   fs.writeFileSync(test.info().outputPath(name + '.png'), png);
   if (shots) { fs.mkdirSync(shots, { recursive: true }); fs.writeFileSync(path.join(shots, name + '.png'), png); }
   await go();
@@ -178,7 +178,7 @@ test('1x screen: the text is drawn at the scale it shows at: at 140%, on arrival
   const crew = sessionsOf({ alpha: 2, beta: 1 });
   await launch(crew);
   await open(1512, 982, 'dark', crew.length); await settled();
-  const card = async () => { await page.mouse.move(2, 2); await settled(); await still(); const b = await page.locator('.cm-node:not(.kind-captain)').first().boundingBox(); return page.screenshot({ clip: { x: b.x, y: b.y, width: b.width, height: b.height }, animations: 'allow' }); };
+  const card = async () => { await page.mouse.move(2, 2); await settled(); await still(); const b = await page.locator('.cm-node:not(.kind-captain)').first().boundingBox(); return emulateScreen.capture(page, { clip: { x: b.x, y: b.y, width: b.width, height: b.height } }); };
   // drop the canvas's layer for a moment: Chromium rasters it again at the scale it is shown at
   const afresh = async () => {
     await page.evaluate(() => { const c = document.querySelector('.cm-canvas'); c.style.willChange = 'auto'; void c.offsetWidth; });

@@ -13,7 +13,7 @@ const errors = [];
 async function screenshot(name) {
   if (!shots) return;
   fs.mkdirSync(shots, { recursive: true });
-  await page.screenshot({ path: path.join(shots, name + '.png'), animations: 'disabled', scale: 'css' });
+  await emulateScreen.capture(page, { path: path.join(shots, name + '.png'), animations: 'disabled', scale: 'css' });
 }
 async function resize(width, height) {
   // a 2x screen, as on the MacBook these layouts were made on (see fixtures/screen-density)

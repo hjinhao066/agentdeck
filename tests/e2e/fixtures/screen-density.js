@@ -14,3 +14,18 @@ module.exports = async function emulateScreen(page, width, height, deviceScaleFa
   // (polled on a timer, not on frames: an inactive test window may draw none for a while)
   await page.waitForFunction(([w, h, d]) => innerWidth === w && innerHeight === h && devicePixelRatio === d, [width, height, deviceScaleFactor], { polling: 100 });
 };
+
+// A picture taken through the same DevTools session: page.screenshot sets the density back to the window's own
+// (and an identical setting sent again does not bring it back). clip in CSS px; scale 'css' gives a CSS-px picture,
+// 'device' (the default, as page.screenshot's) a device-px one; path writes it there. animations 'disabled' finishes
+// the ones that end and holds the rest still while the picture is taken.
+module.exports.capture = async function capture(page, { path: file, clip, scale = 'device', animations = 'allow' } = {}) {
+  if (!sessions.has(page)) sessions.set(page, await page.context().newCDPSession(page));
+  const [width, height, dpr] = await page.evaluate(() => [innerWidth, innerHeight, devicePixelRatio]);
+  if (animations === 'disabled') await page.evaluate(() => document.getAnimations().forEach((a) => { if (a.effect && Number.isFinite(a.effect.getComputedTiming().iterations)) a.finish(); else if (a.playState === 'running') { a.pause(); a.held = true; } }));
+  const { data } = await sessions.get(page).send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width, height, ...clip, scale: scale === 'css' ? 1 / dpr : 1 } });
+  if (animations === 'disabled') await page.evaluate(() => document.getAnimations().forEach((a) => { if (a.held) { delete a.held; a.play(); } }));
+  const png = Buffer.from(data, 'base64');
+  if (file) require('fs').writeFileSync(file, png);
+  return png;
+};
