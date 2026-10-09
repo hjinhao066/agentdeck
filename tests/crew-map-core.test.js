@@ -1346,3 +1346,16 @@ test('智能一页 keeps the smallest text at 10 device px or more: on a 1x scre
     assert.ok(r.scale * 11.5 >= 10 - 1e-9, `${JSON.stringify(spec)} at ${w}x${h}: ${(r.scale * 11.5).toFixed(2)}px`);
   }
 });
+
+test('智能一页 with no project on the map (only 队长, as after the last project is archived) still arranges it', () => {
+  const empty = crewOf({});
+  assert.equal(empty.projects.length, 0);
+  for (const dpr of [1, 2]) for (const [w, h] of [[1440, 900], [980, 700], [400, 300]]) {
+    const r = C.arrangePage(empty, { w, h }, { ...ARRANGE, dpr }, {});
+    assert.deepEqual(r.plan.lanes, [], `${w}x${h}, ${dpr}x`);
+    assert.ok(r.lay && r.lay.groups.length === 0);
+    // the arrangement in use when the projects went is given back
+    const held = C.arrangePage(crewOf({ a: 2, b: 1 }), { w, h }, { ...ARRANGE, dpr }, {});
+    assert.deepEqual(C.arrangePage(empty, { w, h }, { ...ARRANGE, dpr }, { plan: held.plan, planW: w, dpr }).plan.lanes, []);
+  }
+});
