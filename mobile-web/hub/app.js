@@ -1288,17 +1288,26 @@
     renderAttention();
   }
   // An unread item counts as read once most of it has stayed on screen for a
-  // moment. Measured on a timer rather than observed: it holds when the browser
-  // throttles painting.
+  // moment while the page is in front: shown (visibilityState) and its window
+  // focused (focus/blur), as on the desktop. Leaving clears every count at once;
+  // back in front, each starts again from 0. Measured on a timer rather than
+  // observed, so throttled painting does not matter.
   const attentionSeenSince = new Map();
   // Reports read on this visit stay where the user is reading them until the tab is left.
   const attentionKept = new Set();
   const SEEN_MS = 1500;
+  let pageFocused = document.hasFocus();
+  const attending = () => pageFocused && document.visibilityState === 'visible';
+  const stopCounting = () => { attentionSeenSince.clear(); captainSeenSince.clear(); };
+  addEventListener('focus', () => { pageFocused = true; });
+  addEventListener('blur', () => { pageFocused = false; stopCounting(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') stopCounting(); });
   // Mostly in view through its scroll area and the window, on both axes (the same rule as the desktop).
   const onScreen = (el, box) => Core.mostlyShown(el.getBoundingClientRect(), [box, { left: 0, top: 0, right: innerWidth, bottom: innerHeight, width: innerWidth, height: innerHeight }]);
   function checkAttentionSeen() {
     checkCaptainSeen();
     if (document.hidden || view !== 'attention') { attentionSeenSince.clear(); attentionKept.clear(); return; }
+    if (!attending()) { attentionSeenSince.clear(); return; }
     const box = $('main').getBoundingClientRect(), now = Date.now(), ready = [];
     for (const el of document.querySelectorAll('#attention-lists .at-item.unread')) {
       const key = el.dataset.key;
@@ -1314,7 +1323,7 @@
   function checkCaptainSeen() {
     const m = byId(target);
     const unseen = m && m.state === 'online' && Array.isArray(m.attention) ? m.attention.filter((i) => i.kind === 'report' && !i.done && i.turn) : [];
-    if (document.hidden || view !== 'captain' || !unseen.length) { captainSeenSince.clear(); return; }
+    if (!attending() || view !== 'captain' || !unseen.length) { captainSeenSince.clear(); return; }
     const box = $('captain-turns').getBoundingClientRect(), now = Date.now(), ready = [];
     for (const row of $('captain-turns').querySelectorAll(`.turn[data-said][data-machine="${CSS.escape(m.id)}"]`)) {
       const said = row.dataset.said.split(' '), ids = unseen.filter((i) => said.includes(i.turn)).map((i) => m.id + ':' + i.id);
