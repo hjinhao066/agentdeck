@@ -2865,6 +2865,20 @@
     host.flushConfig?.();
     return kids.length;
   }
+  // The 编辑 dialog respawned a sub-captain's column with a new id (renderer respawnColumn): its
+  // children, live, archived or queued, their dispatch records and its untaken receipts follow it.
+  function subCaptainIdChanged(oldId, newId) {
+    const s = state();
+    if (!s || !oldId || !newId || oldId === newId) return;
+    [...host.columns(), ...(host.config.archived || [])].forEach((c) => { if (c.subCaptainId === oldId) c.subCaptainId = newId; });
+    s.waitlist.forEach((w) => { if (w.metadata?.subCaptainId === oldId) w.metadata.subCaptainId = newId; });
+    s.tasks.forEach((t) => { if (t.subCaptainId === oldId) t.subCaptainId = newId; });
+    if (s.subReceipts?.[oldId]) { subQueue(s, newId).push(...s.subReceipts[oldId]); delete s.subReceipts[oldId]; }
+    subListeners.delete(oldId);
+    subNudges.delete(oldId);
+    save();
+    host.flushConfig?.();
+  }
   // Resolves to the response payload, or rejects with a message for the caller.
   function handle(message, caller) {
     return ['main-new', 'main-queue', 'main-task', 'create-child'].includes(message.action)
@@ -3354,6 +3368,8 @@
     isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice, automation,
     // 小队长: the renderer calls releaseSubCrew(col, '归档'|'关掉') once a sub-captain's column left the deck
     releaseSubCrew,
+    // ... and subCaptainIdChanged(oldId, newId) once respawnColumn gave a sub-captain's column a new id
+    subCaptainIdChanged,
     batteryReadout, setBattery,
     // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click
     isPriority: sessionHigh, isHigh, setPriority: (id, level) => setPriority(id, level, true),

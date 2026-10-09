@@ -444,3 +444,31 @@ test('D: a sub-captain whose only child still waits in the queue is not archived
   assert.ok(r.columns.includes(sub), 'archived while its child waits for a slot');
   assert.equal(r.state().waitlist.find((w) => w.title === '排队子会话')?.metadata?.subCaptainId, sub.id, 'the queued child is still its own');
 });
+
+// The 编辑 dialog with a new command or folder respawns the column (renderer.js respawnColumn):
+// the same column object, a new id. The stand-in does what respawnColumn does, telling MainSession
+// as respawnColumn does for a sub-captain.
+function respawn(r, col) {
+  const oldId = col.id;
+  col.id = 'c-board-respawned-' + oldId;
+  r.terms.set(col.id, r.terms.get(oldId));
+  r.terms.delete(oldId);
+  if (col.subCaptain) r.api.subCaptainIdChanged?.(oldId, col.id);
+  return col;
+}
+
+test('a sub-captain whose column was respawned with a new id still leads its children', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  const kid = await r.child(sub, '子会话A');
+  await r.api.submit({ action: 'complete', result: 'A 第一轮', files: [] }, kid);
+  respawn(r, sub); // the user changed its model in the 编辑 dialog
+  await r.text('main-tell', r.captain, { to: kid.id, message: '再做一轮' });
+  await r.api.submit({ action: 'complete', result: 'A 第二轮', files: [] }, kid);
+  assert.doesNotMatch(await r.text('main-receipts', r.captain), /A 第二轮/, 'a child receipt went to the Captain');
+  const subView = await r.text('main-receipts', sub);
+  assert.match(subView, /A 第一轮/, 'its untaken receipt from before the respawn is still its own');
+  assert.match(subView, /A 第二轮/);
+  assert.match(await r.text('main-ledger', sub), new RegExp(kid.id), 'its ledger still lists the child');
+  assert.match(await r.text('main-tell', sub, { to: kid.id, message: '第三轮' }), /已发给|待补充/, 'it can still tell its child');
+});

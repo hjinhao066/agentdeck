@@ -3050,6 +3050,8 @@ function respawnColumn(col, opts) {
   }
   const oldId = col.id;
   col.id = newId();
+  // A 小队长's children, records and untaken receipts point at its id.
+  if (col.subCaptain === true) MainSession.subCaptainIdChanged(oldId, col.id);
   delete col.modelSessionId;
   if (!(opts && opts.freshChat)) ChatUI.onColumnIdChanged(oldId, col.id);
   if (focusedId === oldId) focusedId = col.id;
