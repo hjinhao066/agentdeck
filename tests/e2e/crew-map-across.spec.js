@@ -31,7 +31,7 @@ const CREW = [
   ['agentdeck', '重启后自动续跑', 'working', 'Opus 5.5', 'Claude', 'RESEND', ['⏺ 读完上次回执，从第 3 步接着做', UPDATE]],
   ['agentdeck', '队长接力交接 v2', 'working', 'Opus 5.5', 'Claude', null, ['⏺ 交接页按看板卡片一卡一条重写中']],
   ['agentdeck', 'CI Verify #81 失败排查', 'working', 'Haiku 5.5', 'Claude', null, ['⏺ 定位到 Windows 换行符导致快照不一致']],
-  ['agentdeck', '2.0.1 集成与打包', 'queued', 'Sonnet 5.5', 'Claude', null, []],
+  ['agentdeck', '2.0.2 集成与打包', 'queued', 'Sonnet 5.5', 'Claude', null, []],
   ['agentdeck', 'Bark 提醒去重', 'done', 'Haiku 5.5', 'Claude', '同一轮只推一次，30 秒内不重复响铃；单元测试 12 条全部通过。', ['⏺ 已提交回执']],
   ['agentdeck', '字号缩放快捷键', 'working', 'Haiku 5.5', 'Claude', null, ['⏺ ⌘+ / ⌘− / ⌘0 三个快捷键接好了，正在补测试']],
   ['agentdeck', '侧栏席位显示账号名', 'stopped', 'Sonnet 5.5', 'Claude', null, ['⏺ 改完了']],
@@ -165,6 +165,17 @@ const read = () => page.evaluate(() => {
   };
 });
 const apart = (a, b) => a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+// A map that shows whole fills the window: centred both ways, as large as the page holds it (up to 140% of its
+// own 100%), so across or down it reaches its margins (8px, and the map's own 16 around it).
+function fillsPage(g, label) {
+  const boxes = [...g.frames, ...g.cards];
+  const left = Math.min(...boxes.map((b) => b.x)) - g.vp.x, right = g.vp.right - Math.max(...boxes.map((b) => b.right));
+  const top = Math.min(...boxes.map((b) => b.y)) - g.vp.y, bottom = g.vp.bottom - Math.max(...boxes.map((b) => b.bottom));
+  expect(Math.abs(left - right), `${label}: centred across (${left.toFixed(1)} / ${right.toFixed(1)})`).toBeLessThanOrEqual(3);
+  expect(Math.abs(top - bottom), `${label}: centred down (${top.toFixed(1)} / ${bottom.toFixed(1)})`).toBeLessThanOrEqual(3);
+  expect(g.view.scale, `${label}: at most 140%`).toBeLessThanOrEqual(0.7 * 1.4 + 1e-6);
+  expect(g.view.scale >= 0.7 * 1.4 - 1e-6 || Math.min(left, top) <= 8 + 16 * g.view.scale + 2, `${label}: fills the window across or down (${left.toFixed(1)} / ${top.toFixed(1)} left)`).toBe(true);
+}
 // No 派出 line passes through a frame other than the one it feeds.
 const linesClear = () => page.evaluate(() => {
   const lay = CrewMap.layout(), routes = CrewMapCore.routes(CrewMap.lastMap(), lay).filter((r) => r.type === 'dispatch');
@@ -179,9 +190,11 @@ test('24 sessions in 6 projects: 智能一页 puts them on one page where it can
   for (const [w, h] of [[1920, 1080], [1440, 900], [1024, 768]]) for (const theme of ['dark', 'light']) {
     await open(w, h, theme); await settled();
     const g = await read();
-    // 1920: one page, shown as large as it holds (a little under 100%); smaller windows cannot hold it on one page readably
+    // 1920: one page, shown as large as it holds (a little under 100%); smaller windows cannot hold it on one page readably.
+    // In lanes it fills the window when the whole of it shows there (1440), else it stands at 100% from the top (1024).
     expect(g.plan.page, `${w}: on one page`).toBe(w === 1920);
     if (g.plan.page) { expect(g.view.scale).toBeLessThan(0.7); expect(g.view.scale).toBeGreaterThanOrEqual(0.7 * 0.8 - 1e-6); }
+    if (g.pageFits) fillsPage(g, `${w}`);
     else expect(g.view.scale, `${w}: in lanes at the map's own 100%`).toBeCloseTo(0.7, 5);
     // fifteen cards three wide, five rows (two wide would leave it twice as long as the rest); the small ones one wide
     expect(g.plan.caps).toEqual({ agentdeck: 3, 秋招: 1, 'kenke-auto': 1, 'fuqing-inventory': 1, 'daily-progress': 1, '': 1 });
@@ -235,8 +248,10 @@ for (const [name, spec, [w, h], caps] of [
   expect(g.plan.lanes).toEqual(Object.keys(spec).map((key) => [key]));
   // the whole map on the page: every card whole inside the viewport, nothing past its sides, no line through another frame
   for (const c of g.cards) { expect(c.y, c.id).toBeGreaterThanOrEqual(g.vp.y - 0.5); expect(c.bottom, c.id).toBeLessThanOrEqual(g.vp.bottom + 0.5); expect(c.x, c.id).toBeGreaterThanOrEqual(g.vp.x - 0.5); expect(c.right, c.id).toBeLessThanOrEqual(g.vp.right + 0.5); }
-  expect(g.view.scale).toBeLessThanOrEqual(0.7 + 1e-6);
+  // as large as the page holds it, centred: the user's 2.0.0 map grows past 100% to fill the window across
+  fillsPage(g, name);
   expect(g.view.scale).toBeGreaterThanOrEqual(0.7 * 0.8 - 1e-6);
+  if (w === 1512) expect(g.view.scale, 'grown past 100%').toBeGreaterThan(0.7 * 1.04);
   expect(await linesClear()).toEqual([]);
   await shot(`page-${Object.values(spec).join('-')}-${w}x${h}-dark`, true);
   // the same map in light
@@ -332,11 +347,11 @@ test('智能一页 is the default and follows the window; a first drag leaves it
   await page.locator('[data-cm="reset"]').click(); await settled();
   expect(await fit.evaluate((n) => [n.title === n.getAttribute('aria-label'), !!n.querySelector('svg'), n.textContent.trim()])).toEqual([true, true, '']);
   const wide = await read();
-  // the window narrows: the map arranges itself again, at 100%, still on its own
+  // the window narrows: the map arranges itself again (in lanes), and fills this window, still on its own
   await size(1440, 900); await settled();
   let g = await read();
   expect(g.plan).not.toEqual(wide.plan);
-  expect(g.view.scale).toBeCloseTo(0.7, 5);
+  if (g.pageFits) fillsPage(g, '1440'); else expect(g.view.scale).toBeCloseTo(0.7, 5);
   await expect(fit).toHaveAttribute('data-state', 'auto');
   // a frame dragged by hand: the map is the user's now, and that first move can be taken back
   await dragBy(page.locator('.cm-project[data-project="秋招"] .cm-project-name'), 140, 90);

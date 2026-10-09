@@ -22,10 +22,10 @@ const WORKING = '✻ Working… (12s · esc to interrupt)';
 // [id, project, title, status of 队长's card for it (null: none, create-child's crew), 小队长 id, screen rows, extra record]
 // (create-child's column ids are 'c' and the time they were made: the map lists a crew in that order)
 const CREW = [
-  ['lead', 'agentdeck', '2.0.1 发版小队长', 'working', '', ['⏺ 3 个队员在打包，Windows 包回来就合更新说明', WORKING]],
+  ['lead', 'agentdeck', '2.0.2 发版小队长', 'working', '', ['⏺ 3 个队员在打包，Windows 包回来就合更新说明', WORKING]],
   ['c1mac', '', '打包 macOS 并公证', null, 'lead', ['⏺ notarytool 已提交，等 Apple 回执', WORKING]],
   ['c2win', '', '打包 Windows 安装包', null, 'lead', ['⏺ 已交给小队长'], { taskCompleted: true, result: 'Windows 安装包已签名，SHA 写进 release-notes。' }],
-  ['c3notes', '', '写 2.0.1 更新说明', null, 'lead', ['要不要写 Windows 已知问题？', '❯ 1. 写', '  2. 不写']],
+  ['c3notes', '', '写 2.0.2 更新说明', null, 'lead', ['要不要写 Windows 已知问题？', '❯ 1. 写', '  2. 不写']],
   ['c4cert', '', '签名证书续期', null, 'c1mac', ['⏺ 证书 30 天后到期，先续上', WORKING]],
   ['w1', 'agentdeck', 'crew-map 横排布局重做', 'working', '', ['⏺ 正在跑 crew-map 端到端测试', WORKING]],
   ['w2', 'agentdeck', 'Bark 提醒去重', 'done', '', ['⏺ 已提交回执']],
@@ -139,7 +139,7 @@ test('a 小队长 heads its crew: the crew hangs under it a step in, on a pocket
   for (const theme of ['dark', 'light']) {
     await open(1512, 982, theme);
     const m = await read();
-    // who leads whom, from create-child's records: two levels under 2.0.1 发版小队长
+    // who leads whom, from create-child's records: two levels under 2.0.2 发版小队长
     expect(m.nodes.c1mac).toMatchObject({ parent: 'lead', depth: 1, project: 'agentdeck' });
     expect(m.nodes.c4cert).toMatchObject({ parent: 'c1mac', depth: 2, project: 'agentdeck' });
     expect(m.nodes.lead).toMatchObject({ leader: true, crew: 3, parent: '' });

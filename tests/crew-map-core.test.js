@@ -1043,7 +1043,7 @@ test('a web request waiting its turn is 排队 even though its terminal reads wo
 const squadInput = (extra = {}) => ({
   captain,
   columns: [
-    col('lead', '2.0.1 发版小队长', { project: 'agentdeck', taskId: 'T-lead', state: 'working' }),
+    col('lead', '2.0.2 发版小队长', { project: 'agentdeck', taskId: 'T-lead', state: 'working' }),
     col('w1', '侧栏额度深色修正', { project: 'agentdeck', taskId: 'T-w1', state: 'working' }),
     col('k1', '打包 macOS', { captainCrew: false, taskId: 'T-k1', parentTaskId: 'T-lead', state: 'working' }),
     col('g1', '签名公证', { captainCrew: false, taskId: 'T-g1', parentTaskId: 'T-k1', state: 'working' }),
@@ -1149,4 +1149,18 @@ test('小队长分层 and 智能一页: a 小队长\'s block is one column, so a
   assert.deepEqual(plan.caps, { 秋招: 1, other: 1 });
   const lay = C.layout(map, { ...PAGE, lanes: plan.lanes, caps: plan.caps });
   assert.equal(new Set(['lead', 'k1', 'k2', 'k3'].map((id) => lay.nodes.get(id).y)).size, 4, 'four rows: the 小队长 and its three');
+});
+
+test('智能一页 shows a map that fits as large as its page holds it: up to 140% of its own 100%, down to 80%, centred', () => {
+  const FIT = C.BASE_SCALE, limits = { min: FIT * C.PAGE_MIN_SCALE, max: FIT * C.PAGE_MAX_SCALE }, inset = { top: 8, right: 8, bottom: 8, left: 8 };
+  assert.equal(C.PAGE_MAX_SCALE, 1.4);
+  // the user's 2.0.0 map (about 1640 x 752 at the drawn size) on a 14-inch MacBook's page (1260 x 814): it fills the
+  // page across, a little past 100%, with the room to spare split above and below
+  const wide = C.computeFit({ left: 0, top: 0, right: 1640, bottom: 752 }, { w: 1260, h: 814 }, inset, limits);
+  assert.ok(Math.abs(wide.scale * 1640 - (1260 - 16)) < 1e-6, String(wide.scale));
+  assert.ok(wide.scale > FIT && wide.scale < FIT * 1.4);
+  assert.ok(Math.abs((wide.y - 8) - (814 - 8 - (wide.y + 752 * wide.scale))) < 1e-6, 'centred down');
+  // a small map stops at 140%; one a little too big for the page comes down to 80% and no further
+  assert.equal(C.computeFit({ left: 0, top: 0, right: 400, bottom: 300 }, { w: 1260, h: 814 }, inset, limits).scale, FIT * 1.4);
+  assert.equal(C.computeFit({ left: 0, top: 0, right: 3000, bottom: 752 }, { w: 1260, h: 814 }, inset, limits).scale, FIT * 0.8);
 });

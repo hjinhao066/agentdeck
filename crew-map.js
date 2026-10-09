@@ -16,9 +16,11 @@
 //   Once the user drags a card or a frame, that plan is kept under their
 //   moves until they tidy or go back to 智能一页, so a window resize never
 //   pulls the ground from under a hand-placed map.
-// - How it is seen. Untouched, the map is shown as large as its page holds it,
-//   never past its own 100% (C.BASE_SCALE of the drawn size), centred; in lanes,
-//   at 100% from the top. Once the user pans or zooms, the view is theirs.
+// - How it is seen. Untouched, a map that shows whole in the window fills it:
+//   as large as the page holds it, up to C.PAGE_MAX_SCALE of its own 100%
+//   (C.BASE_SCALE of the drawn size; the cards and their type grow with it),
+//   centred both ways. A map taller than a page stands in lanes at 100% from
+//   the top. Once the user pans or zooms, the view is theirs.
 // 一键整理 puts every frame and card back on the grid in the order the frames
 // were left in, and leaves a hand-set zoom alone. 智能一页 hands both layers
 // back: arrangement and order are worked out again for this window.
@@ -503,13 +505,15 @@
   function fit(smooth) {
     if (!lay) return;
     const bounds = fitBounds(lay), inset = FIT_INSET;
-    // 智能一页's one-page plan is shown as large as the page holds it (never past 100%); a map in lanes at 100%
-    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, plan && plan.page && pageFits ? { min: FIT * C.PAGE_MIN_SCALE, max: FIT } : { min: FIT, max: FIT });
+    // A map that shows whole fills the window, centred: as large as the page holds it, up to PAGE_MAX_SCALE of its
+    // own 100% (智能一页's one-row plan goes down to PAGE_MIN_SCALE to fit). A map taller than a page: lanes at 100%.
+    const limits = pageFits ? { min: plan && plan.page ? FIT * C.PAGE_MIN_SCALE : FIT, max: FIT * C.PAGE_MAX_SCALE } : { min: FIT, max: FIT };
+    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, limits);
     // too tall for the window: start at the top (队长 and the first rows), not mid-map
     if ((bounds.bottom - bounds.top) * view.scale > vpEl.clientHeight - inset.top - inset.bottom) {
       view.y = inset.top - bounds.top * view.scale;
       view.y += cutShift(view);
-    } else if (plan && plan.page) view.y = inset.top - bounds.top * view.scale;   // one page: read from 队长 down, the room to spare below
+    }
     userView = false;
     glide(smooth === true);
     applyView();
@@ -879,8 +883,8 @@
   }
   // Arranged by the map itself for this window (智能一页): nothing placed by hand, no order of the user's own.
   const arranged = () => !hasManual() && !saved().projectOrder.length;
-  const FIT_ON = '智能一页：已开启，项目从左往右排成一行，每个框排几列自动算好，让整张图一屏放下；窗口变了自动重排；点一下回到这一页';
-  const FIT_OFF = '智能一页：回到自动排法，放弃手动拖动的位置和先后，缩放回到一屏放下的大小（可撤销）';
+  const FIT_ON = '智能一页：已开启，项目从左往右排成一行，每个框排几列自动算好，整张图放大或缩小到正好铺满一屏（最大 140%）；窗口变了自动重排；点一下回到这一页';
+  const FIT_OFF = '智能一页：回到自动排法，放弃手动拖动的位置和先后，缩放回到正好铺满一屏的大小（可撤销）';
   // The button says which it is: lit while the map arranges itself, a dot on it once things were placed by hand.
   function syncFit() {
     if (!fitBtn) return;

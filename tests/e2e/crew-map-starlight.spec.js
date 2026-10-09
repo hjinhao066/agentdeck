@@ -173,10 +173,23 @@ function assertNeat(g, ownZoom) {
   });
   expect(new Set(g.groups.filter((f) => !lanes.get(f.lane).indexOf(f)).map((f) => f.y)).size, 'every lane starts on one line').toBe(1);
   if (ownZoom) return; // a zoom the user set is theirs
-  // untouched: 智能一页's one page is shown as large as the page holds it (never past 100%, never under 80% of it);
-  // a map in lanes stands at its own 100%: 0.7 of the drawn size
-  if (g.plan.page) { expect(g.view.scale).toBeLessThanOrEqual(0.7 + 1e-6); expect(g.view.scale).toBeGreaterThanOrEqual(0.7 * 0.8 - 1e-6); }
-  else expect(g.view.scale, 'untouched, a map in lanes stands at its own 100%: 0.7 of the drawn size').toBeCloseTo(0.7, 5);
+  // untouched: a map that shows whole fills the window, centred, as large as the page holds it (up to 140% of its
+  // own 100%; 智能一页's one page never under 80% of it); a map in lanes taller than the window stands at its own
+  // 100%: 0.7 of the drawn size
+  if (g.plan.page) expect(g.view.scale).toBeGreaterThanOrEqual(0.7 * 0.8 - 1e-6);
+  if (g.pageFits) fillsPage(g);
+  else expect(g.view.scale, 'untouched, a map in lanes taller than the window stands at its own 100%: 0.7 of the drawn size').toBeCloseTo(0.7, 5);
+}
+// A map that shows whole fills the window: centred both ways, as large as the page holds it (up to 140%), so across
+// or down it reaches its margins (8px, and the map's own 16 around it).
+function fillsPage(g) {
+  const boxes = [...g.frames, ...g.cards];
+  const left = Math.min(...boxes.map((b) => b.x)) - g.vp.x, right = g.vp.right - Math.max(...boxes.map((b) => b.right));
+  const top = Math.min(...boxes.map((b) => b.y)) - g.vp.y, bottom = g.vp.bottom - Math.max(...boxes.map((b) => b.bottom));
+  expect(Math.abs(left - right), `centred across (${left.toFixed(1)} / ${right.toFixed(1)})`).toBeLessThanOrEqual(3);
+  expect(Math.abs(top - bottom), `centred down (${top.toFixed(1)} / ${bottom.toFixed(1)})`).toBeLessThanOrEqual(3);
+  expect(g.view.scale, 'at most 140%').toBeLessThanOrEqual(0.7 * 1.4 + 1e-6);
+  expect(g.view.scale >= 0.7 * 1.4 - 1e-6 || Math.min(left, top) <= 8 + 16 * g.view.scale + 2, `fills the window across or down (${left.toFixed(1)} / ${top.toFixed(1)} left)`).toBe(true);
 }
 // the projects of the map read like lines of text, the way they are filled in
 const byRow = (g) => g.order;
@@ -205,7 +218,7 @@ async function dragBy(locator, dx, dy) {
   await page.mouse.up();
 }
 
-test('项目框横排: frames stand left to right across the window, one or two cards wide, at 100%, at five widths in both themes', async () => {
+test('项目框横排: frames stand left to right across the window, one or two cards wide, filling it, at five widths in both themes', async () => {
   await launch(BIG);
   // a wide window: the four projects stand in one row, the big one several cards wide
   await open(1920, 1080, 'dark');
@@ -219,7 +232,9 @@ test('项目框横排: frames stand left to right across the window, one or two 
   expect(g.plan.lanes, 'all four abreast').toEqual([['agentdeck'], ['hermes-savings'], ['type4me-windows'], ['vps-ops']]);
   expect(new Set(g.groups.map((f) => f.y)).size, 'one row: every frame starts on the same line').toBe(1);
   expect(g.plan.caps, 'eight of ten sessions running: two cards wide (never more); fewer than seven running: one').toEqual({ agentdeck: 2, 'hermes-savings': 1, 'type4me-windows': 1, 'vps-ops': 1 });
-  await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');
+  // it shows whole at 100%, so it is shown larger, filling the window; the zoom reads what it is
+  expect(g.view.scale).toBeGreaterThanOrEqual(0.7 - 1e-6);
+  await expect(page.locator('[data-cm="reset"]')).toHaveText(`${Math.round(g.view.scale / 0.7 * 100)}%`);
   expect(await linesClear()).toEqual([]);
   // the same seventeen cards one under another, the way it was, would need about twice the height
   const stackedHeight = await page.evaluate(() => { const C = CrewMapCore, map = CrewMap.lastMap();
@@ -361,7 +376,7 @@ test('状态标签完整显示: every card status is whole at 1920, 1440, 980 an
   expect(errors).toEqual([]);
 });
 
-test('智能一页: one click hands arrangement and zoom back to the window, at 100%; what is taller than the page says so; it can be undone', async () => {
+test('智能一页: one click hands arrangement and zoom back to the window, filling it; what is taller than the page says so at 100%; it can be undone', async () => {
   await launch(BIG);
   await open(1920, 1080, 'dark'); await settled();
   const auto = await read();
@@ -373,6 +388,8 @@ test('智能一页: one click hands arrangement and zoom back to the window, at 
   // the user makes the map their own: a frame dragged off, the view zoomed and panned
   await dragBy(page.locator('.cm-project[data-project="hermes-savings"] .cm-project-name'), 160, 120);
   await page.locator('[data-cm="in"]').click(); await page.locator('[data-cm="in"]').click();
+  // (each step goes to the next whole tenth of the map's own 100%, from the zoom that filled the window)
+  const stepped = Math.round((Math.floor(auto.view.scale / 0.7 * 10 + 1e-6) + 2) * 10);
   const vp = await page.locator('.cm-viewport').boundingBox();
   const v0 = await page.evaluate(() => CrewMap.view());
   await page.mouse.move(vp.x + vp.width / 2, vp.y + vp.height / 2);
@@ -383,8 +400,8 @@ test('智能一页: one click hands arrangement and zoom back to the window, at 
   expect(mine.moved).toBe(true);
   expect(mine.saved.projectPositions['hermes-savings']).toBeTruthy();
   expect(mine.saved.plan, 'the arrangement the move was made on is kept under it').toEqual(auto.plan);
-  expect(mine.view.scale, 'two steps in: 120%').toBeCloseTo(0.7 * 1.2, 5);
-  await expect(page.locator('[data-cm="reset"]')).toHaveText('120%');
+  expect(mine.view.scale, `two steps in: ${stepped}%`).toBeCloseTo(0.7 * stepped / 100, 5);
+  await expect(page.locator('[data-cm="reset"]')).toHaveText(`${stepped}%`);
   await shot('map-smartpage-before-1920-dark');
   // a smaller window: the hand-placed map keeps its ground (same frames, same places) and its view
   await size(1440, 600); await settled();
@@ -446,16 +463,18 @@ test('智能一页: one click hands arrangement and zoom back to the window, at 
   // nothing hand-placed and the view untouched: nothing to undo
   await page.locator('[data-cm="fit"]').click();
   await expect(page.locator('[data-cm="undo"]')).toBeHidden();
-  // a small map is not blown up to fill its page: it stands at 100% like any other
+  // a small map fills its page too, as far as 140% of its own 100% (the cards and their type grow with it)
   await setTask(BIG.map((c, i) => [c, 'w' + i]).filter(([c]) => c[0] !== 'vps-ops').map(([, id]) => id), 'done');
   await expect(page.locator('.cm-project')).toHaveCount(1);
   await settled();
   g = await read();
-  expect(g.view.scale).toBeCloseTo(0.7, 5);
-  assertWhole(g);
+  expect(g.view.scale).toBeCloseTo(0.7 * 1.4, 5);
+  assertWhole(g); fillsPage(g);
 
-  // the zoom control reads and steps from the new 100%: tenths of it, and a click on the number comes back to it
+  // the zoom control reads and steps from the map's own 100%: tenths of it, and a click on the number comes back to it
   const label = page.locator('[data-cm="reset"]');
+  await expect(label).toHaveText('140%');
+  await label.click();
   await expect(label).toHaveText('100%');
   await page.locator('[data-cm="out"]').click();
   await expect(label).toHaveText('90%');

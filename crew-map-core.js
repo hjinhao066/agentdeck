@@ -559,8 +559,10 @@
   // size: { w, h }, the page in the canvas's units at the map's own 100% (no h: as tall as needed).
   // Returns { lanes (one per project, in order), caps, scale (s), fits }. fits is false when no
   // combination shows the map on one page at PAGE_MIN_SCALE: the best one's columns then serve
-  // planAcross, which stacks the frames in lanes at 100%.
-  const PAGE_COLUMNS = 4, PAGE_MIN_SCALE = 0.8, PAGE_ROW_COST = 0.05, PAGE_COLUMN_COST = 0.002, PAGE_KEEP = 0.03, PAGE_COMBOS = 50000;
+  // planAcross, which stacks the frames in lanes at 100%. (The columns are chosen at 100% at most;
+  // a map that shows whole is then shown as large as the page holds it, up to PAGE_MAX_SCALE: the
+  // cards and their type grow with it, so the page is filled across or down.)
+  const PAGE_COLUMNS = 4, PAGE_MIN_SCALE = 0.8, PAGE_MAX_SCALE = 1.4, PAGE_ROW_COST = 0.05, PAGE_COLUMN_COST = 0.002, PAGE_KEEP = 0.03, PAGE_COMBOS = 50000;
   function planPage(map, size, opts) {
     const o = { ...LAYOUT, ...opts };
     const shown = new Set(map.nodes.map((n) => n.id));
@@ -919,5 +921,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, PAGE_COLUMNS, PAGE_MIN_SCALE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, pockets, planPage, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, PAGE_COLUMNS, PAGE_MIN_SCALE, PAGE_MAX_SCALE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, pockets, planPage, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
 });

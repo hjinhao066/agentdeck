@@ -106,7 +106,7 @@ test('night and day: the canvas palette, the grid that shows the whole map, fini
     expect(g.canvas).toBe(theme === 'dark' ? 'rgb(15, 15, 18)' : 'rgb(243, 243, 245)');
     expect(g.card).toBe(theme === 'dark' ? 'rgb(26, 26, 31)' : 'rgb(255, 255, 255)');
     if (theme === 'light') expect(g.sock[0]).toBe('rgb(255, 241, 244)');
-    // eight sessions in one project: 智能一页 makes it four cards wide, two rows, on one page at 100%
+    // eight sessions in one project: 智能一页 makes it four cards wide, two rows, on one page, filling the window
     expect(g.cols).toBe(4);
     // The whole map shows above the tray: 队长, every card and the project's frame keep the
     // fit's margin (its 8px inset + the 16px the map carries around itself) from every edge
@@ -284,9 +284,10 @@ test('live updates keep a hand-placed view; 智能一页 brings the fit back', a
   expect(await page.evaluate(() => CrewMap.userMoved())).toBe(false);
   await settled();
   expect(await page.evaluate(() => CrewMap.view())).not.toEqual(mine);
-  // 100% button: the map's own 100% is 0.7 of the drawn size
+  // 100% button: the map's own 100% is 0.7 of the drawn size (智能一页 had the map fill the window: a step in goes to the next tenth)
+  const fitted = (await page.evaluate(() => CrewMap.view())).scale;
   await page.locator('[data-cm="in"]').click();
-  await expect(page.locator('[data-cm="reset"]')).toHaveText('110%');
+  await expect(page.locator('[data-cm="reset"]')).toHaveText(`${(Math.floor(fitted / 0.07 + 1e-6) + 1) * 10}%`);
   await page.locator('[data-cm="reset"]').click();
   expect((await page.evaluate(() => CrewMap.view())).scale).toBeCloseTo(0.7, 5);
   await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');

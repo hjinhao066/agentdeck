@@ -36,13 +36,15 @@ async function geometry() {
 async function assertLayout() {
   const g = await geometry();
   const overlaps = (a, b) => a.x < b.right - 1 && a.right > b.x + 1 && a.y < b.bottom - 1 && a.bottom > b.y + 1;
-  // The map arrives at its own 100% (0.7 of the drawn size). The controls sit on the legend
-  // row below the viewport, so the only thing the map keeps clear of is the viewport's own
-  // edge: the fit's 8px inset plus the 16px the map carries around itself, on every side
-  // (19.2px at 100%). A map too tall for the page starts at the top and is cut at the bottom
+  // A map that shows whole arrives filling the window: as large as the page holds it, 80% to 140%
+  // of its own 100% (0.7 of the drawn size); one too tall for the page arrives at 100%. The controls
+  // sit on the legend row below the viewport, so the only thing the map keeps clear of is the
+  // viewport's own edge: the fit's 8px inset plus the 16px the map carries around itself, on every
+  // side (19.2px at 100%). A map too tall for the page starts at the top and is cut at the bottom
   // edge: there a card is either whole with 16px (map px) to spare, or plainly cut by 24px
   // or more, never flush against the tray or the legend row.
-  expect(g.scale).toBeCloseTo(0.7, 5);
+  if (g.fits) { expect(g.scale).toBeGreaterThanOrEqual(0.7 * 0.8 - 1e-6); expect(g.scale).toBeLessThanOrEqual(0.7 * 1.4 + 1e-6); }
+  else expect(g.scale).toBeCloseTo(0.7, 5);
   const fits = g.fits, edge = 8 + 16 * g.scale;
   for (const y of g.below) expect(y, 'tray and legend row sit under the viewport').toBeGreaterThanOrEqual(g.viewport.bottom - 0.5);
   for (const list of [g.nodes, g.groups]) for (let i = 0; i < list.length; i++) {

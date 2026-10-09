@@ -139,17 +139,20 @@ const readMap = () => page.evaluate(() => {
 // lanes at 1920, 1440 and 980 wide windows (智能一页: one page where it fits, else lanes at 100%, as many as the width holds)
 const LANES = { 1: [1, 1, 1], 4: [4, 4, 2], 9: [6, 4, 2] };
 
-for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构图: ${label} 个项目 stand across the window at 100%, as many abreast as it holds, the rest under them`, async () => {
+for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构图: ${label} 个项目 stand across the window, as many abreast as it holds, the rest under them; filling it when they show whole`, async () => {
   await launch(crew);
   const keys = crew.map(([project]) => project);
   for (const [i, [name, w, h]] of WIDTHS.entries()) {
     await openMap(w, h);
     await settled();
-    // opening the map is enough: no click on 智能一页 is needed to get this arrangement
+    // opening the map is enough: no click on 智能一页 is needed to get this arrangement. A map that shows whole
+    // arrives filling the window (up to 140% of its own 100%); one taller than the window at 100%, 0.7 of the
+    // drawn size, where a card is 196px wide on screen (what 70% used to show)
     const g = await readMap();
-    expect(g.view.scale, `${name}: the map arrives at its own 100%, 0.7 of the drawn size`).toBeCloseTo(0.7, 5);
-    expect(g.label).toBe('100%');
-    expect(g.cardPx, `${name}: a card is 196px wide on screen (what 70% used to show)`).toBeCloseTo(196, 0);
+    if (g.pageFits) { expect(g.view.scale).toBeGreaterThanOrEqual(0.7 * 0.8 - 1e-6); expect(g.view.scale).toBeLessThanOrEqual(0.7 * 1.4 + 1e-6); }
+    else expect(g.view.scale, `${name}: taller than the window, the map arrives at its own 100%, 0.7 of the drawn size`).toBeCloseTo(0.7, 5);
+    expect(g.label).toBe(`${Math.round(g.view.scale / 0.7 * 100)}%`);
+    expect(g.cardPx, `${name}: a card is 280 map px wide (196px at 100%)`).toBeCloseTo(280 * g.view.scale, 0);
     expect(g.plan.lanes.length, `${name}: lanes across`).toBe(LANES[label][i]);
     expect(g.order, `${name}: projects fill the window from the left, in order, read like text`).toEqual(keys);
     // 智能一页's columns: a project alone with three cards goes two wide (two rows, not three); among several, small frames stay one wide
@@ -168,7 +171,7 @@ for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构
     await settled();
     const again = await readMap();
     expect(again.plan).toEqual(g.plan);
-    expect(again.view.scale).toBeCloseTo(0.7, 5);
+    expect(again.view.scale).toBeCloseTo(g.view.scale, 5);
     await shot(`map-${label}-projects-${name}`);
   }
   if (label === '9') {
