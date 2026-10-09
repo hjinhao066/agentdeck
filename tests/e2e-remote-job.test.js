@@ -242,3 +242,29 @@ chmod +x node_modules/electron/dist/electron
     assert.match(job.output, /warning: electron did not start after install/);
   } finally { env.done(); }
 });
+
+test('Electron that downloads its binary on first use is fetched once, during the install, not inside the first test', posix, async () => {
+  const env = setup();
+  try {
+    const fake = fakeNpm(env);
+    const downloads = path.join(env.root, 'downloads.log');
+    const npm = path.join(env.root, 'bin', 'npm');
+    // like the real package: requiring it downloads the binary when path.txt is missing
+    fs.writeFileSync(npm, fs.readFileSync(npm, 'utf8') + `mkdir -p node_modules/electron
+cat > node_modules/electron/index.js <<'EOJ'
+const fs = require('fs'), path = require('path');
+if (!fs.existsSync(path.join(__dirname, 'path.txt'))) {
+  fs.appendFileSync(${JSON.stringify(downloads)}, 'download\\n');
+  fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });
+  fs.writeFileSync(path.join(__dirname, 'dist', 'electron'), '#!/bin/sh\\necho v1.0.0\\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(__dirname, 'path.txt'), 'electron');
+}
+module.exports = path.join(__dirname, 'dist', 'electron');
+EOJ
+`, { mode: 0o755 });
+    const jobs = await Promise.all(['r1', 'r2', 'r3'].map((n) => startJob(env, n, env.shas.A, { install: 'auto', extraEnv: { PATH: fake.PATH } })));
+    for (const j of jobs) assert.equal(j.code, 0, j.output);
+    assert.equal(fs.readFileSync(downloads, 'utf8').trim().split('\n').length, 1, 'one download for three jobs');
+    assert.ok(jobs.some((j) => /electron starts \(try 1\)/.test(j.output)));
+  } finally { env.done(); }
+});

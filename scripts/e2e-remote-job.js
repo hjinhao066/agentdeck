@@ -52,11 +52,17 @@ const depsKey = (lockfileBytes) => crypto.createHash('sha256').update(lockfileBy
 
 class InstallWaitTimeout extends Error {}
 
-// Right after npm ci the Electron binary is often still locked by the virus scanner ("the file is in
+// Right after npm ci (and its binary download) the Electron binary is often still locked by the virus scanner ("the file is in
 // use by another process") and the first launch fails. Start it until it answers, before any job
 // relies on it. Not fatal if it never does: the tests will report the failure themselves.
 function warmElectron(modules) {
   const marker = path.join(modules, 'electron', 'path.txt');
+  if (!fs.existsSync(marker) && fs.existsSync(path.join(modules, 'electron', 'index.js'))) {
+    // npm ci does not fetch the binary; the package downloads it the first time it is required.
+    // Do that here, once, under the install lock, not inside the first test of the first job.
+    say('downloading the Electron binary');
+    spawnSync(process.execPath, ['-e', `require(${JSON.stringify(path.join(modules, 'electron'))})`], { stdio: 'inherit' });
+  }
   if (!fs.existsSync(marker)) return;
   const exe = path.join(modules, 'electron', 'dist', fs.readFileSync(marker, 'utf8').trim());
   const gap = envMs('AGENTDECK_E2E_ELECTRON_RETRY_MS', 3000);
@@ -125,7 +131,7 @@ function removeCheckout(workDir, checkout) {
   // The junction goes first: removing the checkout must never reach into the shared node_modules.
   try { fs.unlinkSync(path.join(checkout, 'node_modules')); } catch { try { fs.rmdirSync(path.join(checkout, 'node_modules')); } catch {} }
   spawnSync('git', ['-C', workDir, 'worktree', 'remove', '--force', checkout], { stdio: 'ignore' });
-  try { fs.rmSync(checkout, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(checkout, { recursive: true, force: true }); } catch (error) { say(`could not remove ${checkout}: ${error.message}`); }
   spawnSync('git', ['-C', workDir, 'worktree', 'prune'], { stdio: 'ignore' });
 }
 
