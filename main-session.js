@@ -2659,7 +2659,9 @@
           const session = host.columns().find((c) => c.id === p.colId);
           return session && session.parentTaskId === col.taskId;
         });
-        s.pending = s.pending.filter((p) => p.colId !== id);
+        // Remove sub-captain's receipt and all child receipts (which have parentColId pointing to this sub-captain)
+        const childReceiptIds = new Set(childReceipts.map((r) => r.receiptId));
+        s.pending = s.pending.filter((p) => p.colId !== id && !childReceiptIds.has(p.receiptId));
         // Re-add child receipts without the parent reference if sub-captain is being archived
         if (archive && childReceipts.length > 0) {
           const transferredReceipts = childReceipts.map((r) => {
