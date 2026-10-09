@@ -10,9 +10,13 @@
 //   itself for the window and again whenever the window changes: every project
 //   frame across one row, each 1 to CrewMapCore.PAGE_COLUMNS cards wide, the
 //   widths chosen together so the whole map shows on one page as large as it
-//   can, no frame much taller than the rest (CrewMapCore.planPage). A map too
-//   big for one page even at PAGE_MIN_SCALE stands in lanes at 100%, the rest
-//   under the lane that ends highest (CrewMapCore.planAcross), and is panned.
+//   can, no frame much taller than the rest (CrewMapCore.planPage). The same
+//   frames can also stand in lanes at 100%, as many across as the window holds,
+//   the rest under the lane that ends highest (CrewMapCore.planAcross): when
+//   the one row fits only shrunk and the lanes show the whole map at least a
+//   fifth larger (WRAP_GAIN: six small frames squeezed into one thin row), the
+//   frames wrap like lines of text. A map too big for one page either way
+//   stands in lanes at 100% and is panned.
 //   Once the user drags a card or a frame, that plan is kept under their
 //   moves until they tidy or go back to 智能一页, so a window resize never
 //   pulls the ground from under a hand-placed map.
@@ -41,6 +45,7 @@
   const MOVE_MS = 280;    // frames and cards gliding to a new place (shorter than the view's own glide)
   const GRAIN = 28;       // canvas px between the dots of the grid under the map
   const RESIZE_MS = 160;  // a window resized: how long it rests before the map arranges itself once more
+  const WRAP_GAIN = 1.2;  // one row of frames gives way to lanes when they show the whole map at least a fifth larger
   // Spacing given up when the roomy map just misses the window at 100% and this brings all of it in.
   const TIGHT = { captainH: 104, fanY: 40, rowGap: 10, padBottom: 12 };
   const DRAG_PX = 4;
@@ -555,6 +560,8 @@
     const build = (p) => C.layout(map, { ...base, ...(p.tight ? tightly : {}), lanes: p.lanes, caps: p.caps });
     // the whole layout shows in this window at `least` of the drawn size or more
     const whole = (l, least = FIT) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= least - 1e-9;
+    // how large the fit would show it (up to PAGE_MAX_SCALE of the map's own 100%)
+    const shown = (l) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: FIT * C.PAGE_MAX_SCALE }).scale;
     const pinned = hasManual() ? saved().plan : null;
     if (pinned) {
       const l = build(pinned), keys = new Set(pinned.lanes.flat());
@@ -565,16 +572,7 @@
     const size = { w: (vw - FIT_INSET.left - FIT_INSET.right) / FIT, h: (vh - FIT_INSET.top - FIT_INSET.bottom) / FIT };
     // 智能一页: every project across one row, its columns chosen to show the whole map on one page
     const onePage = C.planPage(map, size, { ...base, keep: plan && plan.page ? plan : null });
-    if (onePage.fits) {
-      const next = { lanes: onePage.lanes, caps: onePage.caps, tight: false, page: true };
-      const l = build(next);
-      if (whole(l, FIT * C.PAGE_MIN_SCALE)) {
-        plan = next; planW = vw; pageFits = true;
-        if (hasManual()) { saved().plan = plan; host.save(); }
-        return l;
-      }
-    }
-    // Taller than a page: the frames in lanes at 100% with the columns 智能一页 found best, panned down.
+    // The same columns in lanes at 100%: as many frames across as the window holds, the rest under them.
     // Roomy while the whole map shows at 100%; tight when only that brings it all in.
     const pick = (tight) => {
       const p = C.planAcross(map, size, { ...base, ...(tight ? tightly : {}), caps: onePage.caps, keep: plan && !plan.page && planW === vw && !!plan.tight === tight ? plan : null });
@@ -582,8 +580,21 @@
       return { plan: next, lay: build(next) };
     };
     let chosen = pick(false);
-    pageFits = whole(chosen.lay);
-    if (!pageFits) { const tight = pick(true); if (whole(tight.lay)) { chosen = tight; pageFits = true; } }
+    let lanesFit = whole(chosen.lay);
+    if (!lanesFit) { const tight = pick(true); if (whole(tight.lay)) { chosen = tight; lanesFit = true; } }
+    // One row stands while it shows the map about as large as the lanes would: a row that fits only shrunk wraps
+    // instead, like lines of text, when the lanes show the whole map clearly larger (WRAP_GAIN).
+    if (onePage.fits) {
+      const next = { lanes: onePage.lanes, caps: onePage.caps, tight: false, page: true };
+      const l = build(next);
+      if (whole(l, FIT * C.PAGE_MIN_SCALE) && !(lanesFit && shown(chosen.lay) >= shown(l) * WRAP_GAIN)) {
+        plan = next; planW = vw; pageFits = true;
+        if (hasManual()) { saved().plan = plan; host.save(); }
+        return l;
+      }
+    }
+    // Taller than a page even then: the lanes at 100%, panned down.
+    pageFits = lanesFit;
     plan = chosen.plan;
     planW = vw;
     if (hasManual()) { saved().plan = plan; host.save(); }

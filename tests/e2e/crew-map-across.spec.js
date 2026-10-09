@@ -232,20 +232,27 @@ test('24 sessions in 6 projects: 智能一页 puts them on one page where it can
 });
 
 // 智能一页's choice in three situations, each a picture: the user's 2.0.0 map on a 14-inch MacBook,
-// six small projects, one project of twenty beside small ones.
+// six small projects, one project of twenty beside small ones. (wraps: one row would have to shrink to
+// about 80%, a thin strip across the page; in lanes, read like text, the whole map shows a fifth larger or more.)
 const sessionsOf = (spec) => Object.entries(spec).flatMap(([project, n]) => Array.from({ length: n }, (_, i) => [project, `${project} 第 ${i + 1} 件活`, 'working', 'Opus 5.5', 'Claude', null, [`⏺ 第 ${i + 1} 件活做到一半`]]));
-for (const [name, spec, [w, h], caps] of [
+for (const [name, spec, [w, h], caps, wraps] of [
   ['the user\'s 2.0.0 map (11 / 3 / 1) on a 14-inch MacBook: agentdeck three wide', { agentdeck: 11, 秋招: 3, skills: 1 }, [1512, 982], { agentdeck: 3, 秋招: 1, skills: 1 }],
-  ['six projects of one or two cards: every frame one wide', { alpha: 2, beta: 1, gamma: 2, delta: 1, epsilon: 2, zeta: 1 }, [1440, 900], { alpha: 1, beta: 1, gamma: 1, delta: 1, epsilon: 1, zeta: 1 }],
+  ['six projects of one or two cards: every frame one wide, wrapped like lines of text to fill the page', { alpha: 2, beta: 1, gamma: 2, delta: 1, epsilon: 2, zeta: 1 }, [1440, 900], { alpha: 1, beta: 1, gamma: 1, delta: 1, epsilon: 1, zeta: 1 }, true],
   ['one project of twenty beside three small ones: it goes four wide', { big: 20, s1: 2, s2: 1, s3: 3 }, [1920, 1080], { big: 4, s1: 1, s2: 1, s3: 1 }],
 ]) test(`智能一页 on a real page: ${name}`, async () => {
   await launch(sessionsOf(spec));
   await open(w, h, 'dark'); await settled();
   const g = await read();
-  expect(g.plan.page).toBe(true);
+  expect(g.plan.page).toBe(!wraps);
   expect(g.pageFits).toBe(true);
   expect(g.plan.caps).toEqual(caps);
-  expect(g.plan.lanes).toEqual(Object.keys(spec).map((key) => [key]));
+  if (!wraps) expect(g.plan.lanes).toEqual(Object.keys(spec).map((key) => [key]));
+  else {
+    // as many across as the window holds, the rest under them, read in order like text; at full size or more
+    expect(g.plan.lanes.length).toBeLessThan(Object.keys(spec).length);
+    expect(g.order).toEqual(Object.keys(spec));
+    expect(g.view.scale, 'wrapped, the map shows at 100% or more').toBeGreaterThanOrEqual(0.7 - 1e-6);
+  }
   // the whole map on the page: every card whole inside the viewport, nothing past its sides, no line through another frame
   for (const c of g.cards) { expect(c.y, c.id).toBeGreaterThanOrEqual(g.vp.y - 0.5); expect(c.bottom, c.id).toBeLessThanOrEqual(g.vp.bottom + 0.5); expect(c.x, c.id).toBeGreaterThanOrEqual(g.vp.x - 0.5); expect(c.right, c.id).toBeLessThanOrEqual(g.vp.right + 0.5); }
   // as large as the page holds it, centred: the user's 2.0.0 map grows past 100% to fill the window across
