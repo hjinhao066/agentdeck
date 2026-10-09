@@ -37,6 +37,8 @@ test.beforeAll(async () => {
   const column = (id, title, more) => ({ id, title, displayTitle: title, manualTitle: true, cwd: profile, width: 760, role: 'manual', view: 'chat', ...more });
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2, globalViewMode: 'chat', perpetualCaptain: { enabled: false }, resumeOnRestart: false,
+    // the 交付文件 panel folded away: this spec measures the reading column alone (chat-deliverables.spec.js has the panel)
+    chatDeliverablesOpen: false,
     // the other two are 队长's background sessions: off the deck, so 队长's column has the whole width as it does in use
     columns: [column(ID, '队长', { cmd: FAKE + ' --captain-statusline', isMain: true }), column(WORKER, '队员', { cmd: FAKE, captainCrew: true }), column(SHELL, '终端', { cmd: '', captainCrew: true })],
     mainSession: { colId: ID, cmd: FAKE + ' --captain-statusline', gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks: [] },
@@ -128,10 +130,12 @@ test('every reply stands under 队长\'s name and crest, apart from your bubbles
   expect(Math.abs(g.bubble.right - g.turn.right)).toBeLessThanOrEqual(4);
   expect(Math.abs(g.reply.x - g.turn.x)).toBeLessThanOrEqual(4);
   expect(g.replyBg).toBe('rgba(0, 0, 0, 0)');
-  // a centred reading column: 50 to 62 full-width characters to a line, not the whole 1188px
+  // a reading column of 50 to 62 full-width characters to a line, not the whole 1188px, left of centre:
+  // the air on its left is 0.618 of an even split (chat-deliverables.spec.js measures it closely)
   expect(g.turn.w / g.size).toBeGreaterThanOrEqual(50);
   expect(g.turn.w / g.size).toBeLessThanOrEqual(62);
-  expect(Math.abs((g.turn.x - g.scroll.x) - (g.scroll.right - g.turn.right))).toBeLessThanOrEqual(12);     // the scrollbar's width
+  const even = (g.scroll.right - g.scroll.x - g.turn.w) / 2;
+  expect(Math.abs((g.turn.x - g.scroll.x) - even * 0.618)).toBeLessThanOrEqual(2);
   // the composer box stands on the column's own two edges: the reply's left, your bubble's right
   expect(Math.abs(g.composer.x - g.reply.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(g.composer.right - g.bubble.right)).toBeLessThanOrEqual(1);
@@ -140,8 +144,9 @@ test('every reply stands under 队长\'s name and crest, apart from your bubbles
 // The air beside the reading column. It depends on the pane's own width, whatever
 // took the room (a slim window, the sidebar, the right pane): 20px in a slim pane,
 // about twice what 1.2.4 left at the width 队长 is usually read at, 56px from there
-// up, and the rest of a wide pane once the column has its measure.
-test('the air beside the column grows with the pane, is the same on both sides, and never squeezes a slim one', async () => {
+// up, and the rest of a wide pane once the column has its measure, 0.618 of an
+// even split on the left and the remainder on the right (2.0.1).
+test('the air beside the column grows with the pane, stands left of centre in a wide one, and never squeezes a slim one', async () => {
   const measure = async (width, pane) => {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate((open) => { if (!config.navCollapsed) setNavCollapsed(true); if (SidePane.isOpen() !== open) SidePane.toggle(); }, pane);
@@ -161,7 +166,9 @@ test('the air beside the column grows with the pane, is the same on both sides, 
   for (const [name, width, pane] of [['wide', 1440, false], ['usual', 830, false], ['usual beside the right pane', 830 + side, true], ['slim', 600 + side, true], ['slimmest', 400 + side, true]]) {
     const g = seen[name] = await measure(width, pane);
     // one left edge for the reply, the composer box and the status lines; one right edge for your bubble and the box
-    expect(Math.abs(g.left - g.right), name).toBeLessThanOrEqual(1.5);
+    const even = (g.left + g.right) / 2;
+    if (even * 0.618 >= 57) expect(Math.abs(g.left - even * 0.618), name).toBeLessThanOrEqual(2);
+    else expect(g.left, name).toBeLessThanOrEqual(g.right + 1.5);      // near the gutters: never more on the left
     expect(Math.abs(g.composer[0] - g.left), name).toBeLessThanOrEqual(1);
     expect(Math.abs(g.composer[1] - g.right), name).toBeLessThanOrEqual(1);
     expect(Math.abs(g.status - g.left), name).toBeLessThanOrEqual(1);
@@ -171,7 +178,8 @@ test('the air beside the column grows with the pane, is the same on both sides, 
     expect(g.bubble, name).toBeLessThanOrEqual(g.text + 1);
   }
   expect(Math.abs(seen.wide.text - 780)).toBeLessThanOrEqual(1.5);
-  expect(seen.wide.left).toBeGreaterThan(300);
+  expect(seen.wide.left).toBeGreaterThan(190);
+  expect(seen.wide.right).toBeGreaterThan(seen.wide.left * 2);
   // 1.2.4 left 25px here
   expect(seen.usual.left).toBeGreaterThanOrEqual(48);
   expect(seen.usual.left).toBeLessThanOrEqual(56.5);

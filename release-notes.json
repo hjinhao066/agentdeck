@@ -10,6 +10,7 @@
       "items": [
         { "text": "Token 用量看板：每个账号用了多少一目了然", "state": "doing" },
         { "text": "侧栏默认展开", "state": "doing" },
+        { "text": "队长对话页右侧加「交付文件」栏，对话内容整体往左挪", "state": "doing" },
         { "text": "全仓库体检后找到的问题逐个修好", "state": "doing" },
         { "text": "自动审查有时丢失的问题修好", "state": "doing" },
         { "text": "每晚自动挑一段代码找一个有证据的毛病，第二天交给队长修", "state": "planned" },

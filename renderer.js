@@ -194,6 +194,10 @@ if (saved) {
   }
   // Artifacts: the projects the user folded away
   config.artifactsCollapsed = (Array.isArray(saved.artifactsCollapsed) ? saved.artifactsCollapsed : []).filter((k) => typeof k === 'string' && k.length <= 120).slice(0, 500);
+  // 队长's 交付文件 panel: folded away or not, its two lists if changed, and the index of what it found (DeliverablesCore)
+  if (saved.chatDeliverablesOpen === false) config.chatDeliverablesOpen = false;
+  if (saved.deliverableRules && typeof saved.deliverableRules === 'object') config.deliverableRules = DeliverablesCore.normalizeRules(saved.deliverableRules);
+  if (saved.chatDeliverables && typeof saved.chatDeliverables === 'object') config.chatDeliverables = DeliverablesCore.normalizeIndex(saved.chatDeliverables, DeliverablesCore.normalizeRules(config.deliverableRules));
   if (saved.activeView === 'board') config.activeView = 'board';
   if (saved.side && typeof saved.side === 'object') config.side = saved.side;
   config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
@@ -3846,6 +3850,7 @@ window.deck.onParkForRestart(async (sessions) => {
 ClaudeSeats.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
+ChatDeliverables.init(deckHost);
 ReleaseNotesUI.init(deckHost);
 TodoUI.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));

@@ -795,7 +795,8 @@ text; terminal mouse reports are excluded. Each prompt and final reply has a
 visible copy button that copies its plain text. Older chats containing repeated
 mouse-report fragments are cleaned when loaded, preserving adjacent text.
 
-The chat reads in a centred column, each reply under the name of who is speaking
+The chat reads in a column left of centre (the air on its left is 0.618 of an
+even split, your bubbles keep its right edge), each reply under the name of who is speaking
 (队长 with its crest). An agent's reply shows its words only: the echo of a
 prompt, a file-diff tail, tool summaries and the TUI's own hints are taken out
 when it is shown, by the same rules as the phone page, and its titles, nested
@@ -803,6 +804,26 @@ lists and tables are set as such; copy and share give the same clean text. The
 saved reply is unchanged, and a plain shell's output is shown as it is. The
 cards 队长 leaves between two messages (work handed out, receipts back) sit
 folded behind one line with their count and state; click it to open them.
+
+**交付文件** (队长's column only, `chat-deliverables.js`, rules in
+`deliverables-core.js`): a panel on the right lists the result files that came
+up in 队长's conversation, newest first by day: paths in 队长's replies and the
+files in the crew's receipts (the same receipts Artifacts › 回执交付 reads),
+including the conversations from before a context clear. Documents, PDFs,
+Office files, HTML reports, pictures, video and audio count; scripts, data,
+logs and anything under node_modules, .git, tmp, scratchpad or the system temp
+folders do not. Both lists are editable from the panel's gear (saved as
+`deliverableRules` only when changed). Each row shows the file name, its
+project (a receipt's own, or the project a folder on its path is named after),
+where it came from (队长回复 / the session that delivered it / 清空前的队长对话)
+and the time; a click previews it in the side pane, a file no longer on disk is
+greyed out. Hover or focus shows icon buttons to copy the path, show it in
+Finder/Explorer and jump to the reply or session. What was found is kept as an
+index in `config.chatDeliverables` (one row per path, the latest mention wins,
+at most 1500): each old conversation is read once, and its files stay listed
+even if the conversation is later trimmed. A column at least 1100px wide docks
+the panel (folding it with the head's icon is remembered); a narrower one slides
+it over the chat on request, and Esc closes it. The phone hub does not have it.
 
 - A new blank session (no launch command, nothing said yet) offers Claude,
   Antigravity, Grok, Cursor CLI and Codex (ChatGPT) buttons. A click types that agent's launch
