@@ -239,10 +239,22 @@ test('a card reads in three layers and its line is news: never a CLI update noti
   expect(rise).toEqual([['opacity', 'transform']]);
   await expect(page.locator('.cm-node[data-node-id="w23"] .cm-meta > .cm-line')).toHaveText('已核完 42 项，没有误删');
   expect(await before.evaluate((n) => n.isConnected), 'updated in place, not rebuilt').toBe(true);
-  // the account is a small text tag on the card (its flag stays in the sidebar); its name and tooltip stay whole
-  const seats = await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .agent-seat-label')].map((n) => [n.textContent, n.getAttribute('aria-label') || '']));
+  // the account behind the seat is a small text tag on the card (a seat's flag stays in the sidebar), named
+  // in full on hover; it gives way first: a long account name is cut with an ellipsis, never the status or the model
+  const seats = await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .agent-seat-label')].map((n) => [n.textContent.trim(), n.getAttribute('aria-label') || '', getComputedStyle(n).display, n.scrollWidth <= n.clientWidth]));
   expect(seats.length).toBeGreaterThan(0);
-  for (const [text, label] of seats) { expect(text).toMatch(/^(CN|US|US2)$/); expect(label).toMatch(/^当前账号：/); }
+  for (const [text, label, display, whole] of seats) {
+    expect(text).toBeTruthy(); expect(text).not.toMatch(/\p{Regional_Indicator}|\p{Extended_Pictographic}/u);
+    expect(label).toMatch(/^当前账号：/); expect(display).not.toBe('none'); expect(whole, `${text} shows whole`).toBe(true);
+  }
+  const long = await page.evaluate(() => {
+    const n = document.querySelector('.cm-node[data-node-id="w2"]'), seat = n.querySelector('.agent-seat-label'), st = n.querySelector('.cm-status'), model = n.querySelector('.agent-model-label'), more = n.querySelector('.cm-more');
+    (seat.querySelector('bdi') || seat).textContent = 'hjinhao066us-research-team-account';
+    const r = (x) => x.getBoundingClientRect();
+    return { seatCut: seat.scrollWidth > seat.clientWidth, ellipsis: getComputedStyle(seat).textOverflow, statusCut: st.scrollWidth > st.clientWidth, modelCut: model.scrollWidth > model.clientWidth,
+      inside: r(seat).left >= r(st).right && r(seat).right <= r(more).left + 0.5, letters: r(seat).width >= 28, named: /^当前账号：/.test(seat.title) };
+  });
+  expect(long).toEqual({ seatCut: true, ellipsis: 'ellipsis', statusCut: false, modelCut: false, inside: true, letters: true, named: true });
   // 队长's tally and the bar of the whole crew under it
   const fleet = await page.evaluate(() => [...document.querySelectorAll('.cm-node.kind-captain .cm-fleet i')].map((i) => [i.className, Number(i.style.flexGrow)]));
   expect(fleet).toEqual([['st-working', 15], ['st-input', 2], ['st-queued', 2], ['st-failed', 2], ['st-stopped', 1], ['st-done', 2]]);

@@ -120,9 +120,10 @@
     if (col) {
       const inner = el('span');
       host.renderBadge(inner, col);
-      // the account as a small text tag: its flag stays in the sidebar, its name and tooltip here
+      // the account as a small text tag (CSS .cm-agent .agent-seat-label): a seat's flag stays in the
+      // sidebar; its name and its hover text (the whole account) come here as they are
       const seat = inner.querySelector('.agent-seat-label');
-      if (seat) seat.textContent = seat.textContent.replace(/^[^\p{L}\p{N}]+/u, '');
+      if (seat) seat.childNodes.forEach((t) => { if (t.nodeType === 3) t.nodeValue = t.nodeValue.replace(/^[^\p{L}\p{N}]+/u, ''); });
       if (!inner.hidden && inner.childNodes.length) { b.appendChild(inner); return b; }
     }
     b.textContent = [node.provider, node.model].filter(Boolean).join(' · ');

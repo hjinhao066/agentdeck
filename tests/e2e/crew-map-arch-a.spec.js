@@ -200,10 +200,12 @@ test('pipes: hovering a card lights its own path; only the running lines carry a
     const styleOf = (sel) => { const n = document.querySelector(sel); if (!n || !n.isConnected) return null; const s = getComputedStyle(n); return { op: parseFloat(s.opacity), anim: s.animationName, array: s.strokeDasharray, cap: s.strokeLinecap, w: parseFloat(s.strokeWidth) }; };
     const pulse = styleOf('.cm-edges .cm-pulse'), failed = styleOf('.cm-edges .cm-edge.dispatch.st-failed');
     const review = document.querySelector('.cm-legend .cm-edge.review');
-    const pulses = document.querySelectorAll('.cm-edges .cm-pulse').length;
-    const working = document.querySelectorAll('.cm-edges .cm-edge.dispatch.st-working').length;
-    // a running line carries one short bright stretch, 14px of every 260
-    return !!(pulse && failed && review && pulses === working + 1 && pulse.cap === 'round' && pulse.w >= 3 && pulse.anim === 'cm-flow' && /^14px, 246px$/.test(pulse.array) && failed.op < 1 && failed.anim === 'none' && getComputedStyle(review).strokeDasharray !== 'none');
+    const count = (sel) => document.querySelectorAll('.cm-edges ' + sel).length;
+    const working = count('.cm-edge.dispatch.st-working');
+    // a running line carries one short bright stretch, 14px of every 260, and its faint tail; so does
+    // each stretch of 队长's trunk and bus that leads to running work (the bus leaves the hub sideways
+    // to a project's line down the left of its frame, so there can be more than one)
+    return !!(pulse && failed && review && count('.cm-pulse:not(.core)') === working && count('.cm-trail:not(.core)') === working && count('.cm-pulse.core') >= 1 && count('.cm-trail.core') === count('.cm-pulse.core') && pulse.cap === 'round' && pulse.w >= 3 && pulse.anim === 'cm-flow' && /^14px, 246px$/.test(pulse.array) && failed.op < 1 && failed.anim === 'none' && getComputedStyle(review).strokeDasharray !== 'none');
   })).toBe(true);
   await expect(page.locator('.cm-edges.cm-hovering')).toHaveCount(0);
   await expect.poll(async () => {

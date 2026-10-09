@@ -313,7 +313,8 @@ const statusLabels = () => page.evaluate(() => [...document.querySelectorAll('.c
   const r = (n) => n.getBoundingClientRect();
   const limit = Math.min(r(card).right, more ? r(more).left : Infinity, badge.childNodes.length ? r(badge).left : Infinity);
   return { text: text.textContent, cut: st.scrollWidth > st.clientWidth || text.scrollWidth > text.clientWidth, over: r(text).right > limit + 0.5,
-    title: st.title, badgeCut: [...badge.querySelectorAll('.agent-model-label, .agent-seat-label')].some((n) => n.scrollWidth > n.clientWidth) || badge.scrollWidth > badge.clientWidth,
+    // (the account tag is the one thing in the row that may be cut, by design: its whole name is in its hover text)
+    title: st.title, badgeCut: [...badge.querySelectorAll('.agent-model-label')].some((n) => n.scrollWidth > n.clientWidth) || badge.scrollWidth > badge.clientWidth,
     badgeOut: badge.childNodes.length > 0 && r(badge).right > Math.min(r(card).right, more ? r(more).left : Infinity) + 0.5, ellipsis: getComputedStyle(text).textOverflow };
 }));
 
@@ -342,7 +343,8 @@ test('状态标签完整显示: every card status is whole at 1920, 1440, 980 an
   await rename('Sonnet 5.5 Thinking 1M');
   const long = await statusLabels();
   expect(long.filter((g) => g.cut || g.over || g.badgeOut)).toEqual([]);
-  expect(await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .cm-agent .agent-seat-label')].every((n) => n.scrollWidth <= n.clientWidth))).toBe(true);
+  // the account beside it stays readable: whole, or cut with an ellipsis and named in full on hover
+  expect(await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .cm-agent .agent-seat-label')].every((n) => n.scrollWidth <= n.clientWidth || (getComputedStyle(n).textOverflow === 'ellipsis' && /^当前账号：/.test(n.title))))).toBe(true);
   await shot('map-status-long-model-1920-light');
   expect(errors).toEqual([]);
 });
