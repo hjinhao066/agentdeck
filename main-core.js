@@ -860,6 +860,20 @@
     }
     return source === 'quota' ? 'quota' : '';
   }
+  // A CLI's own error row, as it reads on one line. A narrow column wraps it
+  // ("⎿  Not logged in · Please run" over "/login"), so a row naming a resource is
+  // also read with up to two plain rows under it. Returns { text, rows } or null.
+  const RESOURCE_WORD = /logged|signed|log ?in|limit|quota|usage|credit|exhaust|auth|api key|oauth|rate|429|401|登录|额度|限流/i;
+  function resourceRow(lines, i) {
+    let text = lines[i];
+    for (let rows = 1; ; rows++) {
+      if (resourceFailure(text, 'automatic')) return { text, rows };
+      if (rows > 2 || !RESOURCE_WORD.test(lines[i])) return null;
+      const more = String(lines[i + rows] ?? '').trim();
+      if (!more || /^[│┃⏺⎿✻✽✳✶✢✺●•◦◆▪⬢✦■✗✘✖✕×▲⚠ℹ❯›>─━═]/.test(more)) return null;
+      text = text.trimEnd() + ' ' + more;
+    }
+  }
   // Codex leaves prior output on screen. Its completed-turn divider makes
   // indicators above it historical, even while the ready prompt stays visible.
   function codexStatusScreen(screen, cmd) {
@@ -964,7 +978,7 @@
     const lines = String(screen || '').split('\n').slice(-20);
     let quota = -1, resumed = -1, working = -1, queued = false;
     lines.forEach((line, i) => {
-      if (resourceFailure(line, 'automatic')) quota = i;
+      if (resourceRow(lines, i)) quota = i;
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
       if (/^\s*[│┃]?\s*→[^\n]*\bctrl\+c to stop\s*[│┃]?\s*$/i.test(line)) working = i;
@@ -986,7 +1000,12 @@
   function resourceReceipt(screen, cmd) {
     screen = codexStatusScreen(screen, cmd);
     if (terminalActivity(screen) !== 'quota') return null;
-    const reason = String(screen || '').split('\n').filter((line) => terminalActivity(line) === 'quota').join('\n').trim();
+    const lines = String(screen || '').split('\n'), found = [];
+    for (let i = 0; i < lines.length; i++) {
+      const row = resourceRow(lines, i);
+      if (row) { found.push(row.text); i += row.rows - 1; }
+    }
+    const reason = found.join('\n').trim();
     const label = { auth: '未登录', rate_limit: '请求被限流' }[resourceFailure(reason, 'quota')] || '额度用尽';
     return { failed: label + (reason ? '：' + reason : '，agent 无法继续当前任务'), source: 'quota' };
   }
