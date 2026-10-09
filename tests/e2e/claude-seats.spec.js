@@ -472,7 +472,7 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us2'))).toBe(true);
   await expect(page.locator('.captain-item .agent-seat-label')).toHaveText('paid.account2');
   // The row 队长 is on leads with the crown; the Max gem stays with the account.
-  await expect(row.locator('.quota-icon.quota-captain svg')).toBeVisible();
+  await expect(row.locator('.quota-icon.quota-captain > svg')).toBeVisible();
   await expect(row.locator('.quota-name')).toHaveText('paid.account2');
   await expect(row.locator('.quota-icon.quota-captain .quota-plan svg')).toBeVisible();
   await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-captain')).toHaveCount(0);
