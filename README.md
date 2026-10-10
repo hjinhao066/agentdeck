@@ -727,7 +727,15 @@ again with the current provider, model and effort instructions.
   across restarts; fresh output rearms a later silence notice. A Claude session whose screen shows
   a background shell/Monitor still running (「… 1 shell still running」, footer 「· 1 shell ·」, also when
   wrapped) is silent by design: it is reported only after 3 hours, as 「在等后台命令，已经 X 小时没有输出」;
-  any other Claude session keeps the 20-minute notice. Relay reminds its
+  a session resting at its empty input box (screen state `done`: turn over, no spinner, no background work) is
+  waiting for 队长 or the user, not stuck: no silence notice, because the one-time 「已结束，未提交回执」
+  speaks for it. That fallback is held off while the terminal's process tree still has a command running
+  (`ptyBackgroundWork`); the screen may show nothing of it (cut footer), so a resting Claude with such a command
+  follows the background-wait rule: quiet for 20 minutes, one notice after 3 hours (a round whose
+  listing is still being refreshed, answer `undefined`, says nothing, like the fallback). When the chat record does not
+  show the turn as finished (missing, or interrupted by 队长) the fallback cannot arm either, and the ordinary
+  notice stays as the backstop, once after the usual limit. A working session whose screen is still keeps the
+  20-minute notice. Relay reminds its
   new Captain of unresolved input even if the previous Captain read it. An exit with code zero before
   a command receipt is also an abnormal receipt, rather than a successful task.
   If unread receipts have waited three minutes with no live listener, the app
