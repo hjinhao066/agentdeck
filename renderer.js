@@ -4040,6 +4040,8 @@ const deckHost = {
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
   // A menu or confirmation is on the terminal right now (its own reading, not the last status tick).
   menuOnScreen: (term) => NEEDS_INPUT_RE.test(statusScreen(term).split('\n').slice(-20).join('\n')),
+  // How the terminal stands right now, read again instead of taken from the last status tick.
+  liveState: (col) => { const e = terms.get(col.id); return e?.alive ? classify(liveStatusText(e.term), e, col.cmd, !!col.isMain) : 'exited'; },
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), ClaudeSeats.described(config.claudeSeats), claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
@@ -4169,6 +4171,14 @@ function statusScreen(term) {
 function chromeRowBreak(above, row) {
   return /^\s*[─━═]{3,}\s*$/.test(above) || /^\s*[─━═]{3,}\s*$/.test(row) ||
     (/\s{2,}$/.test(above) && /^\s*(?:[✻✽✳✶✢✺∴·*]\s+\S|[❯›](?:\s|$)|⎿\s|⏺\s|⏵⏵)/.test(row));
+}
+// The screen the status light reads. On Windows nothing names the foreground process: a PowerShell
+// prompt at the bottom means the agent has exited, and a menu it was showing when it died still
+// stands above that prompt. It is history, not a question waiting for an answer.
+function liveStatusText(term) {
+  if (env.platform !== 'win32') return statusScreen(term);
+  const text = MainCore.afterReplay(statusScreen(term), env.platform);
+  return MainCore.isWindowsShellPrompt(text) ? MainCore.windowsAgentOutput(text) : text;
 }
 // Background shell commands under a column's terminal, for the automatic archive
 // (pty-work.js in the main process). An answer is used for PTY_WORK_MS, a busy one
@@ -4512,7 +4522,7 @@ battery.every('statusTick', () => {
     // 40-line window this is a no-op.
     text = MainCore.afterReplay(text, env.platform);
     const cmd = columns.find((c) => c.id === id)?.cmd;
-    const liveText = env.platform === 'win32' ? MainCore.afterReplay(statusScreen(entry.term), env.platform) : statusScreen(entry.term);
+    const liveText = liveStatusText(entry.term);
     // Cursor activity/readiness must share the live screen with its status dot;
     // the bounded reply tail can reach into old scrollback after a TUI clear.
     const cursorScreen = /\bcursor-agent\b/i.test(cmd || '') ? liveText : text;

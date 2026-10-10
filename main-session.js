@@ -3292,6 +3292,11 @@
         if (col.executor === 'chatgpt-web') throw new Error('ChatGPT 网页会话不接受按键回答，请在网页处理需要用户操作的提示。');
         const entry = host.terms.get(col.id);
         if (!entry || entry.state !== 'input') throw new Error(`「${host.columnLabel(col)}」现在没有停在确认提示上；要给它指令用 tell。`);
+        // The status tick can be seconds old, and an agent that exited leaves its last menu on screen above
+        // the shell prompt: keys would go to the shell. Read the terminal again before pressing anything.
+        if ((host.liveState && host.liveState(col) !== 'input') || (host.platform !== 'win32' && host.agentInForeground && !(await host.agentInForeground(col, false)))) {
+          throw new Error(`「${host.columnLabel(col)}」已经不在确认提示上（agent 可能已退出、回到了 shell），一个键也没有按；先 peek 看看。`);
+        }
         const key = String(message.key || '').trim().toLowerCase();
         const { keys, submit } = M.answerKeys(key, { appCursor: entry.term?.modes?.applicationCursorKeysMode === true });
         // One press at a time: a menu redraws between arrow keys, and keys that arrive together can be dropped.
