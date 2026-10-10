@@ -95,6 +95,13 @@ function loadDevice(file) {
   return device;
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// A card file whose revision is below the one this machine last got from the hub, and whose
+// content differs from it, is an older copy put back by something else (a git rebase on the
+// shared folder): never this machine's edit. A file without a revision, or at the base
+// revision, is judged as before.
+function olderCopy(base, card) {
+  return !!base && Number.isInteger(card.revision) && card.revision < base.revision && Object.keys(diff(base.fields, pick(card))).length > 0;
+}
 const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
 function summaryOf(turns) {
   const first = Array.isArray(turns) ? turns[0] || {} : {};
@@ -136,6 +143,9 @@ class FleetClient {
     this.keptHistory = new Set();
     this.unmigrated = [];
     this.savedSyncAt = null;
+    // The newest conflict time the person has marked as seen on this computer (ms); only
+    // this file keeps it, never a card.
+    this.conflictSeen = -1;
     this._load();
     this._seedTasks();
   }
@@ -150,6 +160,7 @@ class FleetClient {
       this.savedSyncAt = this.lastSyncAt;
       this.devices = Array.isArray(saved.devices) ? saved.devices : [];
       this.history = Array.isArray(saved.history) ? saved.history : [];
+      if (Number.isFinite(saved.conflictSeen)) this.conflictSeen = saved.conflictSeen;
     } catch (_) {}
     this._migrateHistory(legacy);
   }
@@ -195,6 +206,7 @@ class FleetClient {
       devices: this.devices,
       history: this.history,
       lastSyncAt: this.lastSyncAt,
+      conflictSeen: this.conflictSeen,
     }));
     this.dirty = false;
     this.savedSyncAt = this.lastSyncAt;
@@ -224,8 +236,15 @@ class FleetClient {
     if (!card || typeof card.id !== 'string') return;
     const fields = pick(card);
     const base = this.bases.get(card.id);
-    const set = base ? diff(base.fields, fields) : fields;
     const previous = this.taskOutbox.get(card.id);
+    // Not pushed, and taken back if queued: the next pull writes the hub's copy over the file.
+    // An attempted operation stays (the hub may have it), but nothing is stacked on it.
+    if (olderCopy(base, card)) {
+      if (previous?.attempted) { if (previous.nextSet) { delete previous.nextSet; this.dirty = true; } }
+      else if (this.taskOutbox.delete(card.id)) this.dirty = true;
+      return;
+    }
+    const set = base ? diff(base.fields, fields) : fields;
     // An attempted operation is immutable: the server may already have applied
     // it even if its response was lost. Save later edits separately until ack.
     if (previous?.attempted) {
@@ -536,12 +555,31 @@ class FleetClient {
       try { this._persist(); } catch (_) {}
     }
   }
-  snapshot() {
-    let conflictCount = 0;
+  // Every conflict record on the board with its time (a record without a readable time counts as
+  // the oldest, so a mark always covers it).
+  _conflictTimes() {
+    const times = [];
     try {
-      for (const card of this.taskStore.list({ archived: true })) if (Array.isArray(card.conflicts) && card.conflicts.length) conflictCount += card.conflicts.length;
+      for (const card of this.taskStore.list({ archived: true })) {
+        if (!Array.isArray(card.conflicts)) continue;
+        for (const item of card.conflicts) { const at = Date.parse(item && item.at); times.push(Number.isFinite(at) ? at : 0); }
+      }
     } catch (_) {}
-    return { configured: true, selfId: this.device.id, devices: this.devices, error: this.error, lastSyncAt: this.lastSyncAt, history: this.history, conflictCount };
+    return times;
+  }
+  // 全部标为已看: everything recorded so far stops counting in the sidebar. The records stay on
+  // their cards. Saved with the next round, or when the client stops.
+  ackConflicts() {
+    const newest = Math.max(this.conflictSeen, ...this._conflictTimes());
+    if (newest !== this.conflictSeen) { this.conflictSeen = newest; this.dirty = true; }
+    return this.snapshot();
+  }
+  snapshot() {
+    const times = this._conflictTimes();
+    return {
+      configured: true, selfId: this.device.id, devices: this.devices, error: this.error, lastSyncAt: this.lastSyncAt, history: this.history,
+      conflictCount: times.filter((at) => at > this.conflictSeen).length, conflictTotal: times.length,
+    };
   }
 }
 

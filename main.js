@@ -185,6 +185,7 @@ handleMain('worktree:reclaim', (_event, payload) => {
   return Worktree.reclaim(record);
 });
 handleMain('fleet:state', () => fleetClient ? fleetClient.snapshot() : { configured: false, devices: [], history: [], error: null, conflictCount: 0, selfId: null, lastSyncAt: null });
+handleMain('fleet:ack-conflicts', () => (fleetClient && typeof fleetClient.ackConflicts === 'function' ? fleetClient.ackConflicts() : null));
 
 // Every privileged channel belongs exclusively to the local deck main frame.
 // Native notifications are created here, never in a page.

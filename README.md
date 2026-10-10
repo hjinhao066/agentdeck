@@ -1541,7 +1541,15 @@ saved captain transcripts are shared; a change is visible on the other side
 within a minute. Edits to different fields of the same card merge. Edits to
 the same field stay as two copies and the card shows 冲突. The sidebar section
 两机 is one line: a dot per computer (Mac / Windows) and, only when something needs a look, 同步失败
-or the number of 冲突. Hovering it, reaching it with the keyboard, or clicking it (kept open until
+or the number of 冲突 that appeared since the person last pressed the eye icon beside it (全部标为已看).
+That mark is a time kept in this computer's own `fleet-state.json` (`conflictSeen`); no card is touched, so
+nothing is synced and every record stays on its card, where the board's 冲突 tag still lists all of them.
+The notice says what the hub did: one side was kept, and the other side's old value is in the conflict record.
+A card file that is older than what the hub last sent (its `revision` is below the base and its content differs)
+is an old copy somebody put back, typically a git rebase on the shared `~/.agents` folder: it is never pushed
+(any unsent push for it is withdrawn) and the next pull writes the hub's copy over it. A file at the base
+revision, one with no `revision`, a card made here and an edit made while the hub is unreachable go up as before.
+Hovering it, reaching it with the keyboard, or clicking it (kept open until
 Esc or a click elsewhere) shows each computer's full name with online/offline and the last-seen time,
 the whole sync message, and the 8 most recent 队长记录, beside the sidebar. Each record shows its own
 last time (a saved chat's turns carry their times in milliseconds; a record the hub has without times
