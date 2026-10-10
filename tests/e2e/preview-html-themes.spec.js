@@ -443,3 +443,16 @@ test('the keyboard picks a theme too, and the choice is still there after a rest
   await expect(page.locator('#pvBody .pv-md')).toHaveAttribute('data-md-theme', picked);
   expect((await measure()).bg).toBe(asRgb(Themes.THEMES[1].dark.bg));
 });
+test('a web page that cannot be drawn here says why, and the page before it does not stay behind', async () => {
+  await page.evaluate(([file, id]) => SidePane.openPreview(file, id), [P('report', 'index.html'), COL]);
+  await expect.poll(async () => (await pageView())?.title, { timeout: 20000 }).toBe('probe-done');
+  // a leading dot cannot be carried by the page's address
+  fs.writeFileSync(P('report', '.draft.html'), '<!doctype html><meta charset="utf-8"><title>草稿</title><p>草稿</p>');
+  await page.evaluate(([file, id]) => SidePane.openPreview(file, id), [P('report', '.draft.html'), COL]);
+  await expect(page.locator('#pvHead .pv-title strong')).toHaveText('.draft.html');
+  await expect(page.locator('#pvBody .pv-empty')).toContainText('不能当网址打开');
+  await expect.poll(pageView).toBeNull();
+  // its source is still one click away
+  await page.locator('#pvHead .pv-flip').click();
+  await expect(page.locator('#pvBody .pv-code .pv-src')).toContainText('<title>草稿</title>');
+});

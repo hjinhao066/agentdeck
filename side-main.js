@@ -368,7 +368,16 @@ function registerSideIpc(ctx) {
     const r = resolveClick(msg, false);
     if (!r || !PreviewHtml.HTML_NAME.test(r.target)) return;
     const scope = PreviewHtml.scopeFor(r.target, { home, tmp: ctx.tmp || os.tmpdir() });
-    if (!scope || !PreviewHtml.resolveAsset(scope, PreviewHtml.entryPath(scope)).ok) return;
+    if (!scope || !PreviewHtml.resolveAsset(scope, PreviewHtml.entryPath(scope)).ok) {
+      // Not drawn here (over the size cap, or a name an address cannot carry: a leading dot, a
+      // colon). The page shown before is ended rather than left under this file's name, and
+      // the pane says why.
+      closePage();
+      let big = false;
+      try { big = fs.statSync(r.target).size > PreviewHtml.MAX_ASSET_BYTES; } catch (_) {}
+      send('side:preview-state', { refused: big ? 'big' : 'name', path: r.target });
+      return;
+    }
     const v = ensurePageView();
     if (!v) return;
     const key = scope.wide ? scope.file : scope.root;

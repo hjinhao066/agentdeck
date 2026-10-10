@@ -105,6 +105,16 @@
     // a web link clicked inside a previewed page opens in the browser tab
     window.deck.onPreviewLink((m) => { if (pageOpen && m && /^https?:/i.test(m.url)) openBrowser(m.url); });
     window.deck.onPreviewState((m) => {
+      // the main process did not open this page: say why where it would have been
+      if (m && m.refused) {
+        const web = pvBody.querySelector('.pv-web');
+        if (!web || !pageOpen || !preview || preview.path !== m.path) return;
+        pageOpen = false; pageAlone = false;
+        web.replaceWith(el('div', 'pv-empty', m.refused === 'big'
+          ? '这个网页超过 64 MB，不在这里显示。点上面的源码按钮可以看它的开头。'
+          : '这个网页的文件名以 . 开头或带冒号，不能当网址打开，不在这里显示。点上面的源码按钮可以看源码。'));
+        return;
+      }
       pageAlone = !!(m && m.alone);
       const note = pvBody.querySelector('.pv-web-note');
       if (note) { note.hidden = !pageAlone; requestAnimationFrame(syncBounds); }
