@@ -31,6 +31,19 @@
   ],
   "released": [
     {
+      "version": "2.0.5",
+      "date": "2026-10-09",
+      "title": "Windows 不再误报已结束、快捷键补齐，队长自动压缩",
+      "items": [
+        "Windows 上干活的 Claude 不再被误报「已结束，未提交回执」；退出的 agent 留下的旧菜单不再当成提问",
+        "Windows 快捷键补齐：Ctrl+Shift+字母、Alt+数字和方向键；Ctrl+Shift+C 复制选中的文字",
+        "路径带撇号能拖进 PowerShell；相对路径按本列文件夹找；PowerShell 写的 UTF-16 文件能预览",
+        "手机能预览 D 盘 Playground 和各项目 reports 里的文档，密钥和登录文件一律不给看",
+        "队长的 Claude 到 20 万 token 附近自己压缩，保留在跑的会话、卡号和待拍板的事",
+        "两机同步：交过回执的卡不被晚到的兜底改回，也不会再被认领（要换 hub 的程序文件）"
+      ]
+    },
+    {
       "version": "2.0.4",
       "date": "2026-10-09",
       "title": "滚轮不卡、两机同步瘦身、席位状态一眼看清",

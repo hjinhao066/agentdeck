@@ -1440,7 +1440,16 @@ the file entry by entry, applies the rules the service applies when it loads a
 file (upload receipts name their transcript, copies kept only for card-state
 moves go, a rewritten version keeps the turns rewritten), keeps cards, devices and transcripts, only reads
 the old file and never replaces an existing one. Point `--data` at the new file's
-folder and keep the old file as the rollback. Each desktop keeps its settings in `userData/fleet.json` (not the
+folder and keep the old file as the rollback. Installing a new AgentDeck does not
+update a running hub. For 2.0.5 a hub that already runs the 2.0.4 hub fix (its
+`sync-server.js` is the same as 2.0.5's) needs only the new `shared-store.js` (a written
+`complete` beats a late fallback, a finished card is not claimed again, a card
+moved by hand is not taken back): back up the hub's folder and `store.json`, put
+the new `shared-store.js` in place, and restart the hub's scheduled task from an
+administrator shell (end only the node process listening on the hub's port).
+The new file adds `sealed` / `completeSeen` to cards in `store.json`; an older
+`shared-store.js` ignores them, so rolling back is putting the old file back and
+restarting. Each desktop keeps its settings in `userData/fleet.json` (not the
 deck `config.json`, which the window rewrites):
 
 ```json

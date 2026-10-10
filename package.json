@@ -1,6 +1,6 @@
 {
   "name": "agentdeck",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "TweetDeck-style multi-column deck for terminal AI agents",
   "main": "main.js",
   "scripts": {
