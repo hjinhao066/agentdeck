@@ -1647,8 +1647,41 @@ body.linking-board .board-port.out::before {
 #pvHead { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--hairline); }
 #pvHead:empty { display: none; }
 .pv-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.pv-title strong { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pv-title strong { min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pv-path { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.pv-path.pv-gone { direction: ltr; color: var(--at-need); }
+/* the file was read again after a change: a short mark beside its name */
+.pv-fresh {
+  flex: 0 0 auto; padding: 0 7px; border: 1px solid var(--accent); border-radius: 4px;
+  color: var(--accent); font-size: 11.5px; font-weight: 600; line-height: 17px; animation: pv-fresh 2.6s ease forwards;
+}
+@keyframes pv-fresh { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .pv-fresh { animation: none; } }
+:root[data-motion="off"] .pv-fresh { animation: none; }
+/* find in the preview: a bar under the head */
+#pvFind:not([hidden]) {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 4px; padding: 5px 8px 5px 12px;
+  border-bottom: 1px solid var(--hairline); background: var(--panel);
+}
+.pv-find-icon { flex: 0 0 auto; display: inline-flex; color: var(--muted); }
+.pv-find-icon svg { width: 14px; height: 14px; }
+.pv-find-input {
+  flex: 1; min-width: 0; height: 28px; padding: 0 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--app-bg); color: var(--text); font: inherit; font-size: 13px; outline: none;
+}
+.pv-find-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.pv-find-count { flex: 0 0 auto; min-width: 54px; padding: 0 4px; color: var(--text-2); font: 12px var(--mono); text-align: right; white-space: nowrap; }
+.pv-find-count.none { color: var(--at-need); font-family: inherit; }
+/* the note and its outline side by side; the outline floats over a narrow pane */
+#pvMain { flex: 1; min-height: 0; display: flex; position: relative; }
+#pvMain #pvBody { min-width: 0; }
+#pvBody:focus { outline: none; }
+/* found words in a code file and a folder list (a note colours them by its theme) */
+.pv-src::highlight(pv-find), .pv-src ::highlight(pv-find), .pv-dir ::highlight(pv-find) { background-color: rgba(240, 180, 80, 0.45); }
+.pv-src::highlight(pv-find-now), .pv-src ::highlight(pv-find-now), .pv-dir ::highlight(pv-find-now) { background-color: #f0b450; color: #0b0f1e; }
+:root[data-theme="light"] .pv-src::highlight(pv-find), :root[data-theme="light"] .pv-src ::highlight(pv-find), :root[data-theme="light"] .pv-dir ::highlight(pv-find) { background-color: #ffe58a; }
+:root[data-theme="light"] .pv-src::highlight(pv-find-now), :root[data-theme="light"] .pv-src ::highlight(pv-find-now), :root[data-theme="light"] .pv-dir ::highlight(pv-find-now) { background-color: #8f5a00; color: #ffffff; }
 .pv-actions { display: flex; flex: 0 0 auto; gap: 2px; align-items: center; }
 /* reading themes: a palette button and the list it opens */
 .pv-theme { position: relative; display: flex; }
@@ -1702,7 +1735,7 @@ body.linking-board .board-port.out::before {
 :root[data-theme="light"] .tok-c { color: #5c7f4a; } :root[data-theme="light"] .tok-s { color: #a0502d; }
 :root[data-theme="light"] .tok-n { color: #2f7a3e; } :root[data-theme="light"] .tok-k { color: #1d63c4; }
 .pv-image { display: block; max-width: calc(100% - 24px); margin: 12px auto; cursor: zoom-in; border-radius: 6px; }
-.pv-image.actual { max-width: none; margin: 12px; cursor: zoom-out; }
+.pv-image:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .pv-dir { padding: 6px 8px 12px; display: flex; flex-direction: column; }
 .pv-dir-row {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 10px; text-align: left;

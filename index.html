@@ -326,7 +326,11 @@
     </header>
     <div id="sidePreview" class="side-page" hidden>
       <div id="pvHead"></div>
-      <div id="pvBody"></div>
+      <div id="pvFind" role="search" hidden></div>
+      <div id="pvMain">
+        <nav id="pvOutline" aria-label="目录" hidden></nav>
+        <div id="pvBody" tabindex="-1"></div>
+      </div>
     </div>
     <div id="sideTerminal" class="side-page" hidden>
       <div id="stTitle"></div>
@@ -596,6 +600,7 @@
   <script src="schedule-core.js"></script>
   <script src="schedule-feed-core.js"></script>
   <script src="preview-themes.js"></script>
+  <script src="preview-reader.js"></script>
   <script src="side-pane.js"></script>
   <script src="chat-ui.js"></script>
   <script src="chat-deliverables.js"></script>

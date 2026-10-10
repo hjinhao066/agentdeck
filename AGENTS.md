@@ -232,6 +232,12 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   no `file:`, no loopback or local-network address (the phone page and sync server
   listen there), nothing handed to the browser tab that the page could not fetch itself.
   Keep `tests/preview-html.test.js` and `tests/e2e/preview-html-themes.spec.js` passing.
+- The preview's reading tools (`preview-reader.js`, wired in `side-pane.js`): find marks words
+  with CSS highlight ranges and never rewrites a note's text; the main process watches only the
+  file on screen (`preview:watch`, resolved like a click) and tells the page a number, never a
+  path; ⌘F/Ctrl+F is the only key taken from a previewed page (`before-input-event`), whose find
+  runs in its own view (`findInPage`). ⌘F elsewhere stays the conversation/terminal search.
+  Keep `tests/preview-reader.test.js` and `tests/e2e/preview-reader.spec.js` passing.
 - The Markdown reading view's extra syntax is behind `renderMarkdown`'s `rich` option:
   chat bubbles and the phone page must keep their output. Theme colours live in
   `preview-themes.js` as solid colours so the contrast test can read them; text in a
