@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, session, Notification, powerMonitor } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, session, Notification, powerMonitor, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -16,6 +16,11 @@ const BarkPolicy = require('./bark-policy');
 const { createFileBarkDelivery } = require('./bark-delivery');
 const { createCalendarCache } = require('./bark-calendar');
 const { registerSideIpc, loadAllChats } = require('./side-main');
+// A web page previewed in the side pane is served from an address of its own
+// (preview-html-core.js). The scheme has to be declared before the app is ready
+// so relative links, fetch and storage behave as on an ordinary site; only the
+// preview's own session ever answers it.
+protocol.registerSchemesAsPrivileged([{ scheme: require('./preview-html-core').SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 const ArchiveRecovery = require('./archive-recovery');
 const { registerSkillsIpc } = require('./skills-core');
 const { registerScheduleFeedIpc } = require('./schedule-feed');

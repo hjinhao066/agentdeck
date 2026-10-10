@@ -3,11 +3,14 @@
 // conversations, file previews, and the embedded browser. Everything the page
 // can ask for is validated here; the page never gets Node or a raw file path
 // it did not click on.
+const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { validId, privateFile } = require('./security');
 const ChatCore = require('./chat-core');
+const PreviewHtml = require('./preview-html-core');
 
 const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
@@ -44,7 +47,8 @@ function readPreview(target, raw) {
     const got = fs.readSync(fd, buf, 0, buf.length, 0);
     const head = buf.subarray(0, Math.min(got, 8000));
     if (head.includes(0)) return { ...base, kind: 'binary' };
-    return { ...base, kind, text: buf.subarray(0, got).toString('utf8'), truncated: stat.size > MAX_TEXT_BYTES, lang: ChatCore.languageFor(name) };
+    // a web page is shown as the page (side:preview-html) and carries its source for the other view
+    return { ...base, kind: PreviewHtml.HTML_NAME.test(name) ? 'html' : kind, text: buf.subarray(0, got).toString('utf8'), truncated: stat.size > MAX_TEXT_BYTES, lang: ChatCore.languageFor(name) };
   } finally { fs.closeSync(fd); }
 }
 
@@ -172,15 +176,16 @@ function registerSideIpc(ctx) {
   // The page reports CSS pixels; the view is placed in window pixels. They
   // differ by the page's zoom (⌘− / ⌘= in the View menu), which used to push
   // the browser out of the side pane.
-  function applyBounds() {
-    if (!view || view.webContents.isDestroyed()) return;
-    const b = lastBounds;
+  function place(v, b) {
+    if (!v || v.webContents.isDestroyed()) return;
     const win = getWindow();
     let z = 1;
     try { if (win && !win.isDestroyed()) z = win.webContents.getZoomFactor() || 1; } catch (_) {}
-    view.setBounds({ x: Math.round(b.x * z), y: Math.round(b.y * z), width: Math.round(b.width * z), height: Math.round(b.height * z) });
-    view.setVisible(b.visible && b.width > 0 && b.height > 0);
+    v.setBounds({ x: Math.round(b.x * z), y: Math.round(b.y * z), width: Math.round(b.width * z), height: Math.round(b.height * z) });
+    v.setVisible(b.visible && b.width > 0 && b.height > 0);
   }
+  const applyBounds = () => place(view, lastBounds);
+  const readBounds = (b) => ({ x: clampInt(b.x, 20000), y: clampInt(b.y, 20000), width: clampInt(b.width, 20000), height: clampInt(b.height, 20000), visible: !!b.visible });
 
   onMain('side:browser-open', (_e, { url }) => {
     if (!isWebUrl(url)) return;
@@ -200,7 +205,7 @@ function registerSideIpc(ctx) {
   });
   onMain('side:browser-bounds', (_e, b) => {
     if (!b || typeof b !== 'object') return;
-    lastBounds = { x: clampInt(b.x, 20000), y: clampInt(b.y, 20000), width: clampInt(b.width, 20000), height: clampInt(b.height, 20000), visible: !!b.visible };
+    lastBounds = readBounds(b);
     applyBounds();
   });
   onMain('side:browser-action', (_e, { action }) => {
@@ -213,10 +218,102 @@ function registerSideIpc(ctx) {
     else if (action === 'stop') wc.stop();
   });
 
+  // ---- a web page previewed in the pane ----
+  // The page runs its own scripts, so it gets what a page from the internet
+  // would: a sandboxed view without a bridge, a session of its own that keeps
+  // nothing, and an address that serves only the folder the file lies in
+  // (preview-html-core.js). It cannot name a file, this machine or the deck.
+  let pageView = null;
+  let pageSession = null;
+  let opened = null;                 // { token, scope }: the one page the address serves right now
+  let pageBounds = { x: 0, y: 0, width: 0, height: 0, visible: false };
+  const tokens = new Map();          // folder (or lone file) → its address, the same for the whole run
+  const refusal = (status) => new Response(null, { status, headers: { 'cache-control': 'no-store' } });
+  async function serve(request) {
+    if (request.method !== 'GET' && request.method !== 'HEAD') return refusal(405);
+    let url;
+    try { url = new URL(request.url); } catch (_) { return refusal(404); }
+    if (!opened || url.hostname !== opened.token) return refusal(404);
+    const asset = PreviewHtml.resolveAsset(opened.scope, url.pathname);
+    if (!asset.ok) return refusal(404);
+    let body;
+    try { body = await fs.promises.readFile(asset.file); } catch (_) { return refusal(404); }
+    return new Response(request.method === 'HEAD' ? null : body, { status: 200, headers: {
+      'content-type': asset.mime, 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
+    } });
+  }
+  function ensurePageSession() {
+    if (pageSession) return pageSession;
+    const ses = session.fromPartition(PreviewHtml.PARTITION);
+    ses.protocol.handle(PreviewHtml.SCHEME, serve);
+    ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !PreviewHtml.requestAllowed(details.url) }));
+    ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    ses.setPermissionCheckHandler(() => false);
+    ses.on('will-download', (event) => event.preventDefault());
+    return (pageSession = ses);
+  }
+  function ensurePageView() {
+    const win = getWindow();
+    if (!win || win.isDestroyed()) return null;
+    if (pageView && !pageView.webContents.isDestroyed()) return pageView;
+    pageView = new WebContentsView({
+      webPreferences: { session: ensurePageSession(), sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, backgroundThrottling: true },
+    });
+    const wc = pageView.webContents;
+    // A link to the public web is handed to the browser tab; nothing else leaves the
+    // page. A script can "click" too, so an address on this machine or its network is
+    // not handed over: the browser tab would fetch it on the page's behalf.
+    const outside = (url) => { if (isWebUrl(url) && PreviewHtml.requestAllowed(url)) send('side:preview-link', { url }); };
+    wc.setWindowOpenHandler(({ url }) => { outside(url); return { action: 'deny' }; });
+    const guard = (event, url) => {
+      if (opened && PreviewHtml.sameSite(url, opened.token)) return;
+      event.preventDefault();
+      outside(url);
+    };
+    wc.on('will-navigate', guard);
+    wc.on('will-redirect', guard);
+    win.contentView.addChildView(pageView);
+    place(pageView, pageBounds);
+    return pageView;
+  }
+  function closePage() {
+    opened = null;
+    if (!pageView) return;
+    const win = getWindow();
+    try { if (win && !win.isDestroyed()) win.contentView.removeChildView(pageView); } catch (_) {}
+    if (!pageView.webContents.isDestroyed()) { try { pageView.webContents.close(); } catch (_) {} }
+    pageView = null;
+  }
+  onMain('side:preview-html', (_e, msg) => {
+    if (!rawOf(msg)) return;
+    const r = resolveClick(msg, false);
+    if (!r || !PreviewHtml.HTML_NAME.test(r.target)) return;
+    const scope = PreviewHtml.scopeFor(r.target, { home, tmp: ctx.tmp || os.tmpdir() });
+    if (!scope || !PreviewHtml.resolveAsset(scope, PreviewHtml.entryPath(scope)).ok) return;
+    const v = ensurePageView();
+    if (!v) return;
+    const key = scope.wide ? scope.file : scope.root;
+    if (!tokens.has(key)) tokens.set(key, crypto.randomBytes(16).toString('hex'));
+    opened = { token: tokens.get(key), scope };
+    v.webContents.loadURL(`${PreviewHtml.SCHEME}://${opened.token}${PreviewHtml.entryPath(scope)}`).catch(() => {});
+    send('side:preview-state', { alone: scope.wide });
+  });
+  onMain('side:preview-bounds', (_e, b) => {
+    if (!b || typeof b !== 'object') return;
+    pageBounds = readBounds(b);
+    place(pageView, pageBounds);
+  });
+  onMain('side:preview-action', (_e, msg) => {
+    const action = msg && msg.action;
+    if (action === 'close') closePage();
+    else if (action === 'reload' && pageView && !pageView.webContents.isDestroyed()) pageView.webContents.reload();
+  });
+
   return {
     dispose() {
       if (view && !view.webContents.isDestroyed()) { try { view.webContents.close(); } catch (_) {} }
       view = null;
+      closePage();
     },
   };
 }

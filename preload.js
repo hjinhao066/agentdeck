@@ -81,6 +81,12 @@ contextBridge.exposeInMainWorld('deck', {
   sideBrowserBounds: (b) => ipcRenderer.send('side:browser-bounds', b),
   sideBrowserAction: (action) => ipcRenderer.send('side:browser-action', { action }),
   onBrowserState: (cb) => ipcRenderer.on('side:browser-state', (_e, m) => cb(m)),
+  // A previewed web page: shown in a separate sandboxed view the pane only places.
+  sidePreviewHtml: (raw, id, cont) => ipcRenderer.send('side:preview-html', { raw, id, cont }),
+  sidePreviewBounds: (b) => ipcRenderer.send('side:preview-bounds', b),
+  sidePreviewAction: (action) => ipcRenderer.send('side:preview-action', { action }),
+  onPreviewLink: (cb) => ipcRenderer.on('side:preview-link', (_e, m) => cb(m)),
+  onPreviewState: (cb) => ipcRenderer.on('side:preview-state', (_e, m) => cb(m)),
   // Skills page: keys come from the listing; main re-checks every path.
   skillsList: () => ipcRenderer.invoke('skills:list', {}),
   skillsRead: (key) => ipcRenderer.invoke('skills:read', { key }),

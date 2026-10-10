@@ -1,0 +1,160 @@
+/* The side pane's Markdown reading view. Shapes only: every colour comes from
+   the chosen theme through --md-* variables (preview-themes.js writes them,
+   one set for the light deck and one for the dark). The smallest text is
+   11.5px; sizes given relative to the body text are floored there. */
+.pv-md[data-md-theme] {
+  --co: var(--md-c-info); --co-bg: var(--md-c-info-bg);
+  min-height: 100%; padding: 22px 26px 56px;
+  background: var(--md-bg); color: var(--md-text);
+  font-size: 14px; line-height: 1.75;
+}
+/* a readable line: text stops growing when the pane is dragged wide */
+.pv-md[data-md-theme] > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+.pv-md[data-md-theme] > :first-child { margin-top: 0; }
+
+/* ---- headings ---- */
+.pv-md[data-md-theme] h1, .pv-md[data-md-theme] h2, .pv-md[data-md-theme] h3,
+.pv-md[data-md-theme] h4, .pv-md[data-md-theme] h5, .pv-md[data-md-theme] h6 { margin-top: 1.5em; margin-bottom: 0.55em; line-height: 1.3; font-weight: 650; }
+.pv-md[data-md-theme] h1 { color: var(--md-h1); font-size: 1.7em; font-weight: 700; }
+.pv-md[data-md-theme] h2 { color: var(--md-h2); font-size: 1.4em; }
+.pv-md[data-md-theme] h3 { color: var(--md-h3); font-size: 1.2em; }
+.pv-md[data-md-theme] h4 { color: var(--md-h4); font-size: 1.07em; }
+.pv-md[data-md-theme] h5 { color: var(--md-h5); font-size: 1em; }
+.pv-md[data-md-theme] h6 { color: var(--md-h6); font-size: max(11.5px, 0.9em); letter-spacing: 0.04em; }
+
+/* ---- text ---- */
+.pv-md[data-md-theme] strong { color: var(--md-strong); font-weight: 700; }
+.pv-md[data-md-theme] em { color: var(--md-em); }
+.pv-md[data-md-theme] del { color: var(--md-del); }
+.pv-md[data-md-theme] mark { background: var(--md-mark-bg); color: var(--md-mark); padding: 0.05em 0.25em; border-radius: 3px; }
+.pv-md[data-md-theme] mark strong, .pv-md[data-md-theme] mark em { color: inherit; }
+.pv-md[data-md-theme] a { color: var(--md-link); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; border-radius: 3px; }
+.pv-md[data-md-theme] a:hover { text-decoration-thickness: 2px; }
+.pv-md[data-md-theme] a:focus-visible { outline: 2px solid var(--md-accent); outline-offset: 2px; }
+.pv-md[data-md-theme] a[data-ext]::after { content: "↗"; margin-left: 0.15em; font-size: max(11.5px, 0.8em); text-decoration: none; display: inline-block; }
+.pv-md[data-md-theme] a.md-wiki { text-decoration-style: dotted; }
+.pv-md[data-md-theme] hr { border: none; border-top: 1px solid var(--md-hr); margin-top: 1.6em; margin-bottom: 1.6em; }
+.pv-md[data-md-theme] .md-tag { display: inline-block; padding: 0 0.6em; border-radius: 999px; background: var(--md-tag-bg); color: var(--md-tag); font-size: max(11.5px, 0.86em); line-height: 1.7; white-space: nowrap; }
+
+/* ---- code ---- */
+.pv-md[data-md-theme] code { color: var(--md-code); background: var(--md-code-bg); font: max(11.5px, 0.88em) var(--mono); padding: 0.1em 0.4em; border-radius: 5px; }
+.pv-md[data-md-theme] pre.md-code { background: var(--md-pre); border: 1px solid var(--md-border); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+.pv-md[data-md-theme] pre.md-code code { color: var(--md-pre-text); background: none; padding: 0; font-size: 12.5px; line-height: 1.6; }
+.pv-md[data-md-theme] pre.md-code .tok-k { color: var(--md-tok-k); }
+.pv-md[data-md-theme] pre.md-code .tok-s { color: var(--md-tok-s); }
+.pv-md[data-md-theme] pre.md-code .tok-n { color: var(--md-tok-n); }
+.pv-md[data-md-theme] pre.md-code .tok-c { color: var(--md-tok-c); font-style: italic; }
+
+/* ---- quotes and callouts ---- */
+.pv-md[data-md-theme] blockquote { border-left: 3px solid var(--md-quote-bar); background: var(--md-quote-bg); color: var(--md-quote); padding: 0.55em 1em; border-radius: 0 8px 8px 0; }
+.pv-md[data-md-theme] blockquote > :last-child, .pv-md[data-md-theme] .md-callout-body > :last-child { margin-bottom: 0; }
+.pv-md[data-md-theme] .md-callout { background: var(--co-bg); border-left: 3px solid var(--co); border-radius: 0 8px 8px 0; padding: 0.7em 1em; margin-bottom: 0.9em; }
+.pv-md[data-md-theme] .md-callout[data-kind="tip"] { --co: var(--md-c-tip); --co-bg: var(--md-c-tip-bg); }
+.pv-md[data-md-theme] .md-callout[data-kind="ok"] { --co: var(--md-c-ok); --co-bg: var(--md-c-ok-bg); }
+.pv-md[data-md-theme] .md-callout[data-kind="ask"] { --co: var(--md-c-ask); --co-bg: var(--md-c-ask-bg); }
+.pv-md[data-md-theme] .md-callout[data-kind="warn"] { --co: var(--md-c-warn); --co-bg: var(--md-c-warn-bg); }
+.pv-md[data-md-theme] .md-callout[data-kind="bad"] { --co: var(--md-c-bad); --co-bg: var(--md-c-bad-bg); }
+.pv-md[data-md-theme] .md-callout[data-kind="eg"] { --co: var(--md-c-eg); --co-bg: var(--md-c-eg-bg); }
+.pv-md[data-md-theme] .md-callout[data-kind="quote"] { --co: var(--md-c-quote); --co-bg: var(--md-c-quote-bg); }
+.pv-md[data-md-theme] .md-callout-title { display: flex; align-items: center; gap: 8px; color: var(--co); font-weight: 650; list-style: none; }
+.pv-md[data-md-theme] .md-callout-title::-webkit-details-marker { display: none; }
+.pv-md[data-md-theme] .md-callout-title svg { flex: 0 0 auto; width: 16px; height: 16px; }
+.pv-md[data-md-theme] summary.md-callout-title { cursor: pointer; border-radius: 4px; }
+.pv-md[data-md-theme] summary.md-callout-title::after { content: ""; width: 7px; height: 7px; margin-left: auto; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); transition: transform 0.15s ease; }
+.pv-md[data-md-theme] details[open] > summary.md-callout-title::after { transform: rotate(45deg); }
+.pv-md[data-md-theme] summary.md-callout-title:focus-visible { outline: 2px solid var(--co); outline-offset: 3px; }
+.pv-md[data-md-theme] .md-callout-body { margin-top: 0.45em; color: var(--md-text); }
+
+/* ---- lists and task boxes ---- */
+.pv-md[data-md-theme] ul, .pv-md[data-md-theme] ol { padding-left: 1.6em; }
+.pv-md[data-md-theme] li { margin: 0.2em 0; }
+.pv-md[data-md-theme] li::marker { color: var(--md-marker); font-weight: 600; }
+.pv-md[data-md-theme] li > ul, .pv-md[data-md-theme] li > ol { margin-bottom: 0; }
+.pv-md[data-md-theme] li.md-task { list-style: none; position: relative; }
+.pv-md[data-md-theme] .md-box { position: absolute; left: -1.5em; top: 0.38em; width: 1.05em; height: 1.05em; border: 1.5px solid var(--md-accent); border-radius: 4px; }
+.pv-md[data-md-theme] li.md-task.done > .md-box { background: var(--md-accent); }
+.pv-md[data-md-theme] li.md-task.done > .md-box::after { content: ""; position: absolute; left: 30%; top: 8%; width: 28%; height: 58%; border-right: 2px solid var(--md-accent-ink); border-bottom: 2px solid var(--md-accent-ink); transform: rotate(45deg); }
+.pv-md[data-md-theme] li.md-task.done { color: var(--md-del); text-decoration: line-through; text-decoration-thickness: 1px; }
+.pv-md[data-md-theme] li.md-task.done > ul, .pv-md[data-md-theme] li.md-task.done > ol { color: var(--md-text); text-decoration: none; }
+
+/* ---- tables, properties ---- */
+.pv-md[data-md-theme] .md-table { overflow-x: auto; border: 1px solid var(--md-border); border-radius: 8px; margin-bottom: 0.9em; }
+.pv-md[data-md-theme] .md-table table { width: 100%; border-collapse: collapse; margin: 0; font-size: 13.5px; }
+.pv-md[data-md-theme] .md-table th, .pv-md[data-md-theme] .md-table td { border: none; border-bottom: 1px solid var(--md-border); padding: 7px 12px; text-align: left; vertical-align: top; }
+.pv-md[data-md-theme] .md-table tbody tr:last-child td { border-bottom: none; }
+.pv-md[data-md-theme] .md-table th { background: var(--md-th-bg); color: var(--md-th); font-weight: 650; white-space: nowrap; }
+.pv-md[data-md-theme] .md-table tbody tr:nth-child(even) td { background: var(--md-row-alt); }
+.pv-md[data-md-theme] .md-table .al-c { text-align: center; }
+.pv-md[data-md-theme] .md-table .al-r { text-align: right; }
+.pv-md[data-md-theme] .md-props { border: 1px solid var(--md-border); border-radius: 8px; padding: 6px 12px; margin-bottom: 1.4em; overflow-x: auto; }
+.pv-md[data-md-theme] .md-props table { border-collapse: collapse; margin: 0; font-size: 13px; }
+.pv-md[data-md-theme] .md-props th, .pv-md[data-md-theme] .md-props td { border: none; padding: 3px 0; text-align: left; vertical-align: top; }
+.pv-md[data-md-theme] .md-props th { color: var(--md-muted); font-weight: 500; padding-right: 18px; white-space: nowrap; }
+.pv-md[data-md-theme] .md-prop { display: inline-block; margin-right: 8px; }
+.pv-md[data-md-theme] .md-prop.md-tag { margin-right: 6px; }
+
+/* ---- pictures, footnotes ---- */
+.pv-md[data-md-theme] .md-img { display: block; max-width: 100%; height: auto; margin: 0.6em 0; border-radius: 6px; color: var(--md-muted); font-size: 13px; }
+.pv-md[data-md-theme] .md-img[data-missing] { display: inline-block; padding: 2px 8px; border: 1px dashed var(--md-border); }
+.pv-md[data-md-theme] .md-fn { color: var(--md-link); font-size: max(11.5px, 0.78em); font-weight: 600; padding: 0 0.15em; cursor: pointer; }
+.pv-md[data-md-theme] .md-footnotes { border-top: 1px solid var(--md-hr); margin-top: 2.2em; padding-top: 0.8em; color: var(--md-muted); font-size: 13px; }
+.pv-md[data-md-theme] .md-footnotes li.md-fn-hit { color: var(--md-text); }
+
+/* ===== what makes each theme its own ===== */
+/* Minimal: flat and quiet; the type does the work. */
+.pv-md[data-md-theme="minimal"] { line-height: 1.8; }
+.pv-md[data-md-theme="minimal"] > * { max-width: 680px; }
+.pv-md[data-md-theme="minimal"] h1 { font-size: 1.5em; font-weight: 650; }
+.pv-md[data-md-theme="minimal"] h2 { font-size: 1.25em; font-weight: 600; }
+.pv-md[data-md-theme="minimal"] h3 { font-size: 1.08em; font-weight: 600; }
+.pv-md[data-md-theme="minimal"] h6 { text-transform: uppercase; letter-spacing: 0.08em; }
+.pv-md[data-md-theme="minimal"] blockquote { background: none; font-style: italic; border-left-width: 2px; border-radius: 0; padding-top: 0.1em; padding-bottom: 0.1em; }
+.pv-md[data-md-theme="minimal"] .md-table { border-left: none; border-right: none; border-radius: 0; }
+.pv-md[data-md-theme="minimal"] .md-table th { background: none; border-bottom-width: 2px; }
+.pv-md[data-md-theme="minimal"] .md-table tbody tr:nth-child(even) td { background: none; }
+.pv-md[data-md-theme="minimal"] pre.md-code { border-radius: 4px; }
+.pv-md[data-md-theme="minimal"] .md-callout { border-radius: 4px; border-left-width: 2px; }
+.pv-md[data-md-theme="minimal"] .md-tag { border-radius: 4px; }
+
+/* 星光: the title glows over a rule that fades out, the second level stands on a lit bar,
+   an amber mark leads the third. */
+.pv-md[data-md-theme="starlight"] h1 { padding-bottom: 0.4em; border-bottom: 1px solid; border-image: linear-gradient(90deg, var(--md-h2), transparent 85%) 1; text-shadow: 0 0 22px color-mix(in srgb, var(--md-h2) 55%, transparent); }
+.pv-md[data-md-theme="starlight"] h2 { border-left: 3px solid var(--md-h2); padding-left: 0.6em; box-shadow: -8px 0 16px -10px var(--md-h2); }
+.pv-md[data-md-theme="starlight"] h3::before { content: ""; display: inline-block; width: 0.42em; height: 0.42em; margin-right: 0.55em; background: var(--md-h3); transform: rotate(45deg); vertical-align: 0.14em; box-shadow: 0 0 8px var(--md-h3); }
+.pv-md[data-md-theme="starlight"] pre.md-code, .pv-md[data-md-theme="starlight"] .md-table, .pv-md[data-md-theme="starlight"] .md-props { border-radius: 10px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--md-h2) 14%, transparent), 0 8px 24px -16px var(--md-h2); }
+.pv-md[data-md-theme="starlight"] blockquote { box-shadow: -8px 0 16px -10px var(--md-quote-bar); }
+.pv-md[data-md-theme="starlight"] .md-table th { border-bottom-color: var(--md-h2); }
+.pv-md[data-md-theme="starlight"] code { border-radius: 4px; }
+.pv-md[data-md-theme="starlight"] .md-callout { border-radius: 0 10px 10px 0; }
+
+/* 碳黑: square, ruled, a block of colour in front of the title. */
+.pv-md[data-md-theme="carbon"] h1 { border-left: 6px solid var(--md-h2); padding-left: 0.55em; }
+.pv-md[data-md-theme="carbon"] h2 { position: relative; padding-bottom: 0.4em; border-bottom: 1px solid var(--md-border); }
+.pv-md[data-md-theme="carbon"] h2::after { content: ""; position: absolute; left: 0; bottom: -1px; width: 3em; height: 2px; background: var(--md-h2); }
+.pv-md[data-md-theme="carbon"] h6 { text-transform: uppercase; letter-spacing: 0.1em; }
+.pv-md[data-md-theme="carbon"] pre.md-code { border-left: 3px solid var(--md-tok-s); }
+.pv-md[data-md-theme="carbon"] .md-table th { border-bottom: 2px solid var(--md-th); }
+.pv-md[data-md-theme="carbon"] pre.md-code, .pv-md[data-md-theme="carbon"] .md-table, .pv-md[data-md-theme="carbon"] .md-props,
+.pv-md[data-md-theme="carbon"] code, .pv-md[data-md-theme="carbon"] mark, .pv-md[data-md-theme="carbon"] .md-tag, .pv-md[data-md-theme="carbon"] .md-box { border-radius: 2px; }
+.pv-md[data-md-theme="carbon"] blockquote, .pv-md[data-md-theme="carbon"] .md-callout { border-radius: 0; border-left-width: 4px; }
+
+/* Nord: calm; the first two levels are ruled. */
+.pv-md[data-md-theme="nord"] h1, .pv-md[data-md-theme="nord"] h2 { border-bottom: 1px solid var(--md-border); padding-bottom: 0.3em; }
+.pv-md[data-md-theme="nord"] pre.md-code, .pv-md[data-md-theme="nord"] .md-table, .pv-md[data-md-theme="nord"] .md-props { border-radius: 6px; }
+
+/* Gruvbox: headings in the code face behind their own marks, square corners. */
+.pv-md[data-md-theme="gruvbox"] h1, .pv-md[data-md-theme="gruvbox"] h2, .pv-md[data-md-theme="gruvbox"] h3,
+.pv-md[data-md-theme="gruvbox"] h4, .pv-md[data-md-theme="gruvbox"] h5, .pv-md[data-md-theme="gruvbox"] h6 { font-family: var(--mono); font-weight: 700; letter-spacing: 0; }
+.pv-md[data-md-theme="gruvbox"] h1 { font-size: 1.5em; }
+.pv-md[data-md-theme="gruvbox"] h2 { font-size: 1.3em; }
+.pv-md[data-md-theme="gruvbox"] h3 { font-size: 1.15em; }
+.pv-md[data-md-theme="gruvbox"] h1::before { content: "# "; font-weight: 400; }
+.pv-md[data-md-theme="gruvbox"] h2::before { content: "## "; font-weight: 400; }
+.pv-md[data-md-theme="gruvbox"] h3::before { content: "### "; font-weight: 400; }
+.pv-md[data-md-theme="gruvbox"] pre.md-code, .pv-md[data-md-theme="gruvbox"] .md-table, .pv-md[data-md-theme="gruvbox"] .md-props,
+.pv-md[data-md-theme="gruvbox"] code, .pv-md[data-md-theme="gruvbox"] mark, .pv-md[data-md-theme="gruvbox"] .md-tag, .pv-md[data-md-theme="gruvbox"] .md-box { border-radius: 2px; }
+.pv-md[data-md-theme="gruvbox"] blockquote, .pv-md[data-md-theme="gruvbox"] .md-callout { border-radius: 0; border-left-width: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-md[data-md-theme] summary.md-callout-title::after { transition: none; }
+}

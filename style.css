@@ -1649,7 +1649,31 @@ body.linking-board .board-port.out::before {
 .pv-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .pv-title strong { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pv-path { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
-.pv-actions { display: flex; flex: 0 0 auto; gap: 6px; }
+.pv-actions { display: flex; flex: 0 0 auto; gap: 2px; align-items: center; }
+/* reading themes: a palette button and the list it opens */
+.pv-theme { position: relative; display: flex; }
+.pv-theme-menu {
+  position: absolute; top: 34px; right: 0; z-index: 20; min-width: 216px; padding: 5px;
+  background: var(--elev); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-pop);
+  display: flex; flex-direction: column; gap: 1px;
+}
+.pv-theme-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 32px; padding: 4px 8px;
+  border: none; border-radius: 7px; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer;
+}
+.pv-theme-item:hover { background: var(--icon-hover-bg); }
+.pv-theme-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.pv-theme-item[aria-checked="true"] { background: var(--active-bg); }
+.pv-theme-swatch { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px; border: 1px solid; border-radius: 6px; }
+.pv-theme-swatch i { width: 8px; height: 8px; border-radius: 50%; }
+.pv-theme-name { flex: 1; min-width: 0; white-space: nowrap; }
+.pv-theme-tick { flex: 0 0 16px; width: 16px; height: 16px; color: var(--accent); visibility: hidden; }
+.pv-theme-tick svg { width: 16px; height: 16px; display: block; }
+.pv-theme-item[aria-checked="true"] .pv-theme-tick { visibility: visible; }
+/* a previewed web page: the placeholder a separate sandboxed view is laid over */
+#pvBody.pv-web-mode { display: flex; flex-direction: column; overflow: hidden; }
+.pv-web { flex: 1; min-height: 0; }
+.pv-web-note { flex: 0 0 auto; padding: 8px 14px; border-bottom: 1px solid var(--hairline); line-height: 1.6; }
 .pv-btn {
   border: 1px solid var(--border); background: transparent; color: var(--text-2); cursor: pointer;
   border-radius: 7px; padding: 3px 9px; font-size: 12px; white-space: nowrap;
