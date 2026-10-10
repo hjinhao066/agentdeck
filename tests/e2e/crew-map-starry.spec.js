@@ -91,15 +91,18 @@ test('the moving light is drawn by a worker on two canvases; nothing in the map 
   expect(await page.locator('#crewMap :is(.cm-pulse, .cm-trail, .cm-hub-beat)').count()).toBe(0);
   expect(await page.evaluate(() => { const root = document.getElementById('crewMap'); return document.getAnimations().filter((a) => a.playState === 'running' && a.effect && a.effect.target && root.contains(a.effect.target) && a.effect.getComputedTiming().iterations === Infinity).map((a) => a.animationName || 'script'); })).toEqual([]);
   // the spinner's own glyph gives way to the one the worker draws; the summary's stays
-  expect(await page.locator('#crewMap .cm-node.st-working:not(.kind-captain) .cm-status > .cm-ico svg').first().evaluate((n) => getComputedStyle(n).visibility)).toBe('hidden');
+  // (found and read in one step: the map redraws its cards on its own ticks, and a card read after that is a detached one)
+  expect(await page.evaluate(() => { const n = document.querySelector('#crewMap .cm-node.st-working:not(.kind-captain) .cm-status > .cm-ico svg'); return n && getComputedStyle(n).visibility; })).toBe('hidden');
 });
 
 test('the page rests between the worker\'s frames, and the motion costs the renderer a few percent', async () => {
   await launch();
   await page.waitForTimeout(1500);
-  // the map's own cost: what animates elsewhere in the window is held (version-progress's 实时 dot pulses a box-shadow,
-  // a repaint every frame, whether the map is open or not)
-  await page.evaluate(() => { const root = document.getElementById('crewMap'); document.getAnimations().forEach((a) => { const t = a.effect && a.effect.target; if (!t || !root.contains(t)) a.pause(); }); });
+  // nothing in the window runs an endless CSS animation: not the map, and not the closed 版本进度 drawer beside it (laid
+  // out off to the right, its 实时 dot would pulse a box-shadow there: a style recalculation every frame, for nothing seen)
+  const endless = () => page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running' && a.effect && a.effect.getComputedTiming().iterations === Infinity)
+    .map((a) => `${a.animationName || 'script'} on ${a.effect.target ? a.effect.target.className || a.effect.target.tagName : '?'}${a.effect.pseudoElement || ''}`));
+  expect(await endless()).toEqual([]);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Performance.enable');
   const metrics = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map((m) => [m.name, m.value]));
@@ -116,6 +119,11 @@ test('the page rests between the worker\'s frames, and the motion costs the rend
   const off = await rendererCpu(12000);
   console.log(`renderer CPU with the map moving ${on.toFixed(2)}%, still ${off.toFixed(2)}%`);
   expect(on - off).toBeLessThan(4);
+  // the drawer opened, its dot pulses again; closed, it holds still
+  await page.locator('#versionProgressBtn').click();
+  await expect.poll(async () => (await endless()).some((a) => a.startsWith('vd-pulse on vd-live'))).toBe(true);
+  await page.locator('#versionProgressBtn').click();
+  await expect.poll(endless).toEqual([]);
 });
 
 test('it stops while motion is off or reduced, the map out of sight or the window hidden, and goes on after', async () => {

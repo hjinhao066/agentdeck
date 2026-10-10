@@ -4265,6 +4265,9 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
   .vd, .vd.open, .vd-seg { transition: none; }
   .vd-live::before, .vd-refresh.busy svg, .vd-dot::after { animation: none !important; }
 }
+/* The closed drawer stays laid out (hidden, slid off to the right), so what pulses in it would keep running there: a
+   style recalculation every frame, ~4% of the renderer, for nothing anyone sees. It holds still until it opens. */
+.vd:not(.open) .vd-live::before, .vd:not(.open) .vd-refresh.busy svg, .vd:not(.open) .vd-dot::after { animation: none !important; }
 
 /* ---- 电池模式: small indicator in the sidebar while the Mac runs on battery ---- */
 .nq-left { display: inline-flex; align-items: center; gap: 2px; }
