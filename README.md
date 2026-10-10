@@ -389,7 +389,7 @@ Retina 这类 2 倍屏上就是 80%，Windows 100% 缩放这类 1 倍屏上是 1
 CLI 自己的升级提示（Update available、brew upgrade 等）、AgentDeck 打进终端的话（重发：…、（AgentDeck 约定）…、回执命令）
 和重启续接时的说明不当进展显示，终端把长行折开时按整行判断。完整内容在悬停提示里；「···」或失败卡片的「查看」
 打开详情浮层（完整回执、会话报的进展、实时活动、文件、打开终端；Esc 关闭）。
-架构图只留当前的活：做完的队长会话没有新指令 10 分钟后自动归档（AgentDeck 重启后也照此处理，重启时已超时的在终端安静约 1 分钟后归档）；
+架构图只留当前的活：做完的队长会话没有新指令 10 分钟后自动归档（AgentDeck 重启后也照此处理，重启时已超时的在终端安静约 1 分钟后归档）。「安静」只看画到屏幕上的输出：Claude Code 闲着时每隔几秒向终端问一次光标位置（`ESC[?6n`），这类只问不画的终端查询不算输出（`MainCore.drawsOutput`）；
 失败或停下的会话要等它的看板卡片已完成、或同一张卡已由另一个会话接手才自动归档，没人接手的失败留在图上等队长处理。
 自动归档前最后再查一次这个终端的进程树（`pty-work.js`，Mac 用 `ps`，Windows 用 `Get-CimInstance Win32_Process`，一次列表所有终端共用 5 秒）：Claude 的工具起的命令（前台或后台）和它们下面的进程还在跑，就不归档。认法：Bash 工具（Mac 的 zsh、Windows 的 Git Bash）的命令都带 Claude 的 shell-snapshots；Windows 的 PowerShell 工具经 Claude 的启动器跑，形如 `cmd /d /s /c "chcp 65001 & pwsh … -Command …CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT…"`，启动器关掉时是 `pwsh -NonInteractive … -EncodedCommand …`。MCP 服务（Windows 上是 `cmd /c npx …`）、状态栏命令、caffeinate 不算。还没拿到答案时这次先不归档，列不出进程时照屏幕判断；答「忙」的结果留 1 分钟再重查（Windows 每查一次要起 PowerShell，约 1.2–1.7 秒），所以后台命令结束后最多晚 1 分钟归档。
 项目框标题的数字只统计图上还在的会话（不含已归档历史），和队长框一致。
