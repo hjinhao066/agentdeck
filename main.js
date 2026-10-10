@@ -1605,7 +1605,7 @@ app.whenReady().then(async () => {
       try {
         result = await pending.notifyPromise;
         if (pending.todoNotifyResolve) todoErrors?.run('phone-reminder', () => {
-          if (/Bark 已跳过|Bark 发送失败/.test(result)) throw new Error('Bark reminder not delivered.');
+          if (/Bark 已跳过|Bark 发送失败|没有配置手机提醒密钥|送达结果不明/.test(result)) throw new Error('Bark reminder not delivered.');
         });
       }
       catch (err) { error = err.message; }
