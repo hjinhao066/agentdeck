@@ -84,6 +84,13 @@ async function launch(cards = CREW) {
   // These are layout states, not restartable tasks with a saved instruction.
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3, columns,
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks } }));
+  await start();
+  // (a terminal that has not drawn its agent yet is named with the last rows it shows)
+  await expect.poll(() => page.evaluate(() => [...terms].filter(([, t]) => !/Claude Code|OpenAI Codex/.test(t.lastScreen || ''))
+    .map(([id, t]) => `${id}: ${(t.lastScreen || '').trim().split('\n').slice(-4).join(' / ')}`)), { timeout: 150000 }).toEqual([]);
+}
+// AgentDeck on the profile as it stands (launch, or a restart: what the last run saved is what this one reads)
+async function start() {
   const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
   application = await electron.launch({
@@ -95,9 +102,6 @@ async function launch(cards = CREW) {
   // (a busy machine can take well over five seconds to bring the page up)
   await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart), { timeout: 30000 }).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 30000 }).toBe(columnsIn(crew) + 1);
-  // (a terminal that has not drawn its agent yet is named with the last rows it shows)
-  await expect.poll(() => page.evaluate(() => [...terms].filter(([, t]) => !/Claude Code|OpenAI Codex/.test(t.lastScreen || ''))
-    .map(([id, t]) => `${id}: ${(t.lastScreen || '').trim().split('\n').slice(-4).join(' / ')}`)), { timeout: 150000 }).toEqual([]);
 }
 test.afterEach(async () => {
   if (application) await closeElectron(application);
@@ -409,5 +413,64 @@ test('智能一页 is the default and follows the window; a first drag leaves it
   await expect(undo).toBeHidden();
   await fit.click(); await settled();
   await expect(fit).toHaveAttribute('data-state', 'auto');
+  expect(errors).toEqual([]);
+});
+
+// The user, 2026-10-09 17:16: 「我自己可以随意调这个百分比；右边那个智能一页按钮，在我任意调好的百分比下都能保证智能一页。
+// 现在怎么每次按它都跳回 100%？」 Their map that day (agentdeck 17, health 5, 秋招 3, hermes 2) in a 1366x900 window: 2.0.3's
+// 智能一页 put it in two lanes at 100%, too tall for the page, whatever zoom they had set. The zoom they set stays now:
+// 智能一页 arranges the frames' columns and lanes for it, and a restart keeps it. (The checks are soft, so a run on code
+// without this keeps going and leaves every picture: the "before" set.)
+test('智能一页 keeps the zoom the user set (80%, 100%, 125%): arranged for it, the whole map on one page where it can, the most compact where it cannot, and kept after a restart', async () => {
+  test.setTimeout(480000);
+  const USER = { agentdeck: 17, health: 5, 秋招: 3, hermes: 2 };
+  await launch(sessionsOf(USER));
+  await open(1366, 900, 'dark'); await settled();
+  const label = page.locator('[data-cm="reset"]');
+  const hint = () => page.evaluate(() => { const h = document.querySelector('.cm-hint'); return h.hidden ? '' : h.textContent; });
+  const summary = [];
+  const note = async (pct, name) => { const g = await read(); summary.push({ pct, name, label: await label.textContent(), scale: g.view.scale, pageFits: g.pageFits, plan: g.plan, hint: await hint(), saved: await page.evaluate(() => config.crewMap.zoom ?? null) }); return g; };
+  // untouched, as before: no zoom set, 智能一页 picks one (this map does not fit this page at 80% or more: lanes at 100%, scrolled)
+  let g = await note(null, 'auto');
+  expect.soft(g.view.scale, 'no zoom set: 智能一页 picks it (lanes at 100%)').toBeCloseTo(0.7, 5);
+  await shot('user-zoom-auto-1366x900-dark', true);
+  const zoomTo = async (pct) => {
+    await label.click();
+    if (pct === 80) { await page.locator('[data-cm="out"]').click(); await page.locator('[data-cm="out"]').click(); }
+    // (125% is no step of the buttons: a pinch, as a trackpad sends it, ctrl+wheel by exactly that much)
+    if (pct === 125) await page.evaluate(() => { const vp = document.querySelector('.cm-viewport'), r = vp.getBoundingClientRect(); vp.dispatchEvent(new WheelEvent('wheel', { deltaY: -Math.log(1.25) / 0.0022, ctrlKey: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); });
+    await expect(label).toHaveText(`${pct}%`);
+  };
+  for (const pct of [80, 100, 125]) {
+    await zoomTo(pct);
+    await page.locator('[data-cm="fit"]').click(); await settled();
+    g = await note(pct, `${pct}%`);
+    // the zoom stays the user's, on screen and saved
+    await expect.soft(label, `智能一页 at ${pct}%: the zoom stays`).toHaveText(`${pct}%`);
+    expect.soft(g.view.scale, `智能一页 at ${pct}%: shown at ${pct}%`).toBeCloseTo(0.7 * pct / 100, 5);
+    expect.soft(await page.evaluate(() => config.crewMap.zoom), `${pct}%: saved`).toBeCloseTo(0.7 * pct / 100, 5);
+    // never past the window's sides, 队长 on the page
+    for (const f of g.frames) { expect.soft(f.x, `${pct}%: ${f.key} left`).toBeGreaterThanOrEqual(g.vp.x + 8 - 0.5); expect.soft(f.right, `${pct}%: ${f.key} right`).toBeLessThanOrEqual(g.vp.right - 8 + 0.5); }
+    expect.soft(g.cards.find((c) => c.id === 'cap').y, `${pct}%: 队长 on the page`).toBeGreaterThanOrEqual(g.vp.y + 8 - 0.5);
+    // 80%: rearranged, the whole map comes onto this page (2.0.3: two lanes at 100%, scrolled)
+    if (pct === 80) {
+      expect.soft(g.pageFits, '80%: the whole map on one page').toBe(true);
+      for (const c of g.cards) { expect.soft(c.y, `80%: ${c.id} top`).toBeGreaterThanOrEqual(g.vp.y - 0.5); expect.soft(c.bottom, `80%: ${c.id} bottom`).toBeLessThanOrEqual(g.vp.bottom + 0.5); }
+    }
+    // where it cannot be one page at that zoom, it says so in plain words, and the rest is down the page
+    if (!g.pageFits) expect.soft(await hint(), `${pct}%: what the hint says`).toBe(`按你设的 ${pct}% 一页放不下：已排到最紧凑，其余部分向下滚动查看`);
+    await shot(`user-zoom-${pct}-1366x900-dark`, true);
+  }
+  // A restart: the zoom is read back from the saved settings (the file on disk), and the map is arranged for it again
+  await expect.poll(() => { try { return JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).crewMap.zoom ?? null; } catch { return null; } }, { timeout: 15000, message: 'the zoom is in the settings on disk' }).toBeCloseTo(0.875, 5);
+  await closeElectron(application);
+  await start();
+  await open(1366, 900, 'dark'); await settled();
+  g = await note(125, 'after restart');
+  await expect.soft(label, 'after a restart: the zoom the user set').toHaveText('125%');
+  expect.soft(g.view.scale).toBeCloseTo(0.875, 5);
+  for (const f of g.frames) expect.soft(f.right, `after restart: ${f.key} right`).toBeLessThanOrEqual(g.vp.right - 8 + 0.5);
+  await shot('user-zoom-125-1366x900-dark-after-restart', true);
+  fs.writeFileSync(test.info().outputPath('user-zoom.json'), JSON.stringify(summary, null, 2));
   expect(errors).toEqual([]);
 });
