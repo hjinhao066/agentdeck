@@ -66,7 +66,7 @@
   const taskStatuses = [['todo', '待办'], ['doing', '进行中'], ['review', '待验收'], ['needs_user', '等用户'], ['done', '完成']];
   const flagNames = { failed: '失败', blocked: '前置未完成', held: '挂起' };
   const KEYS = { theme: 'agentdeck-hub-theme', machine: 'agentdeck-hub-machine', meta: 'agentdeck-hub-meta', view: 'agentdeck-hub-view' };
-  const TABS = ['overview', 'captain', 'todo', 'sessions', 'board'];
+  const TABS = ['overview', 'attention', 'captain', 'todo', 'sessions', 'board'];
 
   let machines = [], filter = 'all', target = '', view = 'overview', output = null, outputRequest = 0;
   // 版本更新: release-notes.json published with this page (undefined while it loads, null if it could not be read).
