@@ -46,7 +46,7 @@ const detail = '**结论**：验收通过\n\n- 单测 2313 条全过\n- 手机�
 const store = AttentionCore.normalize({ version: 3, items: [{ id: 'at-k1-abcd', kind: 'report', title: '登录页修好了', detail, created: Date.now() - 60_000 }] });
 const host = { ICONS: {}, config: { attention: store }, columns: () => [], archived: () => [], saveConfig() {}, showToast() {} };
 const win = {
-  AttentionCore, HubCore,
+  AttentionCore, HubCore, CopyMark: require('../copy-mark'),
   Pages: { current: () => 'attention', render: () => win.AttentionUI.render(frame, host) },
 };
 const ctx = vm.createContext({ window: win, document, requestAnimationFrame: () => 0, setTimeout, clearTimeout, setInterval: () => 0, console, CSS: { escape: (s) => s } });
