@@ -66,6 +66,13 @@ test('a link that points out of the folder is not followed', { skip: process.pla
   assert.equal(Core.resolveAsset(scope, '/linked/secret.txt', opts).ok, false);
 });
 
+test('a link inside the folder to one of its hidden files is refused like the hidden file', { skip: process.platform === 'win32' }, () => {
+  write(path.join(report, '.private.txt'), 'hidden');
+  fs.symlinkSync(path.join(report, '.private.txt'), path.join(report, 'shown.txt'));
+  assert.equal(Core.resolveAsset(scope, '/.private.txt', opts).ok, false);
+  assert.equal(Core.resolveAsset(scope, '/shown.txt', opts).ok, false);
+});
+
 test('keys, hidden files and formats a page has no use for are refused inside the folder too', () => {
   for (const name of ['/.env', '/credentials.json', '/notes.docx', '/missing.js', '/shots'])
     assert.equal(Core.resolveAsset(scope, name, opts).ok, false, name);

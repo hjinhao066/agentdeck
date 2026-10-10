@@ -28,7 +28,10 @@ const MIME = {
   wasm: 'application/wasm',
 };
 
-const real = (value) => { try { return fs.realpathSync(value); } catch (_) { return ''; } };
+// On Windows the native call: it gives a file's long name, so a short 8.3 name
+// (API_TO~1.TXT for api_token.txt) is judged by the name it stands for.
+const realpath = process.platform === 'win32' ? fs.realpathSync.native : fs.realpathSync;
+const real = (value) => { try { return realpath(value); } catch (_) { return ''; } };
 const fold = (value, platform) => (platform === 'darwin' || platform === 'win32' ? value.toLowerCase() : value);
 const same = (a, b, platform) => fold(a, platform) === fold(b, platform);
 const depth = (child, parent) => path.relative(parent, child).split(path.sep).filter(Boolean).length;
@@ -69,6 +72,8 @@ function resolveAsset(scope, pathname, { platform = process.platform } = {}) {
   if (!entry) {
     if (scope.wide || !inside(target, scope.root, platform) || same(target, scope.root, platform)) return no;
     if (secretPath(target, { home: scope.home, platform })) return no;
+    // the hidden-file rule on the real name too: a link or a short name may stand for one
+    if (path.relative(scope.root, target).split(/[\\/]+/).some((part) => part[0] === '.')) return no;
   }
   const mime = MIME[path.extname(target).slice(1).toLowerCase()];
   if (!mime) return no;
