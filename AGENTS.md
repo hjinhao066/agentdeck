@@ -137,6 +137,8 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   must be back within a minute and each continued crew task within its limit
   (`RestartResume.createRestartWatch`); typed text is no proof of that. Whoever is not back
   is reported once (待我处理, phone, critical Bark via `restart:alarm`), and ticked off later.
+  A crew task closed only by the three-minute 已结束，未提交回执 fallback is unfinished: every
+  start continues it however the app went down (`RestartResume.provisionalStop`).
 - Automatic sends go through `sendWhenReady`/`agentInForeground`: never type
   prose into a column whose foreground process is a shell (unless it is a plain
   shell column a Schedule targets on purpose). Prompts are never truncated; long
