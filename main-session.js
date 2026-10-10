@@ -2697,6 +2697,9 @@
       const claudeRest = entry.state === 'done' && entry.alive && /\bclaude\b/i.test(col?.cmd || '');
       const restWork = claudeRest && host.ptyBackgroundWork ? host.ptyBackgroundWork(col) : null;   // asked once per tick
       const restCommand = restWork === true;
+      // No answer yet (the listing is being refreshed, as the three-minute fallback below also waits for): not
+      // "no command", so this round says nothing; the answer is there on a following tick.
+      const restUnknown = claudeRest && host.ptyBackgroundWork && restWork === undefined;
       const backgroundWait = M.claudeBackgroundTasks(entry.lastScreen, col?.cmd) || restCommand;
       const quietLimit = M.silenceTimeout(col?.cmd, backgroundWait);
       // A turn that is over, the agent resting at its empty input box (state 'done': no spinner, no background
@@ -2706,7 +2709,7 @@
       // (once, after the usual limit, as for any task).
       const restTurn = entry.state === 'done' && task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
       const fallbackArmed = !!(restTurn && restTurn.done && !restTurn.interrupted) && !restCommand;
-      if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' && !fallbackArmed &&
+      if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' && !fallbackArmed && !restUnknown &&
           (task.status === 'working' || task.status === 'queued' && !task.supplement)) {
         const summary = backgroundWait
           ? `在等后台命令，已经 ${Math.floor((Date.now() - quietSince) / 3600_000)} 小时没有输出，请检查会话；未自动中断或重派。`

@@ -37,11 +37,11 @@ function world(cmd = 'claude') {
     .replace('  window.MainSession = {', '  window.__test = { setHost(h) { host = h; } };\n  window.MainSession = {');
   vm.runInContext(source, context);
   window.__test.setHost({ config: { mainSession: s }, terms, columns: () => columns, saveConfig() {},
-    ptyBackgroundWork: () => w.work, isBackstage: () => true, focusedId: () => 'captain', lastTurnTs: () => 1, archiveColumn() {},
+    ptyBackgroundWork: (c) => (w.workFn ? w.workFn(c) : w.work), isBackstage: () => true, focusedId: () => 'captain', lastTurnTs: () => 1, archiveColumn() {},
     columnLabel: (c) => c.id, userComposing: () => false, agentInForeground: async () => true });
   const entry = terms.get(worker.id);
   const w = {
-    s, entry, turns, work: null,   // work: what the process-tree listing says (true / false / null unknown)
+    s, entry, turns, work: null, workFn: null, now: () => now,   // work: what the process-tree listing says (true / false / null unknown)
     task(extra = {}) { const t = { id: 'task-' + s.tasks.length, colId: worker.id, gen: 1, status: 'working', title: 'x', startedAt: now, sentAt: now, ...extra }; s.tasks.push(t); return t; },
     // the terminal draws nothing (only cursor queries) for `ms`
     quiet(ms) { for (let t = 0; t < ms; t += 2000) { now += 2000; if (M.drawsOutput('\x1b[?6n')) entry.lastOutputAt = now; window.MainSession.onTick(worker.id, entry); } },
@@ -167,6 +167,44 @@ test('a command in the process tree under a screen that is not at rest (spinner)
   const w = world(), t = w.task();
   w.entry.state = 'working'; w.entry.lastScreen = THINKING; w.work = true;
   w.quiet(25 * 60_000);
+  assert.equal(w.silent().length, 1);
+  assert.match(w.silent()[0].summary, /20 分钟/);
+});
+
+// renderer.js ptyBackgroundWork: an answer is kept 10 s (60 s when a command runs); once it is stale the refresh
+// round returns undefined (unknown) and the new answer is there on the next ask
+function cachedWork(w, busy) {
+  let known = null;
+  return () => {
+    if (known && w.now() - known.at < (known.busy === true ? 60_000 : 10_000)) return known.busy;
+    known = { at: w.now(), busy };
+    return undefined;
+  };
+}
+
+test('with the real, cached process-tree answer (undefined while it refreshes): a command running under a resting Claude, chat record not matching, is quiet for 90 minutes and reported once at 3 hours', () => {
+  const w = world(), t = w.task();   // no finished turn on record: the fallback is not armed
+  w.entry.lastScreen = IDLE_WITH_HIDDEN_COMMAND;
+  w.workFn = cachedWork(w, true);
+  w.quiet(90 * 60_000);
+  assert.deepEqual(w.silent(), [], 'no 20-minute notice, not even on the round the answer is being refreshed');
+  assert.equal(t.status, 'working');
+  w.quiet(1.4 * 3600_000);
+  assert.deepEqual(w.silent(), []);
+  w.quiet(0.2 * 3600_000);
+  assert.equal(w.silent().length, 1);
+  assert.match(w.silent()[0].summary, /在等后台命令，已经 3 小时没有输出/);
+  w.quiet(2 * 3600_000);
+  assert.equal(w.silent().length, 1, 'only once');
+});
+
+test('the cached answer says no command: the unknown round waits, then the usual 20-minute notice (no record to close it)', () => {
+  const w = world(); w.task();
+  w.entry.lastScreen = IDLE_WITH_HIDDEN_COMMAND;
+  w.workFn = cachedWork(w, false);
+  w.quiet(19 * 60_000);
+  assert.deepEqual(w.silent(), []);
+  w.quiet(60 * 60_000);
   assert.equal(w.silent().length, 1);
   assert.match(w.silent()[0].summary, /20 分钟/);
 });
