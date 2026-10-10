@@ -21,7 +21,8 @@ function readResult(file, runtime, now = Date.now()) {
     r = { ...r, status: 'failed', reason: '安装超过 30 分钟仍未写出核对结果', activeVersion: runtime.version, running: true };
   }
   if (r.status === 'success' && (r.running !== true || r.activeVersion !== r.targetVersion || runtime.version !== r.targetVersion)) {
-    r = { ...r, status: 'failed', reason: '安装结果与现役应用的运行版本不一致', activeVersion: runtime.version };
+    // versionMismatch: the installer verified this success; only the version running now disagrees.
+    r = { ...r, status: 'failed', reason: '安装结果与现役应用的运行版本不一致', activeVersion: runtime.version, versionMismatch: true };
   }
   return { ...r, activeVersion: runtime.version };
 }
@@ -63,6 +64,10 @@ function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
       let ack = {};
       try { ack = JSON.parse(fs.readFileSync(ackFile, 'utf8')); } catch (_) {}
       if (ack.id !== r.id) ack = { id: r.id };
+      // A success whose receipt went out is settled: a version run later by other means is not
+      // this installation failing. (An acknowledgement from before receiptStatus was recorded
+      // reached its success with no alert attempted.)
+      if (ack.receipt && r.versionMismatch && (ack.receiptStatus === 'success' || ack.receiptStatus === undefined && !ack.notificationAttempts)) return;
       // The installer leaves its result in place, so this runs every second for as long as
       // this version runs. Once the receipt is in and no alert can be owed, nothing below
       // would change anything: skip the config.json parse and the acknowledgement rewrite.
@@ -83,7 +88,7 @@ function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
       const message = summary(r);
       if (!ack.receipt) {
         await deliver({ id: 'install-' + r.id + '-' + Date.now(), action: 'main-install-result', callerId: captain.id, installResult: r, result: message });
-        ack.receipt = true; saveAck();
+        ack.receipt = true; ack.receiptStatus = r.status; saveAck();
       }
       // Calendar reads, outbox locks and transport may outlast the legacy 15 s
       // window. Only a definitely exited owner relinquishes a pending attempt.
