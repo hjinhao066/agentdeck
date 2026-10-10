@@ -253,7 +253,10 @@ class FleetClient {
     const contentHash = crypto.createHash('sha256').update(JSON.stringify(turns)).digest('hex');
     const previous = this.historyOutbox.get(sessionId);
     if (previous?.contentHash === contentHash) return;
-    const times = turns.map((turn) => Date.parse(turn.ts || turn.at || '')).filter(Number.isFinite);
+    // A saved chat stamps each turn in milliseconds (`ts`, and `end` once it finished);
+    // Date.parse read those numbers as NaN, so no transcript had its own times.
+    const at = (value) => (typeof value === 'number' ? value : Date.parse(value || ''));
+    const times = turns.flatMap((turn) => [at(turn.ts ?? turn.at), at(turn.end)]).filter(Number.isFinite);
     this.historyOutbox.set(sessionId, {
       opId: 'op-' + crypto.randomUUID(),
       sessionId, contentHash, turns,

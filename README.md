@@ -1392,7 +1392,10 @@ heartbeat, which covers shutdown and sleep. Task cards, their fields, and
 saved captain transcripts are shared; a change is visible on the other side
 within a minute. Edits to different fields of the same card merge. Edits to
 the same field stay as two copies and the card shows 冲突. The sidebar section
-两机 shows online/offline, the last-seen time, and any sync error.
+两机 shows online/offline, the last-seen time, and any sync error, then the 8 most
+recent captain records, each with its own last time (a saved chat's turns carry
+their times in milliseconds; a record the hub has without times gets them when the
+same transcript is sent again).
 
 The service is `node sync-server.js --data <dir> --token-file <path>`. Bind it
 to the WireGuard address when it is deployed; the default listen address is

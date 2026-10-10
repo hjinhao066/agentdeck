@@ -431,7 +431,14 @@ class SharedStore {
     const key = sessionId + '@' + deviceId;
     const existing = this.data.history[key];
     if (existing && existing.contentHash === contentHash) {
-      const saved = this._remember(opId, 200, historyReceipt(existing, true));
+      // Sent again with the times the hub's copy lacks (clients before 2.0.5 sent none
+      // for saved chats): they are filled in; the turns and their hash stay.
+      const times = {};
+      for (const [name, value] of [['startedAt', startedAt], ['endedAt', endedAt]]) {
+        if (!existing[name] && typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value))) times[name] = value;
+      }
+      if (Object.keys(times).length) this.data.history[key] = { ...existing, ...times };
+      const saved = this._remember(opId, 200, historyReceipt(this.data.history[key], true));
       this._save();
       return saved;
     }
