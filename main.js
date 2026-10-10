@@ -92,6 +92,7 @@ function requestMobile(op, input) {
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 // A test instance never opens a main-process dialog (test-instance-guard.js answers each one as cancelled and notes it).
+// Never pass `signal` to dialog.showMessageBox here: the guard takes that option for a page dialog and lets the call open.
 if (tudArg) require('./test-instance-guard').install({ dialog });
 // Test profiles must never write the user's shared board.
 function readLocalConfig() {

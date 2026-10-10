@@ -2,8 +2,13 @@
 // A test instance (`--test-user-data=<dir>`) must never put a dialog in front of the user. main.js installs this right after it
 // recognises that argument, before the app is ready: every main-process dialog call is answered as "cancelled" and noted, and an
 // uncaught exception is noted instead of opening Electron's error box. A page's own alert/confirm/prompt is not touched (see
-// isPageDialog). It loads no outside code and reads no script path from
-// anywhere. Notes go to the file named by E2E_DIALOG_GUARD_LOG, and only when that variable is set.
+// isPageDialog). It loads no outside code and reads no script path from anywhere. Notes go to the file named by
+// E2E_DIALOG_GUARD_LOG, and only when that variable is set. An uncaught exception is also written to stderr as one line, set or not,
+// so a real crash of the main process stays visible in every spec's output. Blocked dialogs are not: answering them is the guard's
+// job and some specs provoke them on purpose; the log file is where a spec reads them.
+//
+// Main-process code must never pass `signal` to dialog.showMessageBox: that is how a page dialog is told apart (isPageDialog), so such
+// a call would be let through and really open in a test instance. tests/test-instance-guard.test.js scans the sources for it.
 const fs = require('fs');
 
 const MESSAGE_BOXES = ['showMessageBox', 'showMessageBoxSync'];
@@ -33,8 +38,15 @@ function isPageDialog(name, args) {
   return name === 'showMessageBox' && !!options && typeof options === 'object' && !!options.signal;
 }
 
+// One stderr line: the message and the first stack frame (no terminal contents, no prompts).
+function describe(error) {
+  const message = error && error.message !== undefined ? String(error.message) : String(error);
+  const frame = error && typeof error.stack === 'string' ? error.stack.split('\n').find((line) => /^\s+at /.test(line)) : '';
+  return '[test-instance-guard] uncaughtException: ' + message.split('\n')[0] + (frame ? ' ' + frame.trim() : '');
+}
+
 // `dialog` and `proc` are the Electron dialog module and the process object of the main process.
-function install({ dialog, proc = process, env = process.env, appendFile = fs.appendFileSync }) {
+function install({ dialog, proc = process, env = process.env, appendFile = fs.appendFileSync, writeStderr = (text) => process.stderr.write(text) }) {
   const note = (line) => {
     const file = env.E2E_DIALOG_GUARD_LOG;
     if (file) { try { appendFile(file, line + '\n'); } catch (_) {} }
@@ -48,8 +60,11 @@ function install({ dialog, proc = process, env = process.env, appendFile = fs.ap
       return cancelled(name, args);
     };
   }
-  proc.on('uncaughtException', (error) => note('uncaughtException ' + (error && error.message)));
+  proc.on('uncaughtException', (error) => {
+    note('uncaughtException ' + (error && error.message));
+    try { writeStderr(describe(error) + '\n'); } catch (_) {}
+  });
   note('guard loaded');
 }
 
-module.exports = { install, cancelled, isPageDialog, NAMES };
+module.exports = { install, cancelled, isPageDialog, describe, NAMES };

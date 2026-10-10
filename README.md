@@ -1466,9 +1466,14 @@ at all, instead of the three default agent columns that start real `agy`/`claude
 a normal run keeps the defaults. `test-instance-columns.spec.js` checks this with a PATH
 trap. A test instance also never opens a main-process dialog: `main.js` loads its own `test-instance-guard.js` as soon
 as it sees `--test-user-data=`, which answers every `dialog.*` call as cancelled and, when `E2E_DIALOG_GUARD_LOG` names a
-file, notes it there (and notes uncaught exceptions instead of showing Electron's error box). It needs no `-r` flag or
+file, notes it there (and notes uncaught exceptions instead of showing Electron's error box; an uncaught exception also goes
+to stderr as one line with its message and first stack frame, log file or not, so a crash of the main process is not
+silent). It needs no `-r` flag or
 environment variable, so source and packaged runs are both covered, and it loads no outside code. The spec asserts its
-`guard loaded` line in both. The same spec
+`guard loaded` line in both. A page's own `alert`/`confirm`/`prompt` is not blocked: Electron raises it as an asynchronous
+`dialog.showMessageBox` whose options carry an `AbortSignal`, and the guard lets exactly that call through so Playwright can
+take it over. So main-process code must never pass `signal` to `dialog.showMessageBox`, or in a test instance it would be
+taken for a page dialog and really open; `tests/test-instance-guard.test.js` scans the top-level sources for it. The same spec
 types `claude` into a manual terminal to prove the trap catches a real agent name, and checks that
 "恢复默认布局" also leaves no columns. `task-board.spec.js` archives every terminal a test opened when
 that test ends, so a full run keeps about three PowerShells open instead of one per worker.
