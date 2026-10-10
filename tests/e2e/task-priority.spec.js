@@ -346,9 +346,11 @@ test('sidebar and architecture map: marked sessions and waiting work, their orde
   }
   for (const id of ['w-norm', 'w-plain', 'wait:k-wait-n']) await expect(node(id).locator('.cm-prio')).toHaveCount(0);
   await expect(page.locator('#crewMap .cm-prio')).toHaveCount(4);
-  // a marked card is exactly as tall as an ordinary one and keeps its status light
+  // a marked card is exactly as tall as an ordinary one and keeps its status light ((3.1) the two may stand on different
+  // rows, 高优 first in its frame: on the scaled map their heights then differ by a float's last digits, nothing more)
   const sizes = await page.evaluate(() => ['w-hi', 'w-norm'].map((id) => { const n = document.querySelector(`#crewMap .cm-node[data-node-id="${id}"]`); return [n.getBoundingClientRect().height, getComputedStyle(n).boxShadow]; }));
-  expect(sizes[0]).toEqual(sizes[1]);
+  expect(sizes[0][0]).toBeCloseTo(sizes[1][0], 2);
+  expect(sizes[0][1]).toBe(sizes[1][1]);
   await page.evaluate(() => document.querySelector('#crewMap .cm-fit, #crewMap [data-act="fit"]')?.click());
   await keep(page, 'map-dark');
   await page.evaluate(() => applyTheme('light'));
