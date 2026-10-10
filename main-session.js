@@ -2694,9 +2694,13 @@
       const backgroundWait = M.claudeBackgroundTasks(entry.lastScreen, col?.cmd);
       const quietLimit = M.silenceTimeout(col?.cmd, backgroundWait);
       // A turn that is over, the agent resting at its empty input box (state 'done': no spinner, no background
-      // work), waits for 队长 or the user. Nothing is being worked on, so nothing is stuck: that is no silence.
-      // If it handed in nothing, the three-minute 已结束，未提交回执 below tells 队长 once.
-      if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' && entry.state !== 'done' &&
+      // work), waits for 队长 or the user: nothing is stuck, so that is no silence. The three-minute
+      // 已结束，未提交回执 below speaks for it once, but only when the chat record shows the turn finished
+      // and not interrupted. Without that the fallback never arms, so the ordinary notice stays as the backstop
+      // (once, after the usual limit, as for any task).
+      const restTurn = entry.state === 'done' && task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
+      const fallbackArmed = !!(restTurn && restTurn.done && !restTurn.interrupted);
+      if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' && !fallbackArmed &&
           (task.status === 'working' || task.status === 'queued' && !task.supplement)) {
         const summary = backgroundWait
           ? `在等后台命令，已经 ${Math.floor((Date.now() - quietSince) / 3600_000)} 小时没有输出，请检查会话；未自动中断或重派。`

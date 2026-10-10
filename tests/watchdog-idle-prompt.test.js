@@ -43,19 +43,21 @@ function world(cmd = 'claude') {
     // the terminal draws nothing (only cursor queries) for `ms`
     quiet(ms) { for (let t = 0; t < ms; t += 2000) { now += 2000; if (M.drawsOutput('\x1b[?6n')) entry.lastOutputAt = now; window.MainSession.onTick(worker.id, entry); } },
     silent: () => s.pending.filter((p) => p.anomaly === 'no_output'),
+    // the chat record shows this task's turn as over: the three-minute 已结束，未提交回执 fallback can speak for it
+    finishTurn(t) { t.turnId = 'turn-' + t.id; turns.push({ id: t.turnId, done: true }); return t; },
   };
 }
 
 test('waiting at the input box for 队长: no 「没有输出」 report, however long', () => {
-  const w = world(), t = w.task();
+  const w = world(), t = w.finishTurn(w.task());
   w.quiet(90 * 60_000);
   assert.deepEqual(w.silent().map((p) => p.summary), []);
-  assert.equal(t.status, 'working');
+  assert.equal(t.status, 'stopped', 'the fallback closed it, once');
 });
 
 test('waiting at the input box, with every agent that rests at a prompt', () => {
   for (const cmd of ['claude', 'codex', 'agy', 'cursor-agent']) {
-    const w = world(cmd); w.task();
+    const w = world(cmd); w.finishTurn(w.task());
     w.quiet(60 * 60_000);
     assert.deepEqual(w.silent(), [], cmd);
   }
@@ -80,6 +82,25 @@ test('at the input box, turn over, no receipt and no question: told once (已结
   assert.equal(t.status, 'stopped');
 });
 
+test('at the input box, but the fallback cannot speak (no finished turn on record): reported once after 20 minutes, never again', () => {
+  const w = world(), t = w.task();
+  w.quiet(19 * 60_000);
+  assert.deepEqual(w.silent(), [], 'not before 20 minutes');
+  w.quiet(2 * 60_000);
+  assert.equal(w.silent().length, 1);
+  assert.match(w.silent()[0].summary, /20 分钟/);
+  w.quiet(3 * 3600_000);
+  assert.equal(w.silent().length, 1, 'not repeated');
+  assert.equal(t.status, 'working');
+});
+
+test('at the input box with a turn the captain interrupted: the fallback stays out, so it is reported once after 20 minutes', () => {
+  const w = world(), t = w.task({ turnId: 'turn-i' });
+  w.turns.push({ id: 'turn-i', done: true, interrupted: true });
+  w.quiet(90 * 60_000);
+  assert.equal(w.silent().length, 1);
+});
+
 test('really working (spinner on screen) but drawing nothing for 25 minutes: still reported', () => {
   const w = world(), t = w.task();
   w.entry.state = 'working'; w.entry.lastScreen = THINKING;
@@ -101,7 +122,7 @@ test('waiting on a background command: quiet for 25 minutes, reported after 3 ho
 });
 
 test('a Claude that goes back to work after resting is watched again from its new output', () => {
-  const w = world(); w.task();
+  const w = world(); w.finishTurn(w.task());
   w.quiet(60 * 60_000);
   w.entry.state = 'working'; w.entry.lastScreen = THINKING;
   w.entry.lastOutputAt = 10_000_000 + 60 * 60_000;
