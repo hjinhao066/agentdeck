@@ -268,8 +268,15 @@ iOS 内嵌 PDF 只显示第一页，所以不用 iframe）、图片、纯文本�
   和 Windows 会自动去掉的结尾点或空格（`.env.`）一律拒绝；`a.md:12` 在 Windows 上永远是 `a.md` 的第 12 行。
 - 密钥类一律拒绝，点名也不行：`.ssh`、`.gnupg`、`.aws`、`secrets`、`.secrets`、`credentials` 等目录，`.agents-vault-pass`、`.env*`、`auth.json`、
   `id_rsa*`、`id_ed25519*`、`*.pem/*.key/*.p12/*.pfx` 等，文件名里任何位置带 token、secret、credential 的非文档文件（`token.json`、`my_token.txt`；交付文档 `.md/.markdown/.html/.pdf` 和图片除外，
-  所以 `token-usage.md` 能看，但它仍受上面的精确规则和目录黑名单约束），名字以 token/secret/auth/password 等结尾的文件（`bot-token.md` 也拒），
-  `.claude*`、`.codex`、`.gemini`、`.config` 等目录里除文档和图片外的文件，`~/.config/agentdeck-remote`、AgentDeck 自己的数据目录，以及 shell 配置和历史。
+  所以 `token-usage.md` 能看，但它仍受上面的精确规则和目录黑名单约束），名字以 token/secret/auth/password/key 等结尾的文件（`bot-token.md`、`key.txt`、
+  `openai_key.txt` 也拒，`keyboard.md` 不拒），`service-account*.json`、`*.tfstate*`，
+  任何位置的 `.npmrc`、`.netrc`、`.pypirc`、`.pgpass`、`.my.cnf`、`.boto`、`.s3cfg`、`.envrc`、`.dockercfg`、`.git-credentials`、`.gitconfig`、shell 配置和历史，
+  任何位置的 `.claude*`、`.codex`、`.gemini`、`.cursor`、`.config` 等目录里除文档和图片外的文件，`~/.config/agentdeck-remote`、AgentDeck 自己的数据目录。
+- 浏览器登录态：某一层父目录里有 `Local State` 文件的（Chromium 用户数据目录：Chrome、Edge、自动化用的 profile），整个目录和里面的一切都拒绝，
+  上一层文件夹列表里也不显示这个目录；`Local State`、`Preferences`、`Secure Preferences`、`Login Data*`、`Web Data*`、`History`、`logins.json`、
+  `key3/4.db`、`cookies.sqlite` 放在别处也按名字拒绝，`Local Storage`、`Session Storage`、`IndexedDB` 目录一律拒绝。
+- 手机端不发有多个名字的文件（硬链接）：realpath 不展开硬链接，换个名字就看不出它是什么。
+- 设置里的文件夹不带 `*` 的（如 Playground），点名它本身只列出目录，不连带里面的文件；点名要在它下面至少一层。带 `*` 的（某个项目的 reports）点名本身就连带。
 - 桌面右侧预览栏走同一套拒绝规则（`localRefusal`）：密钥类文件和上面那些 Windows 路径不显示；位置不限，因为是本机用户自己点的。用编辑器打开不受影响。
 - 未点名的路径不管存不存在都答「不在范围内」，不泄露是否存在。
 - 回答只有 JSON（入口代理只放行 JSON），路径放在 POST 正文里，不进网址和日志。

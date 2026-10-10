@@ -1026,7 +1026,7 @@ app.whenReady().then(async () => {
   try { power.set({ mode: JSON.parse(fs.readFileSync(configPath, 'utf8')).batteryMode }); } catch (_) {}
   sidePane = registerSideIpc({
     onMain, handleMain, send, session, WebContentsView,
-    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR, home: HOME,
+    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR, home: HOME, own: app.getPath('userData'),
     onChatSaved: (id, chat) => {
       if (!fleetClient || typeof fleetClient.noteCaptain !== 'function') return;
       let captain = false;
@@ -1123,7 +1123,8 @@ app.whenReady().then(async () => {
     uploadDir: path.join(app.getPath('userData'), 'mobile-uploads'),
     // Files the phone may preview: what the conversation named, plus the report folders; this app's own data never.
     // A test profile's report folder is inside the profile, and it gets no default folders beyond home (D:\aiproject on Windows).
-    preview: tudArg ? { home: HOME, roots: [path.join(app.getPath('userData'), 'reports')] } : { home: HOME, denied: [app.getPath('userData')], defaultExtra: FilePreview.defaultExtraRoots() },
+    preview: tudArg ? { home: HOME, own: app.getPath('userData'), roots: [path.join(app.getPath('userData'), 'reports')] }
+      : { home: HOME, own: app.getPath('userData'), denied: [app.getPath('userData')], defaultExtra: FilePreview.defaultExtraRoots() },
     getBoardVersion: () => boardVersionOf(taskStore.dir),
     machine: { platform: process.platform, hostname: os.hostname(), appVersion: app.getVersion() },
     saveSettings: (settings) => {

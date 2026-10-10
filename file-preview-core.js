@@ -23,23 +23,31 @@ const DEFAULT_ROOTS = ['reports', path.join('.agents', 'boards')];
 const EXTRA_ROOTS = { win32: ['D:\\aiproject\\Playground', 'D:\\aiproject\\*\\reports'] };
 const MAX_EXTRA_ROOTS = 20;
 
-// A folder with one of these names holds keys, wherever it is.
+// A folder with one of these names holds keys, wherever it is. The last three are a browser profile's storage.
 const SECRET_DIRS = new Set(['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.password-store', 'secrets', '.secrets', 'keychains',
-  'agentdeck-remote', '.git', 'gcloud', '.1password', 'credentials', '.credentials']);
-// Files in the home folder itself that carry tokens or shell exports.
-const SECRET_HOME_FILES = new Set(['.netrc', '.npmrc', '.pypirc', '.git-credentials', '.claude.json', '.zshrc', '.zshenv', '.zprofile', '.bashrc', '.bash_profile', '.profile',
-  '.zsh_history', '.bash_history', '.agents-vault-pass', '.gitconfig', '.boto', '.s3cfg', '.pgpass', '.my.cnf']);
+  'agentdeck-remote', '.git', 'gcloud', '.1password', 'credentials', '.credentials', 'local storage', 'session storage', 'indexeddb']);
+// Files that carry tokens or shell exports, wherever they are: a project folder on D: has them too.
+const SECRET_FILES = new Set(['.netrc', '.npmrc', '.pypirc', '.git-credentials', '.claude.json', '.zshrc', '.zshenv', '.zprofile', '.bashrc', '.bash_profile', '.profile',
+  '.zsh_history', '.bash_history', '.agents-vault-pass', '.gitconfig', '.boto', '.s3cfg', '.pgpass', '.my.cnf', '.envrc', '.dockercfg']);
+// Sign-in state of the agent CLIs (and ~/.config): a folder named so holds nothing but documents and pictures for the phone, wherever it is.
+const CLI_DIR = /^\.(?:claude|codex|gemini|cursor|grok|openai|anthropic|config)(?:[-_.].*)?$/;
+const CLI_READABLE = /\.(?:md|markdown|txt|png|jpe?g|gif|webp|pdf)$/;
+// A Chromium user-data folder (Chrome, Edge, an automation profile) is marked by this file; everything in it is sign-in state.
+const BROWSER_MARK = 'Local State';
 // Formats with nothing to show as text or picture: the page names the file and its size.
 const BINARY_EXT = /\.(?:zip|gz|tgz|bz2|xz|7z|rar|tar|dmg|pkg|iso|exe|dll|so|dylib|bin|app|asar|node|class|jar|o|a|wasm|sqlite|db|docx?|xlsx?|pptx?|pages|numbers|keynote|mp[34]|m4[av]|mov|avi|mkv|wav|flac|ogg|webm|heic|tiff?|psd|ttf|otf|woff2?)$/i;
 const SECRET_EXT = /\.(?:pem|key|p12|pfx|jks|keystore|kdbx|ovpn|asc|gpg|ppk|mobileprovision|cer|crt|der)$/;
-// credentials.json, .credentials.json, auth.json, bot-token.txt, oauth_creds.json, api_key.txt …
-const SECRET_STEM = /(?:^|[._-])(?:secrets?|credentials?|creds|passwords?|passwd|tokens?|api[_-]?keys?|private[_-]?keys?|auth|cookies?|vault[_-]?pass)$/;
+// credentials.json, .credentials.json, auth.json, bot-token.txt, oauth_creds.json, api_key.txt, key.txt, openai_key.txt …
+// (keyboard.md and monkey.txt are not: the word has to stand alone at the end of the name.)
+const SECRET_STEM = /(?:^|[._-])(?:secrets?|credentials?|creds|passwords?|passwd|tokens?|api[_-]?keys?|private[_-]?keys?|keys?|auth|cookies?|vault[_-]?pass)$/;
 // A file whose name holds one of these words anywhere is refused too (token.json, my_token.txt), unless it is
 // a delivered document: a report, page, PDF or picture (token-usage.md). Those still answer to the exact names,
 // extensions and stems above and to SECRET_DIRS. Folders are judged by SECRET_DIRS only.
 const SECRET_WORD = /token|secret|credential/;
 const DOCUMENT_EXT = /\.(?:md|markdown|html?|pdf|png|jpe?g|gif|webp|bmp|ico|svg|avif)$/;
-const SECRET_NAME = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519).*|known_hosts|authorized_keys|\.htpasswd|login\.keychain(?:-db)?|vps-access\.json|.*vault-pass.*)$/;
+// Exact names, any case: cloud service accounts, Terraform state (it holds every secret it created), and a
+// browser profile's sign-in files in case one sits outside its user-data folder (Chromium's and Firefox's).
+const SECRET_NAME = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519).*|known_hosts|authorized_keys|\.htpasswd|login\.keychain(?:-db)?|vps-access\.json|.*vault-pass.*|service[-_]?account.*\.json|.*\.tfstate(?:\..*)?|local state|(?:secure )?preferences|login data.*|web data.*|history(?:-journal)?|network persistent state|logins\.json|key[34]\.db|cookies\.sqlite.*)$/;
 
 const insensitive = (platform) => platform === 'darwin' || platform === 'win32';
 const fold = (value, platform) => insensitive(platform) ? value.toLowerCase() : value;
@@ -55,20 +63,31 @@ function secretPath(real, { home, denied = [], platform = process.platform, lib 
   const parts = lower.split(/[\\/]+/).filter(Boolean);
   const name = parts[parts.length - 1] || '';
   if (parts.slice(0, -1).some((part) => SECRET_DIRS.has(part)) || SECRET_DIRS.has(name)) return true;
-  if (SECRET_NAME.test(name) || SECRET_EXT.test(name)) return true;
+  if (SECRET_NAME.test(name) || SECRET_EXT.test(name) || SECRET_FILES.has(name)) return true;
   if (!dir && SECRET_WORD.test(name) && !DOCUMENT_EXT.test(name)) return true;
   const stem = name.replace(/\.[a-z0-9]{1,8}$/, '');
   if (SECRET_STEM.test(stem) || SECRET_STEM.test(name)) return true;
+  // Inside an agent CLI's folder, wherever it is: only what reads as a document.
+  if (parts.slice(0, -1).some((part) => CLI_DIR.test(part)) && !CLI_READABLE.test(name)) return true;
   if (denied.some((dir) => dir && inside(real, dir, platform, lib))) return true;
   if (home) {
-    const rel = lib.relative(fold(home, platform), fold(real, platform)).toLowerCase();
-    if (SECRET_HOME_FILES.has(rel)) return true;
-    const top = rel.split(/[\\/]+/);
-    // Sign-in state of the agent CLIs: everything in their folders except what reads as a document.
-    if (/^\.(?:claude|codex|gemini|cursor|grok|openai|anthropic|config)(?:[-_.].*)?$/.test(top[0]) && top.length > 1 && !/\.(?:md|markdown|txt|png|jpe?g|gif|webp|pdf)$/.test(name)) return true;
+    const top = lib.relative(fold(home, platform), fold(real, platform)).toLowerCase().split(/[\\/]+/);
     if (top[0] === 'library' && ['keychains', 'cookies', 'accounts', 'mail', 'messages', 'safari'].includes(top[1])) return true;
   }
   return false;
+}
+
+// Is this real path a Chromium user-data folder, or inside one? Such a folder has a "Local State" file
+// (it holds the key that unlocks the profile's cookies); everything below it is sign-in state.
+// `own`: AgentDeck's own data folder, which Electron marks the same way. The desktop shows its uploads and
+// reports; its cookies and storage are refused by name, and the phone refuses the whole folder (`denied`).
+function inBrowserProfile(real, dir = false, own = '') {
+  const ownReal = own ? (() => { try { return fsSync.realpathSync.native(own); } catch (_) { return own; } })() : '';
+  for (let at = dir ? real : path.dirname(real); ; at = path.dirname(at)) {
+    const mine = ownReal && fold(at, process.platform) === fold(ownReal, process.platform);
+    try { if (!mine && fsSync.statSync(path.join(at, BROWSER_MARK)).isFile()) return true; } catch (_) {}
+    if (path.dirname(at) === at) return false;
+  }
 }
 
 // "~/reports/a.md:12" → an absolute path with `..` folded away, or '' when it is not one.
@@ -126,10 +145,13 @@ async function realExtra(patterns, real) {
   }
   return out;
 }
-function inExtra(value, extra, platform) {
+// `below`: a named folder has to be below a Settings folder without a `*` (naming D:\aiproject\Playground itself
+// does not open all of it); a `*` folder is already one project's own (naming its reports folder does).
+function inExtra(value, extra, platform, { below = false } = {}) {
   return extra.some(({ base, rest }) => {
     if (!inside(value, base, platform)) return false;
     const rel = path.relative(base, value).split(/[\\/]+/).filter(Boolean);
+    if (below && !rest.length && !rel.length) return false;
     return rel.length >= rest.length && rest.every((seg, i) => seg === '*' || fold(seg, platform) === fold(rel[i], platform));
   });
 }
@@ -138,7 +160,7 @@ function inExtra(value, extra, platform) {
 // folder, but the refusals are the phone's: no network, device or stream path, and no key or
 // credential file, judged on the real path (links, junctions and 8.3 short names resolved).
 // Returns '' when the file may be shown, otherwise 'path', 'secret' or 'missing'.
-function localRefusal(target, { home = os.homedir(), platform = process.platform } = {}) {
+function localRefusal(target, { home = os.homedir(), platform = process.platform, own = '' } = {}) {
   if (typeof target !== 'string' || !path.isAbsolute(target) || !plainPath(target, platform)) return 'path';
   let real, stat;
   try { real = fsSync.realpathSync.native(target); stat = fsSync.statSync(real); } catch (_) { return 'missing'; }
@@ -146,7 +168,7 @@ function localRefusal(target, { home = os.homedir(), platform = process.platform
   let realHome = home;
   try { realHome = fsSync.realpathSync.native(home); } catch (_) {}
   const dir = stat.isDirectory();
-  return secretPath(real, { home: realHome, platform, dir }) || secretPath(target, { home, platform, dir }) ? 'secret' : '';
+  return secretPath(real, { home: realHome, platform, dir }) || secretPath(target, { home, platform, dir }) || inBrowserProfile(real, dir, own) ? 'secret' : '';
 }
 
 // The paths the texts name, as the page's own link finder reads them: only what
@@ -171,7 +193,7 @@ const refuse = (code) => ({ ok: false, code });
 // Returns { ok: true, kind, … } or { ok: false, code: 'invalid' | 'denied' | 'missing' }.
 // A path outside what may be read answers 'denied' whether or not it exists.
 // `extra`: the Settings folders (see EXTRA_ROOTS) where a named file may be read too.
-async function readPreview(raw, { home = os.homedir(), roots, denied = [], extra = [], texts = [], offset = 0, platform = process.platform, tmp = os.tmpdir() } = {}) {
+async function readPreview(raw, { home = os.homedir(), roots, denied = [], extra = [], own = '', texts = [], offset = 0, platform = process.platform, tmp = os.tmpdir() } = {}) {
   let line = (/:(\d+)(?::\d+)?$/.exec(String(raw || '')) || [])[1];
   let lexical = absolutePath(raw, { home });
   if (!lexical) return refuse('invalid');
@@ -210,36 +232,40 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], extra
   // or inside one of the Settings folders.
   const depth = (entry, base) => inside(entry, base, platform) ? path.relative(base, entry).split(path.sep).filter(Boolean).length : 0;
   const underNamed = (value) => [...mentioned].some((entry) => inside(value, entry, platform) && !same(value, entry)
-    && (depth(entry, home) >= 2 || depth(entry, realHome) >= 2 || temps.some((dir) => depth(entry, dir) >= 1) || inExtra(entry, extras, platform)));
+    && (depth(entry, home) >= 2 || depth(entry, realHome) >= 2 || temps.some((dir) => depth(entry, dir) >= 1) || inExtra(entry, extras, platform, { below: true })));
   const inRoots = (value) => realRoots.some((dir) => inside(value, dir, platform));
   const secret = (value, dir = false) => secretPath(value, { home: realHome, denied: realDenied, platform, dir });
   const byName = named(lexical) || underNamed(lexical);
   const realNamed = (value) => realMentioned.some((entry) => same(entry, value));
   const realUnder = (value) => realMentioned.some((entry) => inside(value, entry, platform) && !same(value, entry)
-    && (depth(entry, realHome) >= 2 || temps.some((dir) => depth(entry, dir) >= 1) || inExtra(entry, extras, platform)));
+    && (depth(entry, realHome) >= 2 || temps.some((dir) => depth(entry, dir) >= 1) || inExtra(entry, extras, platform, { below: true })));
   if (!target) {
     // Say "gone" only for a path that could have been read; anything else is simply refused.
     // Where it would be: the nearest folder that exists, resolved, plus the rest of the name.
     let known = path.dirname(lexical), rest = [path.basename(lexical)], at = '';
     while (!(at = await real(known)) && path.dirname(known) !== known) { rest.unshift(path.basename(known)); known = path.dirname(known); }
     const would = at ? path.join(at, ...rest) : lexical;
-    return refuse(!secret(would) && !secret(lexical) && (inRoots(would) || byName) ? 'missing' : 'denied');
+    return refuse(!secret(would) && !secret(lexical) && !inBrowserProfile(would, false, own) && (inRoots(would) || byName) ? 'missing' : 'denied');
   }
   let stat = null;
   try { stat = await fs.stat(target); } catch (_) {}
   const isDir = !!stat && stat.isDirectory();
-  if (secret(target, isDir) || secret(lexical, isDir)) return refuse('denied');
+  if (secret(target, isDir) || secret(lexical, isDir) || inBrowserProfile(target, isDir, own)) return refuse('denied');
   // Decided on the real path only. A named one may be anywhere in the home or temp folder or a Settings
   // folder, never a system file.
   const reachable = inside(target, realHome, platform) || temps.some((dir) => inside(target, dir, platform)) || inExtra(target, extras, platform);
   if (!(inRoots(target) || ((realNamed(target) || realUnder(target)) && reachable))) return refuse('denied');
   if (!stat) return refuse('missing');
+  // A second name for a file (a hard link) is not resolved by realpath: the name it is reached by says nothing
+  // about what it holds, so a file with more than one name is not sent to the phone.
+  if (stat.isFile() && stat.nlink > 1) return refuse('denied');
   const name = path.basename(lexical);
   const base = { ok: true, name, size: stat.size, mtime: Math.round(stat.mtimeMs), line: line ? Number(line) : 0 };
   if (stat.isDirectory()) {
     let entries = [];
     try { entries = await fs.readdir(target, { withFileTypes: true }); } catch (_) { return refuse('denied'); }
-    const list = entries.filter((entry) => (entry.isDirectory() || entry.isFile()) && !entry.name.startsWith('.') && !secret(path.join(target, entry.name), entry.isDirectory()))
+    const list = entries.filter((entry) => (entry.isDirectory() || entry.isFile()) && !entry.name.startsWith('.') && !secret(path.join(target, entry.name), entry.isDirectory())
+      && !(entry.isDirectory() && inBrowserProfile(path.join(target, entry.name), true, own)))
       .map((entry) => ({ name: entry.name, dir: entry.isDirectory() }))
       .sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }));
     return { ...base, kind: 'dir', size: 0, entries: list.slice(0, LIMITS.entries), more: Math.max(0, list.length - LIMITS.entries) };
@@ -270,4 +296,4 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], extra
   } finally { await handle.close(); }
 }
 
-module.exports = { readPreview, localRefusal, secretPath, plainPath, cleanRoots, defaultExtraRoots, absolutePath, mentionedPaths, inside, LIMITS, DEFAULT_ROOTS };
+module.exports = { readPreview, localRefusal, secretPath, inBrowserProfile, plainPath, cleanRoots, defaultExtraRoots, absolutePath, mentionedPaths, inside, LIMITS, DEFAULT_ROOTS };

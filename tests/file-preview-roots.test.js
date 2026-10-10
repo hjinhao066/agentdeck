@@ -83,7 +83,12 @@ test('a named file is read from the Settings folders, and only there', async (t)
   assert.deepEqual(await s.read(s.at('aiproject/Playground/notes.txt'), { texts: s.named(report) }), { ok: false, code: 'denied' });
   // a named folder inside a Settings folder covers its files; the project folder above does not
   assert.equal((await s.read(deep, { texts: [`都在 ${s.at('aiproject/projectAlpha/reports')}\\ 里`] })).text, '深一层的报告');
-  assert.equal((await s.read(s.at('aiproject/Playground/notes.txt'), { texts: [`见 ${s.at('aiproject/Playground')}/`] })).text, '游乐场笔记');
+  // naming Playground itself does not open all of it: a named folder has to be below it; a project's reports folder is its own
+  assert.deepEqual(await s.read(s.at('aiproject/Playground/notes.txt'), { texts: [`见 ${s.at('aiproject/Playground')}/`] }), { ok: false, code: 'denied' });
+  assert.equal((await s.read(s.at('aiproject/Playground/demo/report.md'), { texts: [`见 ${s.at('aiproject/Playground/demo')}/`] })).text, '游乐场报告');
+  assert.equal((await s.read(s.at('aiproject/Playground/notes.txt'), { texts: s.named(s.at('aiproject/Playground/notes.txt')) })).text, '游乐场笔记');
+  // the named Playground folder itself still lists
+  assert.equal((await s.read(s.at('aiproject/Playground'), { texts: s.named(s.at('aiproject/Playground')) })).kind, 'dir');
   for (const folder of [s.at('aiproject'), s.at('aiproject/projectAlpha')]) assert.deepEqual(await s.read(deep, { texts: [`都在 ${folder}/ 里`] }), { ok: false, code: 'denied' }, folder);
   // outside the two kinds: the project's other folders, the level above, any other folder
   for (const file of [s.at('aiproject/projectAlpha/notes.md'), s.at('aiproject/projectAlpha/src/code.md'), s.at('aiproject/top.md'), s.at('outside/private.md'),
@@ -277,6 +282,120 @@ test('mixed slashes are the same path, for files, Settings folders and key files
   assert.deepEqual(await s.read(env, { texts: s.named(env) }), { ok: false, code: 'denied' });
   const ssh = s.put('aiproject/projectAlpha/reports/.ssh/a.md', 'SECRET').replace(/\\reports\\/, '/reports/');
   assert.deepEqual(await s.read(ssh, { texts: s.named(ssh) }), { ok: false, code: 'denied' });
+});
+
+// ---- review round: keys and sign-in state that a D: project folder holds -------------------
+// Each file is named in the conversation, so only the key rules can stop it.
+async function refusedEverywhere(s, files) {
+  for (const file of files) {
+    assert.deepEqual(await s.read(file, { texts: s.named(file) }), { ok: false, code: 'denied' }, file);
+    assert.equal(localRefusal(file, { home: s.at('home') }), 'secret', file);
+  }
+}
+async function readable(s, files) {
+  for (const file of files) {
+    const read = await s.read(file, { texts: s.named(file) });
+    assert.equal(read.ok, true, file);
+    assert.equal(localRefusal(file, { home: s.at('home') }), '', file);
+  }
+}
+
+test('credential dotfiles are refused in any folder, not only in the home folder', async (t) => {
+  const s = setup(t);
+  const at = (name) => s.put('aiproject/Playground/proj/' + name, 'SECRET');
+  await refusedEverywhere(s, ['.npmrc', '.netrc', '.pypirc', '.pgpass', '.my.cnf', '.boto', '.s3cfg', '.envrc', '.dockercfg', '.git-credentials', '.gitconfig', '.bashrc',
+    '.zsh_history', '.claude.json', '.NPMRC', 'sub/deeper/.envrc'].map(at));
+  await refusedEverywhere(s, ['.npmrc', '.envrc'].map((name) => s.put('aiproject/projectAlpha/reports/' + name, 'SECRET')));
+  // documents about them are not them
+  await readable(s, ['npmrc-guide.md', 'netrc.md', 'envrc-notes.txt', 'my.cnf.md'].map((name) => s.put('aiproject/Playground/proj/' + name, '说明')));
+});
+
+test('an agent CLI folder holds only documents and pictures for a preview, wherever it is', async (t) => {
+  const s = setup(t);
+  const at = (rel, data = 'SECRET') => s.put('aiproject/Playground/proj/' + rel, data);
+  await refusedEverywhere(s, [at('.config/gh/hosts.yml'), at('.claude/settings.local.json'), at('.claude/settings.json'), at('.codex/config.toml'), at('.gemini/oauth_creds.json'),
+    at('.claude-us2/.credentials.json'), at('.cursor/mcp.json'), at('tool-cache/.config/x-profiles/state.json'), s.put('aiproject/projectAlpha/reports/.config/app/config.ini', 'S')]);
+  // the folder named on its own still shows; what reads as a document inside opens
+  await readable(s, [at('.claude/CLAUDE.md', '# 说明'), at('.config/notes/readme.txt', '说明'), at('.codex/shot.png', 'png')]);
+  // and outside such a folder the same kinds of file are ordinary
+  await readable(s, [at('settings.json', '{}'), at('config.toml', 'a = 1'), at('hosts.yml', 'a: 1')]);
+});
+
+test('a Chromium user-data folder (it has a "Local State" file) is closed, all of it; its sign-in files are refused by name too', async (t) => {
+  const s = setup(t);
+  // four automation profiles, as in the real Playground
+  const profiles = ['aiproject/Playground/chrome-debug-profile', 'aiproject/Playground/tool-cache/.config/google-chrome-for-testing',
+    'aiproject/Playground/tool-cache/.config/x-profiles/china-google', 'aiproject/Playground/ig-school-story-radar/data/debug-chrome-profile'];
+  const files = [];
+  for (const profile of profiles) {
+    files.push(s.put(profile + '/Local State', '{"os_crypt":{"encrypted_key":"x"}}'));
+    for (const rel of ['Preferences', 'Default/Preferences', 'Default/Secure Preferences', 'Default/Login Data', 'Default/Web Data', 'Default/History', 'Default/Cookies',
+      'Default/Local Storage/leveldb/000003.log', 'Default/Sessions/Session_1', 'Default/Network/Cookies', 'Default/notes.md', 'Default/readme.txt', 'report.md'])
+      files.push(s.put(`${profile}/${rel}`, 'PROFILE'));
+  }
+  await refusedEverywhere(s, files);
+  // the folders themselves, named, and everything below a named Playground project
+  for (const profile of profiles) for (const dir of [profile, profile + '/Default', profile + '/Default/Local Storage']) {
+    assert.deepEqual(await s.read(s.at(dir), { texts: s.named(s.at(dir)) }), { ok: false, code: 'denied' }, dir);
+    assert.equal(localRefusal(s.at(dir), { home: s.at('home') }), 'secret', dir);
+  }
+  const deep = s.at('aiproject/Playground/ig-school-story-radar/data/debug-chrome-profile/Default/notes.md');
+  assert.deepEqual(await s.read(deep, { texts: [`见 ${s.at('aiproject/Playground/ig-school-story-radar')}/`] }), { ok: false, code: 'denied' });
+  // the folder next to it is ordinary, and its listing leaves the profile out
+  const data = s.at('aiproject/Playground/ig-school-story-radar/data');
+  const report = s.put('aiproject/Playground/ig-school-story-radar/data/report.md', '雷达报告');
+  assert.equal((await s.read(report, { texts: s.named(report) })).text, '雷达报告');
+  assert.deepEqual((await s.read(data, { texts: s.named(data) })).entries.map((e) => e.name), ['report.md']);
+  assert.deepEqual(SideMain.readPreview(data, data, s.at('home')).entries.map((e) => e.name), ['report.md']);
+  // a profile's sign-in file copied somewhere else is still refused by its name; a document named History is not
+  await refusedEverywhere(s, ['Local State', 'Preferences', 'Secure Preferences', 'Login Data For Account', 'Web Data-journal', 'History', 'logins.json', 'key4.db', 'cookies.sqlite']
+    .map((name) => s.put('aiproject/Playground/loose/' + name, 'S')));
+  // AgentDeck's own data folder carries Electron's "Local State" too: its uploads and reports still show (desktop pane, test
+  // profile's phone), its own sign-in files do not, and another Electron app's folder stays closed
+  const own = s.at('home/AppData/agentdeck');
+  s.put('home/AppData/agentdeck/Local State', '{}');
+  const upload = s.put('home/AppData/agentdeck/mobile-uploads/shot.png', 'png');
+  const ownReport = s.put('home/AppData/agentdeck/reports/r.md', '测试报告');
+  assert.equal(localRefusal(upload, { home: s.at('home'), own }), '');
+  assert.equal(SideMain.readPreview(upload, upload, s.at('home'), own).kind, 'image');
+  assert.equal((await s.read(ownReport, { own, roots: [s.at('home/AppData/agentdeck/reports')] })).text, '测试报告');
+  assert.equal(localRefusal(upload, { home: s.at('home') }), 'secret');
+  for (const rel of ['Local State', 'Preferences', 'Network/Cookies', 'Local Storage/leveldb/1.log']) {
+    const file = s.put('home/AppData/agentdeck/' + rel, 'S');
+    assert.equal(localRefusal(file, { home: s.at('home'), own }), 'secret', rel);
+  }
+  s.put('home/AppData/other-electron-app/Local State', '{}');
+  const other = s.put('home/AppData/other-electron-app/notes.md', '别的应用');
+  assert.equal(localRefusal(other, { home: s.at('home'), own }), 'secret');
+  // (in another folder: the loose "Local State" above marks its own folder as a profile)
+  await readable(s, ['History.md', 'preferences-notes.md', 'local-state.md'].map((name) => s.put('aiproject/Playground/docs/' + name, '文档')));
+  // a named file that does not exist in a profile is refused, not reported missing
+  assert.deepEqual(await s.read(s.at('aiproject/Playground/loose/notes.md'), { texts: s.named(s.at('aiproject/Playground/loose/notes.md')) }), { ok: false, code: 'denied' });
+  assert.deepEqual(await s.read(s.at('aiproject/Playground/docs/gone.md'), { texts: s.named(s.at('aiproject/Playground/docs/gone.md')) }), { ok: false, code: 'missing' });
+});
+
+test('key.txt, *_key.txt, service accounts and Terraform state are refused; keyboard.md is not', async (t) => {
+  const s = setup(t);
+  const at = (name) => s.put('aiproject/projectAlpha/reports/' + name, 'SECRET');
+  await refusedEverywhere(s, ['key.txt', 'Key.TXT', 'openai_key.txt', 'anthropic-key.txt', 'deploy.keys', 'keys.json', 'service-account.json', 'service_account_prod.json',
+    'serviceAccount.json', 'service-account-key.json', 'terraform.tfstate', 'terraform.tfstate.backup', 'prod.tfstate.json', 'TERRAFORM.TFSTATE'].map(at));
+  await readable(s, ['keyboard.md', 'monkey.txt', 'keynote-summary.md', 'key-findings.txt', 'hotkeys.txt', 'token-usage.md', 'service-account-setup.md', 'terraform-notes.md',
+    'tfstate-migration.md'].map((name) => s.put('aiproject/projectAlpha/reports/' + name, '文档')));
+});
+
+test('a file with a second name (a hard link) is not sent to the phone', async (t) => {
+  const s = setup(t);
+  const key = s.put('home/.ssh/config.md', 'Host secret');
+  const alias = s.at('aiproject/Playground/demo/innocent.md');
+  fs.linkSync(key, alias);
+  assert.deepEqual(await s.read(alias, { texts: s.named(alias) }), { ok: false, code: 'denied' });
+  // an ordinary file with two names, too: the name it is reached by says nothing about it
+  const twin = s.at('aiproject/Playground/demo/twin.md');
+  fs.linkSync(s.at('aiproject/Playground/demo/report.md'), twin);
+  assert.deepEqual(await s.read(twin, { texts: s.named(twin) }), { ok: false, code: 'denied' });
+  fs.rmSync(twin);
+  const report = s.at('aiproject/Playground/demo/report.md');
+  assert.equal((await s.read(report, { texts: s.named(report) })).text, '游乐场报告');
 });
 
 test('the desktop preview pane refuses what the phone refuses, and shows other clicked files', async (t) => {
