@@ -8,12 +8,19 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { createQueue, processTable } = require('../scripts/e2e-queue-core');
 
 const CLI = path.join(__dirname, '..', 'scripts', 'e2e-queue.js');
 const posix = { skip: process.platform === 'win32' };
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+// kill(pid, 0) still succeeds for a process that was just killed and not yet reaped (a zombie), so
+// "was it ended?" is asked of ps: gone, or state Z, means ended.
+const running = (pid) => {
+  let stat = '';
+  try { stat = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim(); } catch { return false; }
+  return stat !== '' && !stat.startsWith('Z');
+};
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const waitFor = async (check, ms = 8000) => {
   const end = Date.now() + ms;
@@ -97,8 +104,9 @@ test('past the run limit only the processes recorded in the slot directory are e
   const second = cli(dir, ['--queue-wait-timeout', '0.3', '--', process.execPath, '-e', '0']);
   const result = await second.done;
   assert.equal(result.code, 0, `the next group never got the slot:\n${result.out()}`);
-  assert.equal(alive(helperPid), false, 'the recorded helper was left running');
-  assert.equal(alive(decoy.pid), true, 'a process that only looks like the helper was ended');
+  await waitFor(() => (running(helperPid) ? null : true), 5000).catch(() => assert.fail('the recorded helper was left running'));
+  await pause(300);
+  assert.equal(running(decoy.pid), true, 'a process that only looks like the helper was ended');
 });
 
 // ---- the queue itself, with a hand-made slot ----
@@ -127,7 +135,7 @@ test('a process recorded in the slot directory keeps the slot; a recycled pid wi
   assert.equal(quiet(dir).snapshot().running.length, 0, 'a pid now used by an unrelated process must not keep the slot');
 });
 
-test('a process carrying the run tag keeps the slot even if it was never recorded, and is not ended', posix, async (t) => {
+test('a process carrying the run tag keeps the slot even if it was never recorded, and is ended once past the run limit', posix, async (t) => {
   const dir = tempDir(t);
   const tag = `reclaim-test-${process.pid}-${Date.now()}`;
   const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', env: { PATH: process.env.PATH, AGENTDECK_E2E_RUN_TAG: tag } });
@@ -136,8 +144,8 @@ test('a process carrying the run tag keeps the slot even if it was never recorde
   // Deadline long past: a recorded process would be ended now.
   await deadSlot(dir, { tag, deadline: Date.now() - 60000 });
   assert.equal(quiet(dir).snapshot().running.length, 1, 'a live process of the run must keep the slot');
-  assert.equal(alive(helper.pid), true, 'a process that is not recorded in the slot directory must not be ended');
-  helper.kill('SIGKILL');
+  // It belongs to the run (it carries the run's own tag), so past the limit it is ended too.
+  await waitFor(() => (running(helper.pid) ? null : true), 5000).catch(() => assert.fail('a process carrying the run tag was left running past the limit'));
   await waitFor(() => quiet(dir).snapshot().running.length === 0 ? true : null, 5000);
 });
 
