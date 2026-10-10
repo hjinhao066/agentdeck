@@ -107,6 +107,7 @@ class Node {
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
   click() { (this.listeners.click || []).forEach((f) => f({ stopPropagation() {}, preventDefault() {} })); }
   all(cls) { return this.querySelectorAll('.' + cls); }
+  focus() { Node.focused = this; }
 }
 
 test('the sidebar pages a long archive: the newest 100, then 显示更早的 down to the oldest', () => {
@@ -135,6 +136,7 @@ test('the sidebar pages a long archive: the newest 100, then 显示更早的 dow
   assert.equal(more().textContent, '显示更早的 100 个（还有 413 个）');
   more().click();
   assert.equal(rows().length, 200);
+  assert.equal(Node.focused, more(), 'the keyboard stays on 显示更早的 after the list is rebuilt');
   for (let i = 0; i < 4; i++) more().click();
   assert.deepEqual(rows(), archived.map((a) => a.id), 'every archived session has a row, oldest last');
   assert.equal(more(), undefined, 'nothing left to show');

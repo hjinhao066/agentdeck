@@ -196,7 +196,13 @@
         if (page.more) {
           const more = el('button', 'nav-archived-more', `显示更早的 ${Math.min(SC.ARCHIVED_PAGE, page.more)} 个（还有 ${page.more} 个）`);
           more.type = 'button';
-          more.addEventListener('click', () => { archivedShown = page.rows.length + SC.ARCHIVED_PAGE; render(); });
+          more.addEventListener('click', () => {
+            archivedShown = page.rows.length + SC.ARCHIVED_PAGE;
+            render();
+            // the list was rebuilt: keep the keyboard on the row that took this one's place
+            const next = listEl.querySelector('.nav-archived-more');
+            if (next) next.focus();
+          });
           box.appendChild(more);
         }
         listEl.appendChild(box);
