@@ -529,19 +529,13 @@
     if (health.level !== 'ok') details.splice(seat ? 1 : 0, 0, healthLine(health));
     return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures, cells, ...who, source: evidence?.source || '', confidence: confidence || '', name: seat ? seatName + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', health, detail: `${head}：${left(label)}\n${details.join('\n')}` };
   }
-  const LAUNCH_WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
+  // The program word comes from ClaudeSeatsCore.commandProgram, the one reading of a launch line that
+  // claudeLaunch, launchCommand and AgentInfo.inferProvider use too (it lives there: this file requires that one).
   function commandIdentity(command) {
-    const words = String(command || '').match(LAUNCH_WORDS) || [];
-    let i = words[0] === 'command' ? 1 : 0;
-    let name = '';
-    for (; i < words.length; i++) {
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) continue;
-      name = words[i].replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
-      break;
-    }
-    if (name === 'antigravity') name = 'agy';
+    const program = S.commandProgram(command), words = program.words.map((w) => w[0]);
+    const name = program.name === 'antigravity' ? 'agy' : program.name;
     let model = '';
-    for (let j = i + 1; j < words.length; j++) {
+    for (let j = program.index + 1; j < words.length; j++) {
       const eq = /^(?:--model|-m)=([\s\S]+)$/.exec(words[j]);
       if (eq) { model = eq[1].replace(/^["']|["']$/g, ''); break; }
       if (words[j] === '--model' || words[j] === '-m') { model = String(words[j + 1] || '').replace(/^["']|["']$/g, ''); break; }

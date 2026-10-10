@@ -893,6 +893,12 @@ test('a seat with a damaged credential reads as error and is never the unverifie
 // and two that read the same carry a number. `--seat us` stays in commands. The seat codes are matched as whole words, so
 // an account such as bob.us is not mistaken for a seat name.
 const SEAT_CODE = /\b(?:CN|US2?)\b/;
+// the lowercase ids (`cn`, `us`, `us2`, as in `--seat us`) are seat names too; bob.us and us2@ are accounts, not seat names
+const SEAT_ID = /(?<![\w.])(?:cn|us2?)(?![\w.@])/;
+test('the lowercase seat-id pattern catches a seat id and leaves account names alone', () => {
+  for (const bad of ['（us）：额度用尽', '席位 cn', '--seat us2 重派', '(cn, us)']) assert.match(bad, SEAT_ID, bad);
+  for (const ok of ['（bob.us）：额度用尽', '（alice）', 'status 其余', 'bus', 'us2@example.com', 'v1.cn', '识别中 1']) assert.doesNotMatch(ok, SEAT_ID, ok);
+});
 test('every seat out: the review reason, review_block and the notice to the Captain name the accounts, not CN / US or a flag', async (t) => {
   const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();
   w.seatInfos = [{ id: 'cn', loggedIn: true, loginEmail: 'alice@example.com' }, { id: 'us', loggedIn: true, loginEmail: 'bob.us@example.com' }];
@@ -905,7 +911,7 @@ test('every seat out: the review reason, review_block and the notice to the Capt
   assert.match(reason, /Claude Opus 5\.5（alice）：额度用尽/); assert.match(reason, /Claude Opus 5\.5（bob\.us）：额度用尽/);
   const notice = app.notices().find((n) => n.includes('不能自动开审查会话'));
   assert.ok(notice && notice.includes('alice'));
-  for (const text of [reason, notice]) { assert.doesNotMatch(text, /\p{Regional_Indicator}/u); assert.doesNotMatch(text, SEAT_CODE); }
+  for (const text of [reason, notice]) { assert.doesNotMatch(text, /\p{Regional_Indicator}/u); assert.doesNotMatch(text, SEAT_CODE); assert.doesNotMatch(text, SEAT_ID); }
 });
 test('a seat directory whose login is not known yet reads 识别中, not 未登录, and two of them are told apart by a number', async (t) => {
   const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();
@@ -917,7 +923,27 @@ test('a seat directory whose login is not known yet reads 识别中, not 未登�
   const reason = app.card(card.id).review_block.reason;
   assert.match(reason, /Claude Opus 5\.5（识别中 1）：额度用尽/); assert.match(reason, /Claude Opus 5\.5（识别中 2）：额度用尽/);
   assert.doesNotMatch(reason, /未登录/);
-  assert.doesNotMatch(reason, /\p{Regional_Indicator}/u); assert.doesNotMatch(reason, SEAT_CODE);
+  assert.doesNotMatch(reason, /\p{Regional_Indicator}/u); assert.doesNotMatch(reason, SEAT_CODE); assert.doesNotMatch(reason, SEAT_ID);
+});
+test('the numbers follow the seat settings: a signed-out seat that reads the same still takes its place in the order', async (t) => {
+  const w = realWorld(t, ['cn', 'us', 'us2'], 'cn'); const app = w.boot();
+  // cn is signed out (its directory still remembers carol), us and us2 are two directories signed in to the same account
+  w.seatInfos = [{ id: 'cn', loggedIn: false, loginEmail: 'carol@example.com' }, { id: 'us', loggedIn: true, loginEmail: 'carol@example.com' }, { id: 'us2', loggedIn: true, loginEmail: 'carol@example.com' }];
+  const card = await newCard(app, { important: true });
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  reading(w, 'us', 0, 60); reading(w, 'us2', 0, 60);
+  await app.scan();
+  const reason = app.card(card.id).review_block.reason;
+  // settings order cn, us, us2: the signed-out cn is carol 1, so the two that were tried are carol 2 and carol 3
+  assert.match(reason, /Claude Opus 5\.5（carol 2）：额度用尽/); assert.match(reason, /Claude Opus 5\.5（carol 3）：额度用尽/);
+  assert.doesNotMatch(reason, /carol 1/);
+  assert.doesNotMatch(reason, SEAT_CODE); assert.doesNotMatch(reason, SEAT_ID);
+});
+test('a seat choice carries no hover text: the full address never travels with it', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../main-session.js'), 'utf8');
+  const body = source.slice(source.indexOf('function seatChoices('), source.indexOf('async function claudeSeatChoices'));
+  assert.ok(body.length > 100 && body.includes('return { id: seat.id, label'));
+  assert.doesNotMatch(body.replace(/\/\/[^\n]*/g, ''), /\btitle\b|\bemail\b/i);
 });
 test('one seat unknown and one known: only the repeated reading gets a number', async (t) => {
   const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();
@@ -928,7 +954,7 @@ test('one seat unknown and one known: only the repeated reading gets a number', 
   await app.scan();
   const reason = app.card(card.id).review_block.reason;
   assert.match(reason, /Claude Opus 5\.5（识别中）：额度用尽/); assert.match(reason, /Claude Opus 5\.5（bob\.us）：额度用尽/);
-  assert.doesNotMatch(reason, SEAT_CODE);
+  assert.doesNotMatch(reason, SEAT_CODE); assert.doesNotMatch(reason, SEAT_ID);
 });
 test('no signed-in Claude seat at all: nobody is picked and the reason says so (the default seat is not brought back)', async (t) => {
   const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();

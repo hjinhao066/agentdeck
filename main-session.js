@@ -384,16 +384,17 @@
   // of the e-mail before the @ (the user's rule of 2026-10-08), never the fixed seat name or its flag. A directory whose
   // login is not known yet (the seat list could not be read, nothing remembered) reads 识别中, which is not 未登录: it
   // says nothing about being signed out. Seats that read the same (two unknown ones, one account behind two directories)
-  // get a number in the order of the configured list, so a reason can tell them apart. The seat code and directory stay in
-  // `--seat` and in `title`, the hover text of the choice.
+  // get a number in the order of the configured list (the seat settings, signed-out seats counted too: pass the whole list),
+  // so a reason can tell them apart. The seat code and directory stay in `--seat`. A choice carries no hover text: nothing
+  // shows one, and the one the seat list builds holds the full address.
   function seatChoices(seats, infoOf) {
     const display = window.ClaudeSeatsCore?.seatDisplay;
-    const shown = seats.map((seat) => ({ seat, d: display ? display(seat, infoOf(seat) || {}) : { label: '账号未识别', title: '' } }));
+    const shown = seats.map((seat) => ({ seat, d: display ? display(seat, infoOf(seat) || {}) : { label: '账号未识别' } }));
     const total = new Map(), seen = new Map();
     for (const { d } of shown) total.set(d.label, (total.get(d.label) || 0) + 1);
     return shown.map(({ seat, d }) => {
       const nth = (seen.get(d.label) || 0) + 1; seen.set(d.label, nth);
-      return { id: seat.id, label: total.get(d.label) > 1 ? `${d.label} ${nth}` : d.label, title: d.title, configDir: seat.configDir };
+      return { id: seat.id, label: total.get(d.label) > 1 ? `${d.label} ${nth}` : d.label, configDir: seat.configDir };
     });
   }
   async function claudeSeatChoices() {
@@ -404,7 +405,9 @@
     const described = window.ClaudeSeats?.described ? window.ClaudeSeats.described(raw) : raw;
     seatsForQuota = infos.length ? raw.map((s) => ({ ...s, info: infos.find((i) => i.id === s.id) || described.find((d) => d.id === s.id)?.info })) : described;
     const active = host.config.activeClaudeSeatId;
-    lastSeatChoices = seatChoices(seats.filter((s) => infos.find((i) => i.id === s.id)?.loggedIn !== false), (s) => seatsForQuota.find((x) => x.id === s.id)?.info)
+    // numbered over every configured seat, then the signed-out ones are dropped: the numbers follow the seat settings
+    lastSeatChoices = seatChoices(seats, (s) => seatsForQuota.find((x) => x.id === s.id)?.info)
+      .filter((c) => infos.find((i) => i.id === c.id)?.loggedIn !== false)
       .sort((a, b) => (b.id === active) - (a.id === active));
     return lastSeatChoices;
   }

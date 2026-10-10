@@ -151,6 +151,64 @@ test('launch reasserts the seat after shell overrides and handles spaces/quotes'
   assert.equal(S.launchCommand('codex --yolo', S.normalize()[1], home, 'darwin'), 'codex --yolo');
   assert.match(S.launchCommand('claude --model sonnet', tricky, 'C:\\Users\\test', 'win32'), /Remove-Item Env:CLAUDE_CONFIG_DIR/);
 });
+test('a Claude launch line gets its seat whichever way the program is written, and nothing else does', () => {
+  const us = S.normalize()[1], home = '/h', win = 'C:\\Users\\test';
+  // line as written -> what runs after the seat is set (POSIX): `command` goes in front of the program, prefixes and the rest stay
+  const expectedTail = {
+    'claude --x': 'command claude --x', 'claude.exe --x': 'command claude.exe --x', 'CLAUDE --x': 'command CLAUDE --x', 'Claude.EXE --x': 'command Claude.EXE --x',
+    '/opt/bin/claude --x': 'command /opt/bin/claude --x', 'C:\\Tools\\claude.exe --x': 'command C:\\Tools\\claude.exe --x',
+    '"C:\\Program Files\\Claude\\claude.exe" --x': 'command "C:\\Program Files\\Claude\\claude.exe" --x',
+    "'/opt/my dir/claude' --x": "command '/opt/my dir/claude' --x", 'command claude --x': 'command claude --x', 'FOO=1 claude --x': 'FOO=1 command claude --x',
+    'FOO=1 BAR="a b" /opt/bin/claude.exe --x': 'FOO=1 BAR="a b" command /opt/bin/claude.exe --x',
+  };
+  const seated = Object.keys(expectedTail);
+  for (const cmd of seated) {
+    assert.equal(S.claudeLaunch(cmd), true, cmd);
+    const posix = S.launchCommand(cmd, us, home, 'darwin');
+    assert.match(posix, /export CLAUDE_CONFIG_DIR='\/h\/\.claude-us'; /, cmd);
+    assert.ok(posix.endsWith(`; ${expectedTail[cmd]})`), `${cmd} -> ${posix}`);
+    // PowerShell: the seat is set in front, the line itself is untouched
+    const ps = S.launchCommand(cmd, us, win, 'win32');
+    assert.ok(ps.includes("$env:CLAUDE_CONFIG_DIR='C:\\Users\\test\\.claude-us'; "), cmd);
+    assert.ok(ps.endsWith('; ' + cmd), `${cmd} -> ${ps}`);
+  }
+  // the default seat only clears the others' settings; a launch that is not Claude is left alone
+  assert.doesNotMatch(S.launchCommand('claude.exe --x', S.normalize()[0], home, 'darwin'), /export CLAUDE_CONFIG_DIR/);
+  for (const cmd of ['claude-ds --x', 'claude_ds', 'claudex', 'my-claude --x', 'C:\\x\\my-claude.exe', 'node claude', 'node /x/claude.js', 'echo claude', 'npx claude', 'sudo claude', 'env FOO=1 claude', 'codex --yolo', 'FOO=1 codex', '', undefined]) {
+    assert.equal(S.claudeLaunch(cmd), false, String(cmd));
+    for (const platform of ['darwin', 'win32']) assert.equal(S.launchCommand(cmd, us, platform === 'win32' ? win : home, platform), cmd, `${cmd} ${platform}`);
+  }
+  // the same reading as the program name quota and the reviewer pick use
+  const Q = require('../quota-core'), A = require('../agent-info');
+  for (const cmd of [...seated, 'claude-ds --x', 'claudex', 'node claude', 'env FOO=1 claude', 'codex --yolo']) {
+    assert.equal(S.claudeLaunch(cmd), Q.commandIdentity(cmd).name === 'claude', cmd);
+    assert.equal(A.inferProvider(cmd) === 'Claude', S.claudeLaunch(cmd), cmd);
+  }
+  assert.equal(A.inferProvider('FOO=1 claude --x'), 'Claude');
+  assert.equal(A.inferProvider('command claude'), 'Claude');
+  assert.equal(A.inferProvider('FOO=1 codex'), 'Codex');
+  assert.equal(A.inferProvider('env FOO=1 claude'), null);
+  assert.equal(A.inferProvider('claude-ds --x'), null);
+  // a session that is not written the usual way is blocked from a signed-out seat like any other Claude session
+  const config = { claudeSeats: S.normalize(), activeClaudeSeatId: 'us' }, signedOut = [{ id: 'us', loggedIn: false, loginReason: 'login' }];
+  assert.match(S.launchBlock({ cmd: 'FOO=1 claude.exe --x', claudeSeatId: 'us' }, config, signedOut), /未登录/);
+  assert.equal(S.launchBlock({ cmd: 'claude-ds --x', claudeSeatId: 'us' }, config, signedOut), '');
+});
+test('a launch line in the usual shell runs with the seat directory (POSIX)', (t) => {
+  if (process.platform === 'win32') return;
+  const home = fixture(t), seat = S.normalize()[1];
+  const bins = { plain: 'claude', exe: 'claude.exe', upper: 'CLAUDE', 'with space': 'my dir/claude' };
+  for (const bin of Object.values(bins)) {
+    const file = path.join(home, bin);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '#!/bin/sh\nprintf "%s|%s" "${CLAUDE_CONFIG_DIR-unset}" "${FOO-nofoo}"\n', { mode: 0o700 });
+  }
+  const run = (command) => execFileSync('/bin/sh', ['-c', S.launchCommand(command, seat, home, 'darwin')], { env: { ...process.env, CLAUDE_CONFIG_DIR: '/wrong' }, encoding: 'utf8' });
+  const dir = S.configDir(seat, home, process.platform);
+  assert.equal(run(`"${path.join(home, 'claude.exe')}" --x`), `${dir}|nofoo`);
+  assert.equal(run(`'${path.join(home, 'my dir/claude')}' --x`), `${dir}|nofoo`);
+  assert.equal(run(`FOO=1 ${path.join(home, 'CLAUDE')} --x`), `${dir}|1`);
+});
 test('quota files are independent and contain only real native usage observations', (t) => {
   const home = fixture(t); setup(home);
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test' } }));

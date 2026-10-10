@@ -249,6 +249,25 @@ test('a Claude session in a new copy names the seat that will run it, so the fol
   const col = app.w.columns.find((c) => c.title === 'default' || c.displayTitle === 'default');
   assert.equal(col.worktree && 'trust' in col.worktree, false);
 });
+test('a Claude session written with a NAME=value prefix, claude.exe or a path still gets its folder trusted in the new copy', async (t) => {
+  const app = world(t);
+  const open = async (title, command) => {
+    const card = (await app.store.add({ project: 'demo', title, detail: '' })).card;
+    const reply = await app.handle({ action: 'main-new', id: 'req-' + title, title, task: '改代码', boardId: card.id, project: 'demo', worktree: app.w.repo, branch: 'feat/' + title, command });
+    await tick();
+    assert.match(reply.result, /已开新会话/, command);
+    return app.w.prepareInputs.at(-1);
+  };
+  for (const [title, command] of [['prefix', 'FOO=1 claude --model claude-opus-5-5'], ['exe', 'claude.exe --model claude-opus-5-5'], ['path', '/opt/bin/claude --model claude-opus-5-5']]) {
+    const input = await open(title, command);
+    assert.equal(input.seatId, 'cn', command); assert.equal(input.configDir, '~/.claude', command);
+  }
+  // a program that only has claude in its name is not Claude: no seat leaves the page
+  for (const [title, command] of [['ds', 'claude-ds --model m'], ['node', 'node claude']]) {
+    const input = await open(title, command);
+    assert.equal('seatId' in input, false, command);
+  }
+});
 test('when the trust record cannot be written the task still starts and the Captain is told how to answer the menu', async (t) => {
   const app = world(t);
   app.w.trustResult = { ok: false, reason: '席位配置文件读不了，没有改动' };

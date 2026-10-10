@@ -123,9 +123,23 @@
     column.claudeConfigDir ||= seat?.configDir;
     return { ...seat, id: column.claudeSeatId, configDir: column.claudeConfigDir || '' };
   }
-  // A launch line whose program is Claude: bare, quoted or by path, optionally after `command`.
-  const CLAUDE_LAUNCH_RE = /^(?:command\s+)?((?:"[^"]*claude"|'[^']*claude'|[^\s]*claude))(\s|$)/;
-  function claudeLaunch(command) { return CLAUDE_LAUNCH_RE.test(String(command || '')); }
+  // The program a launch line runs, found the way a shell does: after a leading `command` and any
+  // NAME=value prefixes. `name` is its file name without folders or .exe/.cmd/.bat, lowercased; `word` is the
+  // program as written (quotes and path kept) and starts at `start`, ends at `end`. `words` are the line's
+  // words (regex matches, with `.index`) and `index` is the program's place among them. quota-core's
+  // commandIdentity reads the same thing, so every "is this Claude?" question has one answer.
+  const LAUNCH_WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
+  function commandProgram(command) {
+    const text = String(command || ''), words = [...text.matchAll(LAUNCH_WORDS)];
+    let index = words[0]?.[0] === 'command' ? 1 : 0;
+    while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index][0])) index++;
+    const found = words[index];
+    if (!found) return { name: '', word: '', start: text.length, end: text.length, words, index };
+    const name = found[0].replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+    return { name, word: found[0], start: found.index, end: found.index + found[0].length, words, index };
+  }
+  // A launch line whose program is Claude: bare, quoted or by path, with .exe, after `command` or NAME=value.
+  function claudeLaunch(command) { return commandProgram(command).name === 'claude'; }
   // Why a Claude session must not start on the seat it is bound to ('' when it may). Restored and
   // reopened sessions only ever go back to their own seat, never another one. Only a definite answer
   // blocks: a seat gone from the settings, or one whose login is known to be missing (seats:list
@@ -156,8 +170,8 @@
   function launchCommand(command, seat, home, platform) {
     // Reassert after shell profiles, and bypass a claude alias/function that
     // could route back to the other login. Other providers keep their launch.
-    const match = String(command).match(CLAUDE_LAUNCH_RE);
-    if (!match || !seat) return command;
+    const program = commandProgram(command);
+    if (program.name !== 'claude' || !seat) return command;
     const dir = configDir(seat, home, platform);
     const standard = configDir({ configDir: '~/.claude' }, home, platform);
     const isDefault = platform === 'win32' ? dir.toLowerCase() === standard.toLowerCase() : dir === standard;
@@ -165,8 +179,10 @@
     const quote = (s) => "'" + s.replace(/'/g, platform === 'win32' ? "''" : "'\\''") + "'";
     if (platform === 'win32') return vars.concat('CLAUDE_CONFIG_DIR').map((key) => `Remove-Item Env:${key} -ErrorAction SilentlyContinue; `).join('')
       + (isDefault ? '' : `$env:CLAUDE_CONFIG_DIR=${quote(dir)}; `) + command;
-    const binary = match[1].replace(/^['"]|['"]$/g, '');
-    const direct = 'command ' + quote(binary) + command.slice(match[0].length - match[2].length);
+    // `command` goes right before the program, and NAME=value prefixes stay in front of it. The program
+    // word and everything after it are kept exactly as written (path, quotes, arguments).
+    const assignments = program.words.slice(program.words[0][0] === 'command' ? 1 : 0, program.index).map((w) => w[0] + ' ').join('');
+    const direct = assignments + 'command ' + program.word + String(command).slice(program.end);
     return `(unset ${vars.concat('CLAUDE_CONFIG_DIR').join(' ')}; ${isDefault ? '' : `export CLAUDE_CONFIG_DIR=${quote(dir)}; `}${direct})`;
   }
   function usage(text, now = Date.now()) {
@@ -193,6 +209,6 @@
     }
     return windows.length ? { at: now, source: 'Claude 会话状态行', windows } : null;
   }
-  return { normalize, seatByConfigDir, cleanEmail, accountCheck, accountName, planName, seatDisplay, seatMapText, resolveSeat, active, bindColumn, claudeLaunch, launchBlock, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
+  return { normalize, seatByConfigDir, cleanEmail, accountCheck, accountName, planName, seatDisplay, seatMapText, resolveSeat, active, bindColumn, commandProgram, claudeLaunch, launchBlock, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
 
 });

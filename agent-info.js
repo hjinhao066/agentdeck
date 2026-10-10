@@ -25,8 +25,9 @@
   }
 
   function inferProvider(command, screenText) {
-    const first = String(command || '').trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
-    const bin = first ? (first[1] || first[2] || first[3]).replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase() : '';
+    // The same program reading as claudeLaunch and quota's commandIdentity: `claude.exe`, a quoted or full path,
+    // `command claude` and NAME=value prefixes all name the program.
+    const bin = S.commandProgram(command).name;
     const providers = { 'cursor-agent': 'Cursor', claude: 'Claude', agy: 'Antigravity', antigravity: 'Antigravity', gemini: 'Antigravity', grok: 'Grok', codex: 'Codex', chatgpt: 'Codex' };
     if (providers[bin]) return providers[bin];
 

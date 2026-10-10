@@ -260,6 +260,25 @@ test('a request queued while the board could not be read has no record of the ca
   assert.match(notices(h).join('\n'), /排队那一刻看板读不到/);
 });
 
+test('quota gone again between the pick and the open puts the request back in priority order too: a 高优先级 one that waits for its own quota is never overtaken', async (t) => {
+  const h = runtime(t), urgent = h.add(), plain = h.add();
+  h.out.add('urgent-cmd'); h.out.add('plain-cmd');
+  await h.assign(urgent, 'urgent-cmd'); await h.assign(plain, 'plain-cmd');
+  const marked = h.state.waitlist.find((w) => w.metadata.boardId === urgent.id);
+  marked.metadata.important = true;
+  h.state.waitlist = M.highFirst(h.state.waitlist, (w) => w.metadata?.important === true);
+  assert.deepEqual(h.state.waitlist.map((w) => w.metadata.boardId), [urgent.id, plain.id]);
+  // the urgent request keeps waiting for its quota; the plain one has room when it is picked and none when it is about to open
+  h.out.delete('plain-cmd');
+  const reads = { plain: 0 }, base = h.window.QuotaCore.quotaFallback;
+  h.window.QuotaCore.quotaFallback = (store, cmd, ...rest) => cmd === 'plain-cmd' && ++reads.plain > 1 ? { action: 'queue', cmd, reason: 'out', held: 'out' } : base(store, cmd, ...rest);
+  await tickAndWait(h);
+  assert.ok(reads.plain >= 2, 'the plain request was picked and then judged again');
+  assert.equal(h.columns.length, 1, 'nothing opened');
+  assert.deepEqual(h.state.waitlist.map((w) => w.metadata.boardId), [urgent.id, plain.id], 'the marked request is still first');
+  assert.equal(h.state.tasks.every((x) => x.status === 'waiting'), true, 'both are still waiting');
+});
+
 test('a board that cannot be read puts the requests back in priority order: a 高优先级 one is never overtaken by ordinary work', async (t) => {
   const h = runtime(t), plain = h.add(), urgent = h.add();
   await h.assign(plain); await h.assign(urgent);
