@@ -74,7 +74,7 @@ c-board-aaa  「秋招小队长」  已完成  小队长·子会话 2 个·子�
 - 重启 AgentDeck 不影响分层：小队长重新拿到它的令牌，子会话仍归它，没取的回执还在。
   它的后台 `receipts --wait` 会随终端一起没掉，靠上面「兜底」的提醒重挂。
 
-## 数据字段（给架构图等分层显示用）
+## 数据字段（给队伍等分层显示用）
 
 都在渲染进程的列对象上（`columns` / `host.columns()`，已归档的在 `config.archived`），随 `config.json` 保存：
 
@@ -88,7 +88,7 @@ c-board-aaa  「秋招小队长」  已完成  小队长·子会话 2 个·子�
 
 取法：子会话 = `columns.filter((c) => c.subCaptainId === sub.id)`。只有当 `subCaptainId`
 指向一个**还在的**、`subCaptain === true` 的列时才算分层；指向不存在的列就当普通会话。
-架构图的 `crew-map.js` `collect()` 目前只抄了 `captainCrew`、`project` 等字段，要分层显示需在
+队伍的 `crew-map.js` `collect()` 目前只抄了 `captainCrew`、`project` 等字段，要分层显示需在
 columns 和 archived 两处各加 `subCaptain: c.subCaptain === true, subCaptainId: c.subCaptainId || ''`。
 
 ## 秋招试点怎么迁到正式小队长
@@ -104,4 +104,4 @@ columns 和 archived 两处各加 `subCaptain: c.subCaptain === true, subCaptain
 3. 总队长替试点代开、还在跑的会话（P2-NC、待核池分拣、小红书、Glassdoor 等）不搬家，留在总队长名下
    做完（没有改归属的命令，也不需要：它们交回执后，总队长把结论 `tell` 给新小队长即可）。
    之后这条线上的新活都由新小队长 `create-child` 开。
-4. `--project "秋招"` 保持和以前一样，看板、架构图里同一个项目。
+4. `--project "秋招"` 保持和以前一样，看板、队伍里同一个项目。

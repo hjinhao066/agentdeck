@@ -30,16 +30,16 @@ function deck(ids, focused, platform = 'darwin') {
   const terms = new Map(columns.map((c) => [c.id, { wrap: { remove() {} }, term: { dispose() {}, focus() {} }, disposers: [] }]));
   let keydown = null;
   const context = vm.createContext({
-    columns, terms, focusedId: focused, peekId: null, zoomedId: null, selectedBoardId: null, activeView: 'terminals',
-    config: { links: [], boardPositions: {}, mainSession: null },
+    columns, terms, focusedId: focused, peekId: null, zoomedId: null, activeView: 'terminals',
+    config: { links: [], mainSession: null },
     document: { addEventListener: (type, listener) => { if (type === 'keydown') keydown = listener; } },
     window: { deck: { ptyKill() {}, reloadRenderer() {} } },
     confirm: () => true,
     SidePane: { holdsTerminalOf: () => false, restoreTerminal() {} },
     ChatUI: { onColumnRemoved() {}, isChatMode: () => false, setMode() {}, focusInput: () => false },
     TaskBoardUI: { close() {} }, Pages: { hide() {} },
-    restoreBoardTerminal() {}, updateColumnStyles() {}, fitAll() {}, syncNav() {}, scrollColumnInDeck() {}, focusColumnInput() {},
-    cancelManagedRequests() {}, releaseManagedSubtree() {}, saveConfig() {}, renderColNav() {}, renderBoardGraph() {}, isManagedDescendant: () => false,
+    updateColumnStyles() {}, fitAll() {}, syncNav() {}, scrollColumnInDeck() {}, focusColumnInput() {},
+    cancelManagedRequests() {}, releaseManagedSubtree() {}, saveConfig() {}, renderColNav() {}, isManagedDescendant: () => false,
     columnLabel: (col) => col.id,
     AppShortcutsCore, env: { platform },
   });

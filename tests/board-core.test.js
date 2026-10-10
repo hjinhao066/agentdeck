@@ -67,32 +67,6 @@ test('upgrades legacy default commands while preserving custom commands and conf
   assert.equal(BoardCore.upgradeLegacyCommand(''), '');
 });
 
-test('lays out a downstream dependency graph and keeps manual terminals separate', () => {
-  const layout = BoardCore.graphLayout([
-    { id: 'c', taskId: 'task-c', role: 'conductor', title: 'Parent' },
-    { id: 'w1', taskId: 'task-w1', role: 'worker', parentTaskId: 'task-c', title: 'Worker' },
-    { id: 'w2', taskId: 'task-w2', role: 'worker', parentTaskId: 'task-w1', title: 'Downstream' },
-    { id: 'm', role: 'manual', title: 'Manual' },
-  ]);
-  const byId = new Map(layout.nodes.map((node) => [node.id, node]));
-  assert.equal(byId.get('c').depth, 0);
-  assert.equal(byId.get('w1').depth, 1);
-  assert.equal(byId.get('w2').depth, 2);
-  assert.equal(byId.get('m').lane, 'manual');
-  assert.ok(byId.get('m').x > byId.get('w2').x);
-  assert.deepEqual(layout.edges.map((edge) => [edge.from, edge.to]), [['task-c', 'task-w1'], ['task-w1', 'task-w2']]);
-});
-
-test('breaks malformed parent cycles instead of recursing forever', () => {
-  const layout = BoardCore.graphLayout([
-    { id: 'a', role: 'worker', parentId: 'b' },
-    { id: 'b', role: 'worker', parentId: 'a' },
-  ]);
-  assert.equal(layout.nodes.length, 2);
-  assert.equal(layout.edges.length, 1);
-  assert.ok(layout.width > 0);
-});
-
 test('managed ownership permits descendants but never manual or sibling roots', () => {
   const columns = [
     { id: 'c1', taskId: 'root-1', role: 'conductor' },
@@ -105,22 +79,17 @@ test('managed ownership permits descendants but never manual or sibling roots', 
   assert.equal(BoardCore.isManagedDescendant(columns, columns[0], columns[3]), false);
   assert.equal(BoardCore.isManagedDescendant(columns, columns[0], columns[4]), false);
   assert.equal(BoardCore.taskDepth(columns, columns[2]), 2);
-  assert.match(BoardCore.controlGrantError(columns, columns[2], columns[0], 8), /cycle/);
-  assert.match(BoardCore.controlGrantError(columns, columns[4], columns[1], 8), /manual source/);
-  assert.equal(BoardCore.controlGrantError(columns, columns[0], columns[3], 8), '');
 });
 
-test('relationship types have explicit visible state without granting implicit control', () => {
+test('relationship types never grant implicit control', () => {
   const columns = [
     { id: 'a', taskId: 'a', role: 'manual', title: 'A' },
     { id: 'b', taskId: 'b', role: 'manual', title: 'B' },
   ];
-  const dependency = BoardCore.normalizeLink({ id: 'l1', fromTaskId: 'a', toTaskId: 'b', type: 'dependency' });
-  assert.equal(BoardCore.linkState(dependency, columns, { a: 'working' }), 'Blocked');
-  assert.equal(BoardCore.linkState(dependency, columns, { a: 'done' }), 'Ready');
+  const dependency = BoardCore.normalizeLink({ id: 'l1', fromTaskId: 'a', toTaskId: 'b', type: 'dependency', grantedControl: true });
+  assert.equal(dependency.grantedControl, false);
   const handoff = BoardCore.normalizeLink({ id: 'l2', fromTaskId: 'a', toTaskId: 'b', type: 'handoff', grantedControl: true });
   assert.equal(handoff.grantedControl, false);
-  assert.equal(BoardCore.linkState(handoff, columns, {}), 'Channel active');
   assert.equal(BoardCore.isManagedDescendant(columns, columns[0], columns[1]), false);
 });
 
@@ -152,38 +121,6 @@ test('managed request ownership persists while manual terminals discard it', () 
   assert.equal(manual.requestId, null);
   assert.deepEqual(manual.waitRequestIds, []);
   assert.equal(manual.createdByRequestId, null);
-});
-
-test('freeform board positions are sanitized, persisted, and applied without moving explicit nodes', () => {
-  const layout = BoardCore.graphLayout([
-    { id: 'a', taskId: 'a', role: 'conductor' },
-    { id: 'b', taskId: 'b', role: 'worker', parentTaskId: 'a' },
-    { id: 'c', taskId: 'c', role: 'manual' },
-  ]);
-  const positioned = BoardCore.applyBoardPositions(layout, {
-    a: { x: 420.4, y: 88.7 },
-    b: { x: -50, y: '160' },
-    bad: { x: 'nope', y: 20 },
-  });
-  const byTask = new Map(positioned.nodes.map((node) => [node.taskId, node]));
-  assert.deepEqual({ x: byTask.get('a').x, y: byTask.get('a').y }, { x: 420, y: 89 });
-  assert.deepEqual({ x: byTask.get('b').x, y: byTask.get('b').y }, { x: 16, y: 160 });
-  assert.ok(positioned.width >= 732);
-  assert.equal(BoardCore.normalizeBoardPositions({ bad: { x: NaN, y: 1 } }).bad, undefined);
-});
-
-test('new auto-positioned nodes avoid a saved freeform card', () => {
-  const layout = {
-    width: 600,
-    height: 400,
-    nodes: [
-      { taskId: 'placed', x: 40, y: 40, width: 260, height: 156 },
-      { taskId: 'new', x: 40, y: 40, width: 260, height: 156 },
-    ],
-  };
-  const positioned = BoardCore.applyBoardPositions(layout, { placed: { x: 40, y: 40 } });
-  assert.equal(positioned.nodes[0].y, 40);
-  assert.ok(positioned.nodes[1].y > 196);
 });
 
 test('session project and review metadata normalize without losing independent terminal roles', () => {

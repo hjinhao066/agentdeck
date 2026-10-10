@@ -36,7 +36,7 @@
     closeColumn: { mac: '⌘W', win: 'KeyW', name: '关闭当前列' },
     search:      { mac: '⌘F', win: 'KeyF', winCtrlAlt: 'KeyF', name: '列内搜索' },
     broadcast:   { mac: '⌘B', win: 'KeyB', name: '广播输入' },
-    crewMap:     { mac: '⌘⇧B', win: 'KeyM', name: '终端架构图' },
+    crewMap:     { mac: '⌘⇧B', win: 'KeyM', name: '队伍' },
     help:        { mac: '⌘/', win: 'Slash', name: '快捷键说明' },
     zoom:        { mac: '⌘⏎', win: 'Enter', name: '放大 / 还原当前列' },
     jumpWaiting: { mac: '⌘J', win: 'KeyJ', name: '跳到等你回复的列' },

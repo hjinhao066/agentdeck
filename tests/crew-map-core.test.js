@@ -257,8 +257,8 @@ test('saved positions win over the layout; saved state is checked on load', () =
   assert.equal(box.moved, true);
   assert.deepEqual([lay.captain.x, lay.captain.y], [5, 6]);
   const s = C.normalizeSaved({ projectPositions: {}, mode: 'canvas', positions: { a: { x: 1.4, y: 2 }, b: { x: NaN, y: 1 } }, view: { x: 1, y: 2, scale: 99 } });
-  assert.deepEqual(s, { projectPositions: {}, mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null, zoom: null });
-  assert.deepEqual(C.normalizeSaved(null), { projectPositions: {}, mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null, zoom: null });
+  assert.deepEqual(s, { projectPositions: {}, positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null, zoom: null });
+  assert.deepEqual(C.normalizeSaved(null), { projectPositions: {}, positions: {}, view: null, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null, zoom: null });
   // the user's project order and the arrangement their hand-placed map stands on are kept, checked
   const kept = C.normalizeSaved({ projectOrder: ['B', 'A', 'B', 7, 'x'.repeat(200)], plan: { lanes: [['A'], ['B', 'C']], caps: { A: 3, B: 2, C: 2.5, D: 99 }, tight: 1, junk: true } });
   assert.deepEqual(kept.projectOrder, ['B', 'A']);

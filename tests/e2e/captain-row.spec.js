@@ -143,7 +143,7 @@ test('队长 row is one line: crown, dot, name, tiny count, model capsule and a 
 });
 
 test('版本进度 icon button next to 架构图 slides in a drawer with the next version\'s cards, live', async () => {
-  await page.evaluate(() => { showView('board'); CrewMap.setMode('crew'); });
+  await page.evaluate(() => { showView('board'); });
   const btn = page.locator('#versionProgressBtn');
   const drawer = page.locator('#versionProgress');
   await expect(btn).toBeVisible();
@@ -251,7 +251,7 @@ test('screenshots of the sidebar and 架构图 toolbar in both themes', async ()
     await quiet();
     await page.locator('#colNav').screenshot({ path: path.join(shots, `sidebar-${theme}.png`) });
     await page.locator('.captain-item').screenshot({ path: path.join(shots, `captain-row-${theme}.png`) });
-    await page.evaluate(() => { showView('board'); CrewMap.setMode('crew'); });
+    await page.evaluate(() => { showView('board'); });
     await quiet();
     await page.locator('#boardView .board-toolbar').screenshot({ path: path.join(shots, `crewmap-toolbar-${theme}.png`) });
     const toggle = page.locator('#versionProgressBtn');

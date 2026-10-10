@@ -328,7 +328,7 @@ test('sidebar and architecture map: marked sessions and waiting work, their orde
   await expect(row('w-norm').locator('.cn-prio')).toHaveCount(0);
 
   // ---- architecture map ----
-  await page.evaluate(() => { showView('board'); if (CrewMap.mode() !== 'crew') CrewMap.setMode('crew'); });
+  await page.evaluate(() => { showView('board'); });
   const node = (id) => page.locator(`#crewMap .cm-node[data-node-id="${id}"]`);
   await expect(node('w-hi')).toBeVisible();
   for (const id of ['w-hi', 'w-review', 'w-loose', 'wait:k-wait-h']) {
