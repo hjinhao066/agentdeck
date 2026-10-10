@@ -87,6 +87,8 @@ function inside(child, parent, platform, lib = path) {
 function secretPath(real, { home, denied = [], platform = process.platform, lib = path, dir = false } = {}) {
   const lower = real.toLowerCase();
   const parts = lower.split(/[\\/]+/).filter(Boolean);
+  // A Mac's /tmp and temp folders really are /private/tmp and /private/var: that root is not a .private folder.
+  if (platform === 'darwin' && lower.startsWith('/private/')) parts.shift();
   const name = parts[parts.length - 1] || '';
   if (parts.slice(0, -1).some((part) => SECRET_DIRS.has(part)) || SECRET_DIRS.has(name)) return true;
   // The name as it is, and the names it may have been copied from.
