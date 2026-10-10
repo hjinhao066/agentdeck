@@ -3046,6 +3046,8 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
       result = ClaudeSeats.mobileState();
     } else if (op === 'relay-switch') {
       result = ClaudeSeats.mobileSwitch(input);
+    } else if (op === 'board-action') {
+      result = await MainSession.boardAction(input);
     } else throw new Error('未知网页操作。');
     window.deck.mobileRespond({ requestId: id, result });
   } catch (error) { window.deck.mobileRespond({ requestId: id, error: error.message }); }

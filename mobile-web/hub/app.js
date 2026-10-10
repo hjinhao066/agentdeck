@@ -37,6 +37,8 @@
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
     todo: '<rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8M13 12h8M13 18h8"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    now: '<path d="M13 2.8 5 13.4h6.2L10.6 21.2 19 10.4h-6.3z"/>',
+    top: '<path d="M5 4h14"/><path d="M12 20V8.5"/><path d="m7 13 5-5 5 5"/>',
     file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
     download: '<path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/>',
@@ -241,7 +243,7 @@
     // until a snapshot fails again.
     if (!m.current) {
       const info = Core.classifyInfo(await request(m, 'api/info'));
-      if (info.current) { m.current = true; m.dedupe = info.dedupe; } else settle(m, null, info);
+      if (info.current) { m.current = true; m.dedupe = info.dedupe; m.taskActions = !!info.taskActions; } else settle(m, null, info);
     }
     const result = m.current ? await request(m, 'api/snapshot') : null;
     if (m.current && settle(m, result).state !== 'online') m.current = false;
@@ -1563,11 +1565,72 @@
     mark.setAttribute('role', 'img'); mark.setAttribute('aria-label', '高优先级'); mark.title = '高优先级：你点名要优先做的事';
     return mark;
   }
+  // 下一个做 (排到最前): the one 待办 card 队长 sends out next. It leads its status.
+  const nextTask = (task) => !!task.next_up && task.status === 'todo' && !task.archived;
+  function nextMark() {
+    const mark = node('span', 'task-prio task-next');
+    mark.innerHTML = svg('top');
+    mark.append(node('span', '', '下一个做'));
+    mark.setAttribute('role', 'img'); mark.setAttribute('aria-label', '下一个做'); mark.title = '下一个做：你点了「排到最前」，队长下一个就派它';
+    return mark;
+  }
+  // 马上派人做 / 排到最前 (docs/task-board-api.md): sent to one computer (Core.taskActionMachine),
+  // which decides as for a click on its own board. The answer stays on the card until the next one.
+  const taskHints = new Map(), taskBusy = new Set();
+  // A request with no 队长 to take it names the computer it waits on.
+  function waitingOn(text, task, known) {
+    const owner = task.dispatch_now && known.find((m) => m.hostname && String(m.hostname).toLowerCase().replace(/\.(local|lan)$/, '') === String(task.dispatch_now.host || '').toLowerCase().replace(/\.(local|lan)$/, ''));
+    return owner ? text.replace(/^这台电脑/, owner.label + ' ') : text;
+  }
+  async function taskAction(task, op) {
+    const m = Core.taskActionMachine(task, machines);
+    if (!m) { taskHints.set(task.id, { text: '现在没有能接这个请求的电脑在线（要已登录、并且 AgentDeck 是新版本）。', error: true }); renderBoard(); return; }
+    taskBusy.add(task.id); taskHints.delete(task.id); renderBoard();
+    const result = await post(m, 'api/tasks', { op, id: task.id });
+    taskBusy.delete(task.id);
+    if (result.status === 200 && result.body && result.body.ok) {
+      const outcome = result.body.outcome;
+      taskHints.set(task.id, { text: op === 'next-up' ? `已排到最前，${m.label} 的队长下一个派它。`
+        : outcome === 'waiting' ? `${m.label} 没有队长，打开队长后才会派。` : outcome === 'pending' ? '已经交给队长了，等它派人。' : `已交给 ${m.label} 的队长，等它派人。` });
+      // read the board again: the card now carries the request or the mark
+      m.boardVersion = null; poll(m);
+    } else taskHints.set(task.id, { text: Core.taskActionFailure(result, m.label), error: true });
+    renderBoard();
+  }
+  function taskActions(task, known) {
+    const box = node('div', 'task-actions');
+    const now = Core.dispatchNowState(task), next = Core.nextUpState(task), busy = taskBusy.has(task.id);
+    const button = (cls, icon, text, state, run) => {
+      const b = node('button', 'task-act ' + cls); b.type = 'button';
+      b.innerHTML = svg(icon); b.append(node('span', '', text));
+      b.disabled = busy || !state.enabled;
+      if (!state.enabled) b.title = waitingOn(state.reason, task, known);
+      b.addEventListener('click', run);
+      return b;
+    };
+    const go = button('now', 'now', now.pending ? '已交给队长' : '马上派人做', now, () => taskAction(task, 'dispatch-now'));
+    const top = button('next', 'top', next.on ? '下一个做' : '排到最前', next, () => taskAction(task, 'next-up'));
+    top.setAttribute('aria-pressed', String(!!next.on));
+    const row = node('div', 'task-act-row'); row.append(go, top);
+    box.append(row);
+    // Each thing is said once: a waiting request is on the card's own line (task-asked) and a
+    // 下一个做 card wears its mark, so a success note goes once the board shows it.
+    let hint = taskHints.get(task.id);
+    if (hint && !hint.error && (Core.dispatchNote(task) || nextTask(task))) hint = null;
+    const why = busy ? '正在交给电脑…' : hint ? hint.text : now.enabled || now.pending ? '' : waitingOn(now.reason, task, known);
+    if (why) {
+      const line = node('p', 'task-act-why' + (hint && hint.error ? ' error' : ''), why);
+      if (hint && hint.error) line.setAttribute('role', 'alert');
+      line.id = 'task-why-' + task.id; go.setAttribute('aria-describedby', line.id);
+      box.append(line);
+    }
+    return box;
+  }
   function renderBoard() {
     const sources = machines.filter((m) => m.cards);
     const cards = Core.mergeCards(sources).filter((card) => !card.archived);
     const known = machines.map((m) => ({ id: m.id, label: m.label, hostname: m.hostname || m.meta.hostname }));
-    if (!changed($('projects'), [boardFilter, cards, known, machines.map((m) => [m.state, !!m.cards])])) return;
+    if (!changed($('projects'), [boardFilter, cards, known, machines.map((m) => [m.state, !!m.cards, !!m.taskActions, !!m.csrf]), [...taskHints], [...taskBusy]])) return;
     const missing = machines.filter((m) => !m.cards);
     $('board-sources').textContent = !sources.length ? '还没有读到任何一台电脑的看板。'
       : missing.length ? `现在只有 ${sources.map((m) => m.label).join('、')} 看到的看板；${missing.map((m) => `${m.label} ${Core.STATES[m.state].label}`).join('，')}。`
@@ -1599,13 +1662,15 @@
       const section = node('section', 'project'), heading = node('div', 'project-heading');
       heading.append(node('h2', '', project), node('span', '', tasks.length + ' 项'));
       section.append(heading);
-      for (const task of tasks.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || urgentTask(b) - urgentTask(a))) {
+      for (const task of tasks.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || nextTask(b) - nextTask(a) || urgentTask(b) - urgentTask(a))) {
         // A path in the card opens from the computer that claimed it; an unclaimed card, from the copy shown.
         const ran = Core.ownerMachine(task, known);
         const card = node('article', 'task-card'); card.dataset.status = task.status; card.dataset.machine = ran ? ran.id : task.seenOn || '';
         card.style.setProperty('--lane', String(used.findIndex(([status]) => status === task.status) + 1 || 1));
         const top = node('div', 'task-top');
-        if (urgentTask(task)) { card.dataset.priority = 'high'; top.append(priorityMark()); }
+        card.dataset.taskId = task.id;
+        if (nextTask(task)) { card.dataset.priority = 'high'; card.dataset.next = 'true'; top.append(nextMark()); }
+        else if (urgentTask(task)) { card.dataset.priority = 'high'; top.append(priorityMark()); }
         top.append(node('span', 'task-status', (taskStatuses.find(([status]) => status === task.status) || [0, task.status])[1]));
         if (task.flag) top.append(node('span', 'task-flag ' + task.flag, Core.cardFlag(task)));
         const owner = Core.ownerLabel(task, known);
@@ -1614,7 +1679,12 @@
         if (task.assignee) card.append(node('p', 'task-assignee', [task.assignee.agent, task.assignee.model].filter(Boolean).join(' · ')));
         // a 需要你 card shows its whole question, as the desktop's 需要你决定 does
         const receipt = Core.cardQuestion(task) || Core.cardReceipt(task);
+        // 马上派人做 waiting for a worker: said on the card, above its last receipt
+        const asked = Core.dispatchNote(task);
+        if (asked) card.append(node('p', 'task-asked', waitingOn(asked, task, known)));
         if (receipt) card.append(markdownNode(receipt, { reply: true, className: 'task-receipt' }));
+        // a finished card has nothing left to send out
+        if (task.status !== 'done') card.append(taskActions(task, known));
         section.append(card);
       }
       projects.append(section);

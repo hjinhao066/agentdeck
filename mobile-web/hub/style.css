@@ -216,6 +216,22 @@ textarea::placeholder { color: var(--muted); }
 .task-prio { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 6px; border-radius: 99px; background: var(--prio); color: var(--prio-ink); font-weight: 700; white-space: nowrap; }
 .task-prio svg { width: 12px; height: 12px; }
 .task-card[data-priority="high"] { border-left: 3px solid var(--prio); padding-left: 14px; }
+/* 下一个做: the one card the Captain sends out next */
+.task-card[data-next="true"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--prio) 45%, transparent); }
+.task-asked { margin-top: 6px; color: var(--prio); font-size: 12.5px; font-weight: 650; line-height: 1.5; }
+/* 马上派人做 (main) and 排到最前 (second); a grey one says why underneath */
+.task-actions { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.task-act-row { display: flex; gap: 8px; }
+.task-act { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 44px; padding: 0 12px; border-radius: 12px; font-size: 14px; font-weight: 650; white-space: nowrap; }
+.task-act svg { flex: none; width: 16px; height: 16px; }
+.task-act.now { flex: 1 1 auto; border: 0; background: var(--accent); color: var(--accent-ink); }
+.task-act.next { flex: 0 1 auto; border: 1px solid color-mix(in srgb, var(--prio) 55%, transparent); background: transparent; color: var(--prio); }
+.task-act.next[aria-pressed="true"] { background: var(--prio); border-color: var(--prio); color: var(--prio-ink); }
+.task-act:disabled { cursor: default; opacity: 1; }
+.task-act.now:disabled { background: var(--soft); color: var(--secondary); }
+.task-act.next:disabled:not([aria-pressed="true"]) { border-color: var(--line-strong); color: var(--muted); }
+.task-act-why { margin-top: 7px; color: var(--secondary); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.task-act-why.error { color: var(--bad); }
 .task-card h3 { font-size: 14px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
 .task-assignee { font: 11px/1.6 var(--mono); color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
 .task-receipt { color: var(--secondary); font-size: 12px; line-height: 1.6; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }

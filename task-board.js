@@ -101,7 +101,7 @@ function syncedCard(input) {
   if (input.dispatch_claim && typeof input.dispatch_claim === 'object' && typeof input.dispatch_claim.key === 'string') {
     card.dispatch_claim = { key: idValue(input.dispatch_claim.key), owner: text(String(input.dispatch_claim.owner || ''), 'owner').slice(0, 200), delivered: input.dispatch_claim.delivered === true, created: typeof input.dispatch_claim.created === 'string' ? input.dispatch_claim.created : card.updated };
   }
-  for (const key of ['session_host', 'session_bound_at', 'dispatch_host', 'dispatch_bound_at', 'dispatch_wait', 'resource_failure', 'user_question', 'needs_user_entry', 'review_round', 'exec_receipt', 'review_claim', 'review_block', 'review_reject']) {
+  for (const key of ['session_host', 'session_bound_at', 'dispatch_host', 'dispatch_bound_at', 'dispatch_wait', 'resource_failure', 'user_question', 'needs_user_entry', 'review_round', 'exec_receipt', 'review_claim', 'review_block', 'review_reject', 'dispatch_now', 'next_up']) {
     if (input[key] !== undefined) card[key] = JSON.parse(JSON.stringify(input[key]));
   }
   return card;
@@ -396,6 +396,9 @@ class TaskStore {
     if (wasReview && input.status === 'doing') { card.attempt_id = null; card.attempt_closed = true; }
     card.archived = false; card.resource_failure = null; card.dispatch_wait = null;
     if (input.status !== 'doing') card.dispatch_claim = null;
+    // 下一个做 belongs to a 待办 card; a finished card has no 马上派人做 waiting.
+    if (input.status !== 'todo') delete card.next_up;
+    if (input.status === 'done') delete card.dispatch_now;
     // A move is a Captain/user decision: it replaces any pending automatic rework or block.
     if (card.review_block) card.review_block = null;
     if (card.review_reject) card.review_reject.delivered = true;
@@ -444,6 +447,62 @@ class TaskStore {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id);
       if ((card.important === true) !== important) { card.important = important; touch(card); }
+      if (!important && card.next_up) { delete card.next_up; touch(card); }
+      return { card, notices: [] };
+    });
+  }
+  // 马上派人做: the user asks 队长 to put a worker on this card now. The card keeps
+  // its column; the request waits on it ({at, host, delivered}) until the renderer
+  // has handed it to this computer's 队长 (dispatchNowDelivered), and goes when a
+  // worker is bound to the card (bind) or the card is done. A second click while
+  // it waits changes nothing. Refused, with the reason, where no new worker can start.
+  dispatchNow(input) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      if (card.archived || card.status === 'done') throw new Error('这张卡已经完成了，不用再派');
+      if (this.activeAttempt(card)) throw new Error('已经有队员在做这张卡了');
+      if (card.status === 'needs_user') throw new Error('这张卡在等你回答，先回答它');
+      if (card.depends_on.some((id) => this.find(docs, id).status !== 'done')) throw new Error('前面的卡还没做完，现在派不了');
+      if (card.dispatch_now) return { card, ignored: true, notices: [] };
+      card.dispatch_now = { at: new Date().toISOString(), host: os.hostname(), delivered: false };
+      touch(card);
+      return { card, notices: [] };
+    });
+  }
+  // The requests made on this computer that its 队长 has not been told about yet.
+  dispatchNowWaiting() {
+    return this.list().filter((c) => c.dispatch_now && c.dispatch_now.delivered !== true && c.dispatch_now.host === os.hostname() && c.status !== 'done');
+  }
+  // Marks one request as handed over, once (a request made again has a new `at`).
+  dispatchNowDelivered(input) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      if (!card.dispatch_now || card.dispatch_now.at !== input.at || card.dispatch_now.delivered === true) return { card, ignored: true, notices: [] };
+      card.dispatch_now = { ...card.dispatch_now, delivered: true };
+      touch(card);
+      return { card, notices: [] };
+    });
+  }
+  // 排到最前: 高优先级, first in its project, and the one card marked 下一个做 (any
+  // earlier mark, in any project, goes). Only a 待办 card can be put first.
+  nextUp(input) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      if (card.archived || card.status === 'done') throw new Error('这张卡已经完成了');
+      if (card.status !== 'todo') throw new Error('只有待办里的卡能排到最前');
+      for (const { doc } of docs.values()) for (const other of doc.cards) if (other !== card && other.next_up) { delete other.next_up; touch(other); }
+      const byOrder = (a, b) => a.order - b.order || a.id.localeCompare(b.id);
+      const rest = docs.get(card.project).doc.cards.filter((c) => c !== card).sort(byOrder);
+      let changed = false;
+      if (rest.length && !(card.order < rest[0].order)) {
+        const order = rest[0].order / 2;
+        if (order < rest[0].order) card.order = order;
+        else { card.order = 0; rest.forEach((c, i) => { if (c.order !== i + 1) { c.order = i + 1; touch(c); } }); }
+        changed = true;
+      }
+      if (card.important !== true) { card.important = true; changed = true; }
+      if (!card.next_up) { card.next_up = new Date().toISOString(); changed = true; }
+      if (changed) touch(card);
       return { card, notices: [] };
     });
   }
@@ -520,6 +579,8 @@ class TaskStore {
       Object.assign(card, { session_id: input.session_id, session_host: os.hostname(), session_bound_at: Date.now(), attempt_id: input.attempt_id, assignee: input.assignee,
         review_session: review, review_verdict: explicitReview, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
       card.flag = null;
+      // A worker took the card: the user's 马上派人做 / 下一个做 is answered.
+      delete card.dispatch_now; delete card.next_up;
       if (card.dispatch_claim) card.dispatch_claim.delivered = true;
       if ((review || execResume) && card.review_claim) card.review_claim.delivered = true;
       // Someone (the Captain, or the automatic rework itself) took the card on.

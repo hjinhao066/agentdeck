@@ -51,7 +51,10 @@
     const { status, body } = result;
     if (status === 200) {
       // dedupe: the computer takes a message's deduplicationKey once, so a retry is safe.
-      if (body && body.app === 'agentdeck' && body.apiVersion >= 2 && Array.isArray(body.capabilities) && body.capabilities.includes('snapshot')) return { current: true, dedupe: body.capabilities.includes('send-dedupe') };
+      if (body && body.app === 'agentdeck' && body.apiVersion >= 2 && Array.isArray(body.capabilities) && body.capabilities.includes('snapshot')) {
+        // taskActions: the computer takes 马上派人做 / 排到最前 (POST api/tasks)
+        return { current: true, dedupe: body.capabilities.includes('send-dedupe'), ...(body.capabilities.includes('task-actions') ? { taskActions: true } : {}) };
+      }
       if (body && typeof body === 'object') return { state: 'upgrade' };
       return { state: 'error', detail: '入口返回了看不懂的内容。' };
     }
@@ -219,6 +222,55 @@
     if (/^已结束，未提交回执/.test(text)) return '队员停下了，但没有交结果。';
     if (/^调度已结束/.test(text)) return '这件事还没有派给队员。';
     return text;
+  }
+
+  // 马上派人做 / 排到最前 (docs/task-board-api.md): when each button is grey and why,
+  // in one set of words for the desktop board and the phone. The board file refuses
+  // the same cases (task-board.js dispatchNow / nextUp).
+  // Someone is on the card: a worker or reviewer bound to it whose attempt is still open and did not
+  // fail (a 待办 card holds a session only between 队长's `new --task-id` and the worker starting).
+  function cardOnIt(card) {
+    return ['todo', 'doing', 'review'].includes(card.status) && !!card.session_id && card.attempt_closed !== true && !['failed', 'quota', 'held'].includes(card.flag);
+  }
+  const isDone = (card) => card.archived === true || card.status === 'done';
+  function dispatchNowState(card) {
+    if (isDone(card)) return { enabled: false, reason: '这张卡已经完成了，不用再派' };
+    if (cardOnIt(card)) return { enabled: false, reason: '已经有队员在做这张卡了' };
+    if (card.status === 'needs_user') return { enabled: false, reason: '这张卡在等你回答，先回答它' };
+    if (card.flag === 'blocked') return { enabled: false, reason: '前面的卡还没做完，现在派不了' };
+    if (card.dispatch_now) return { enabled: false, reason: card.dispatch_now.delivered ? '已经交给队长了，等它派人' : '这台电脑没有队长，打开队长后才会派', pending: true };
+    return { enabled: true, reason: '' };
+  }
+  // The card's line while the request waits for a worker ('' otherwise).
+  function dispatchNote(card) {
+    if (!card || !card.dispatch_now || isDone(card) || cardOnIt(card)) return '';
+    return card.dispatch_now.delivered ? '已交给队长 · 等派人' : '这台电脑没有队长，打开队长后才会派';
+  }
+  function nextUpState(card) {
+    if (isDone(card)) return { enabled: false, reason: '这张卡已经完成了' };
+    if (card.status !== 'todo') return { enabled: false, reason: '只有待办里的卡能排到最前' };
+    if (card.next_up) return { enabled: false, reason: '已经排在最前，队长下一个派它', on: true };
+    return { enabled: true, reason: '' };
+  }
+  // Which computer the phone asks: the one that holds a waiting request (its 队长 is the
+  // one to tell), else the one that ran the card, else one with a 队长, else any online
+  // computer whose build takes the two actions. null: none can be asked now.
+  function taskActionMachine(card, machines) {
+    const ready = machines.filter((m) => m.state === 'online' && m.csrf && m.taskActions);
+    const named = (name) => name && ready.find((m) => m.hostname && host(m.hostname) === host(name));
+    return named(card.dispatch_now && card.dispatch_now.host) || named(card.dispatch_claim && card.dispatch_claim.owner)
+      || ready.find((m) => m.meta && m.meta.captainStatus && m.meta.captainStatus !== 'unavailable') || ready[0] || null;
+  }
+
+  // Why the phone's 马上派人做 / 排到最前 did not go through, in a sentence.
+  function taskActionFailure(result, name) {
+    if (!result || result.failed) return `没连上 ${name}，没有交出去。`;
+    if (result.timedOut) return `${name} 没有响应，可能没交出去，刷新看看。`;
+    if (result.status === 401) return `${name} 需要重新登录。`;
+    if (result.status === 403) return `${name} 的安全校验已过期，刷新后再点。`;
+    if (result.status === 404) return `${name} 上的 AgentDeck 版本还不支持，升级后再点。`;
+    if ((result.status === 409 || result.status === 400) && result.body && typeof result.body.error === 'string' && /[\u4e00-\u9fff]/.test(result.body.error)) return result.body.error.slice(0, 120);
+    return `${name} 没有接下这个请求（HTTP ${result.status}）。`;
   }
 
   // ---- conversation --------------------------------------------------------
@@ -654,7 +706,7 @@
     return `${name} 没有记下这条（HTTP ${result.status}）。`;
   }
 
-  return { cleanTodos, todoAiChip, todoAiBefore, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt, cardQuestion,
+  return { cleanTodos, todoAiChip, todoAiBefore, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt, cardQuestion, dispatchNowState, dispatchNote, nextUpState, taskActionMachine, taskActionFailure,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, rowHealth, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 

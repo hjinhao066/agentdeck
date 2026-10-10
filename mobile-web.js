@@ -106,6 +106,13 @@ function todoRequest(body) {
   }
   return { op: 'update', id: body.id, done: body.done, ...(base ? { base } : {}) };
 }
+// 马上派人做 / 排到最前 from the phone's task board: one op and one card id, nothing else.
+const TASK_ACTIONS = ['dispatch-now', 'next-up'];
+function taskActionRequest(body) {
+  if (!body || typeof body !== 'object' || Object.keys(body).some((key) => key !== 'op' && key !== 'id')) return null;
+  if (!TASK_ACTIONS.includes(body.op) || typeof body.id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(body.id)) return null;
+  return { op: body.op, id: body.id };
+}
 const RELAY_REASONS = ['', 'current', 'login', 'onboarding', 'exhausted', 'low', 'unknown'];
 // The battery setting as the phone may see it: fixed fields only.
 function batteryView(data) {
@@ -256,8 +263,8 @@ class MobileWebServer {
     this.preview = preview;
     this.previewTexts = { at: 0, texts: [] };
     // 待我处理: the list, and the user's read / reply / tick from the phone.
-    const { getAttention, writeAttention, getBattery, setBattery } = arguments[0] || {};
-    Object.assign(this.sources, { getAttention, writeAttention, getBattery, setBattery });
+    const { getAttention, writeAttention, getBattery, setBattery, writeTasks } = arguments[0] || {};
+    Object.assign(this.sources, { getAttention, writeAttention, getBattery, setBattery, writeTasks });
     this.settings = { enabled: false, token: '', port: DEFAULT_PORT, publicOrigin: '', devices: [] };
     this.server = null;
     this.error = '';
@@ -563,7 +570,7 @@ class MobileWebServer {
     // Fixed, non-sensitive fields only; no hostname, exact app version, token,
     // device or app data.
     if (req.method === 'GET' && route === '/api/info') {
-      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', 'send-dedupe', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : []), ...(this.sources.getBattery && this.sources.setBattery ? ['battery'] : []), ...(this.sources.getProgress ? ['progress'] : [])],
+      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', 'send-dedupe', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : []), ...(this.sources.getBattery && this.sources.setBattery ? ['battery'] : []), ...(this.sources.getProgress ? ['progress'] : []), ...(this.sources.writeTasks ? ['task-actions'] : [])],
         machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform } });
     }
     if (route === '/login' && req.method === 'POST') {
@@ -718,6 +725,21 @@ class MobileWebServer {
       catch (err) { return this.json(res, 400, { error: String(err?.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 200) || '没有改成。' }); }
       return this.json(res, 200, batteryView(view));
     }
+    // 马上派人做 / 排到最前 on a card: the same login, Origin, Fetch Metadata and CSRF
+    // checks as a message to the Captain, re-checked after the body is read. Only these
+    // two actions; the desktop decides (and refuses with a reason) as for its own click.
+    if (req.method === 'POST' && route === '/api/tasks' && this.sources.writeTasks) {
+      let body;
+      try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
+      const input = taskActionRequest(body);
+      if (!input) return this.json(res, 400, { error: 'Invalid task request.' });
+      if (!this.writeCredential(req, res, prefixed)) return;
+      let result;
+      try { result = await this.sources.writeTasks(input); }
+      catch (err) { return this.json(res, 409, { error: String(err?.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 200) || '没有成功。' }); }
+      const card = result && result.card ? { id: String(result.card.id || ''), title: String(result.card.title || '').slice(0, 200) } : null;
+      return this.json(res, 200, { ok: true, outcome: String(result?.outcome || '').slice(0, 20), card });
+    }
     // 随手记待办: the same login, Origin, Fetch Metadata and CSRF checks as a
     // message to the Captain, re-checked after the body is read.
     if (req.method === 'GET' && route === '/api/todos' && this.sources.getTodos) {
@@ -777,4 +799,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, batteryView, quotaView, relayView, attentionView, attentionRequest, todoRequest, TODO_BASE_KEYS, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };
+module.exports = { MobileWebServer, batteryView, quotaView, relayView, attentionView, attentionRequest, todoRequest, taskActionRequest, TODO_BASE_KEYS, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };

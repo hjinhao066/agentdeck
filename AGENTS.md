@@ -196,6 +196,11 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   executor's own provider/model family, never mark a card done without a clear
   reviewer verdict, and keep it inside the ordinary `new` queue and limits. Tests must
   use the isolated profile task store and stand-in agents, never real shared data.
+- 马上派人做 / 排到最前 (`docs/task-board-api.md`): the card's `dispatch_now` request reaches 队长 only on the
+  receipts channel (`boardNotice`), never typed into its box; it is marked delivered under the board lock before
+  the notice, so 队长 hears it once, and only the computer that recorded it hands it over. 队长 answers with
+  `new --task-id` (reads the card first; one line back if a worker is already on it). The phone's `POST api/tasks`
+  takes only these two ops behind the usual login/Origin/CSRF checks. One `next_up` card on the whole board.
 - Clearing the 队长's context keeps the old chat as a `captainArchive` file under
   the old id. The 队长 column shows those read-only from the chats already loaded
   (no terminal restart, no new main-process read); they never enter its model context.

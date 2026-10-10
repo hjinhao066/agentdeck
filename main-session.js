@@ -253,6 +253,67 @@
     priorityChanged();
     return `已把${col ? `会话 ${col.id}「${host.columnLabel(col)}」` : `排队中的「${waiting.title}」`}${word}。`;
   }
+  // ---- 马上派人做 / 排到最前 (the two buttons on a card, desktop and phone) ----
+  // 马上派人做 asks 队长 to put a worker on the card now. It goes the way a 待办 handed
+  // to 队长 goes: one line on the receipts channel (receipts --wait), never typed into
+  // 队长's box. The request is recorded on the card first; with no 队长 on this computer
+  // it waits there and is handed over once one exists (create, init, a board change).
+  // 队长 answers with `new --task-id`, which clears it (task-board.js bind).
+  const dispatchWords = (card) => `用户要求马上派：${card.title}（${card.id}）。项目：${card.project}。` +
+    `请读这张卡（task list），用 new --task-id ${card.id} --project ${JSON.stringify(card.project)} 派一个队员；已经派了就回一句派给了谁。`;
+  const handingOver = new Set();
+  async function handOverDispatch(card) {
+    const key = card.id + '\n' + card.dispatch_now.at;
+    if (handingOver.has(key) || !mainCol()) return false;
+    handingOver.add(key);
+    try {
+      // marked first, under the board lock: two calls never both tell 队长
+      const marked = await boardRequest('dispatchNowDelivered', { id: card.id, at: card.dispatch_now.at });
+      if (marked.ignored) return false;
+      boardNotice(dispatchWords(marked.card));
+      return true;
+    } finally { handingOver.delete(key); }
+  }
+  let dispatchSweep = null;
+  function deliverWaitingDispatch() {
+    if (!mainCol() || dispatchSweep) return dispatchSweep;
+    dispatchSweep = (async () => {
+      try {
+        // a plain read first: only a board holding an undelivered request asks which are this computer's
+        const all = await window.deck.taskBoard('list', {});
+        if (!Array.isArray(all) || !all.some((c) => c && c.dispatch_now && c.dispatch_now.delivered !== true)) return;
+        for (const card of await window.deck.taskBoard('dispatchNowWaiting', {})) await handOverDispatch(card);
+      }
+      catch (_) { /* the next board change or start tries again */ }
+      finally { dispatchSweep = null; }
+    })();
+    return dispatchSweep;
+  }
+  // outcome: 'delivered' (队长 has it), 'waiting' (no 队长 here yet) or 'pending' (asked before, still waiting).
+  async function dispatchNow(id) {
+    const result = await boardRequest('dispatchNow', { id: String(id || '') });
+    if (result.ignored) return { card: result.card, outcome: 'pending' };
+    if (!mainCol()) return { card: result.card, outcome: 'waiting' };
+    await handOverDispatch(result.card);
+    return { card: result.card, outcome: 'delivered' };
+  }
+  // 排到最前: 高优先级 + first in its project + the one 下一个做 card. 队长 hears of it
+  // once, so the next worker it sends goes to this card.
+  async function nextUp(id) {
+    const before = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === id);
+    const { card } = await boardRequest('nextUp', { id: String(id || '') });
+    await refreshPriority();
+    if (before && !before.next_up && mainCol()) {
+      boardNotice(`用户在任务看板把卡片 ${card.id}「${card.title}」排到了最前（项目：${card.project}）：它是下一个要做的，有空位就先派它，排在其他待办前面。`);
+    }
+    return { card, outcome: 'next' };
+  }
+  // The phone's two actions (mobile-web.js POST api/tasks), through the same code as a click.
+  function boardAction(input) {
+    if (input?.op === 'dispatch-now') return dispatchNow(input.id);
+    if (input?.op === 'next-up') return nextUp(input.id);
+    throw new Error('看板操作无效。');
+  }
   let boardWrites = Promise.resolve();
   function boardEvent(task, type, message = '', source = '', files) {
     if (!task.boardId) return Promise.resolve();
@@ -426,6 +487,8 @@
     answer,
     // The user's own click: mark a card 高优先级 or ordinary again.
     setPriority: (id, level) => setPriority(id, level, true),
+    // 马上派人做 / 排到最前: { card, outcome }
+    dispatchNow, nextUp,
     settings: (dispatcher) => {
       if (dispatcher !== undefined) {
         if (!['captain', 'gemini'].includes(dispatcher)) throw new Error('dispatcher must be captain or gemini.');
@@ -609,6 +672,7 @@
     save();
     window.Sidebar.render();
     brief(col);
+    deliverWaitingDispatch();
     return col;
   }
   // The instructions go straight into the terminal; they are not a user bubble.
@@ -3620,8 +3684,9 @@
       syncEffectiveCap();
     }
     Bat()?.shared.onChange(syncEffectiveCap);
-    window.deck.onTasksChanged?.(() => { refreshPriority(); });
+    window.deck.onTasksChanged?.(() => { refreshPriority(); deliverWaitingDispatch(); });
     refreshPriority();
+    deliverWaitingDispatch();
     // Briefed (or only told the app restarted) once its terminal is back: captainRelaunched.
     if (mainCol()) { startupBrief = mainCol().id; if (mainCol().cmd) briefing = startupBrief; }
   }
@@ -3629,7 +3694,7 @@
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onPower, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch, launchBlocked,
-    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice, automation,
+    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice, automation, boardAction,
     // 小队长: the renderer calls releaseSubCrew(col, '归档'|'关掉') once a sub-captain's column left the deck
     releaseSubCrew,
     // ... and subCaptainIdChanged(oldId, newId) once respawnColumn gave a sub-captain's column a new id

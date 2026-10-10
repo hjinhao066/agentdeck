@@ -68,8 +68,12 @@
   // carries the full mark. A finished one keeps a quiet mark and its place.
   function isHigh(card) { return !!card && card.important === true; }
   function isUrgent(card) { return isHigh(card) && card.status !== 'done' && !card.archived; }
+  // 下一个做 (排到最前): the one 待办 card 队长 sends out next. It leads its column,
+  // ahead of the other 高优先级 cards.
+  function isNextUp(card) { return !!card && !!card.next_up && card.status === 'todo' && !card.archived; }
   function urgentFirst(items, cardOf = (x) => x) {
-    return [...items.filter((x) => isUrgent(cardOf(x))), ...items.filter((x) => !isUrgent(cardOf(x)))];
+    const rank = (x) => (isNextUp(cardOf(x)) ? 0 : isUrgent(cardOf(x)) ? 1 : 2);
+    return [0, 1, 2].flatMap((r) => items.filter((x) => rank(x) === r));
   }
 
   // Unfinished prerequisites, resolved against every card we can see (archived
@@ -102,6 +106,8 @@
   // What a 需要你 card asks the user, whole, or '' (the board then says so).
   const userQuestion = (card) => hub().cardQuestion(card);
   const flagText = (card) => hub().cardFlag(card);
+  // 马上派人做: '已交给队长 · 等派人' while the request waits for a worker, else ''.
+  const dispatchNote = (card) => hub().dispatchNote(card);
 
   // Absolute / home-relative file paths mentioned in a text, in first-seen order.
   function filePaths(...texts) {
@@ -156,7 +162,7 @@
       const lane = lanes.get(projectKey(card.project));
       const waits = waitsOn(card, index);
       const status = columnOf(card);
-      lane.columns.find((c) => c.key === status).cards.push({ card, waits, waitLabel: waitLabel(waits), parallel: canRunParallel(card, waits), question: userQuestion(card), high: isHigh(card), urgent: isUrgent(card) });
+      lane.columns.find((c) => c.key === status).cards.push({ card, waits, waitLabel: waitLabel(waits), parallel: canRunParallel(card, waits), question: userQuestion(card), high: isHigh(card), urgent: isUrgent(card), next: isNextUp(card) });
       lane.counts[status]++; lane.total++;
       if (status !== 'done') lane.open++;
       if (isUrgent(card)) lane.urgent++;
@@ -251,6 +257,9 @@
   // card) whether anyone is really on it, else the first line of its brief.
   function activity(card, waitText, runLabel) {
     const firstLine = (t) => String(t || '').trim().split(/\r?\n/)[0].trim();
+    // the user's 马上派人做 is the newest thing on the card until a worker takes it
+    const asked = dispatchNote(card);
+    if (asked) return { text: asked, tone: 'wait' };
     if (card.flag === 'failed' || card.flag === 'quota') return { text: firstLine(receiptText(card)) || (card.flag === 'quota' ? '额度、登录或限流问题' : '执行失败，没有写明原因'), tone: 'failed' };
     if (card.flag === 'held') return { text: '已挂起，等队长放行', tone: 'wait' };
     // An automatic review that could not be started says why and that 队长 has it.
@@ -291,5 +300,5 @@
     return m && m !== 'default' ? String(m) : '';
   }
 
-  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, isHigh, isUrgent, urgentFirst, waitsOn, canRunParallel, waitLabel, buildBoard, dependencyLinks, linkRoute, roundedPath, progress, userQuestion, receiptText, flagText, filePaths, activity, moreLabel, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
+  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, isHigh, isUrgent, isNextUp, urgentFirst, waitsOn, canRunParallel, waitLabel, buildBoard, dependencyLinks, linkRoute, roundedPath, progress, userQuestion, receiptText, flagText, dispatchNote, filePaths, activity, moreLabel, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
 });
