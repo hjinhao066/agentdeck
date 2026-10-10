@@ -17,10 +17,14 @@ const defaultDir = () => process.env.AGENTDECK_E2E_QUEUE_DIR
   || path.join(process.platform === 'win32' ? os.tmpdir() : '/tmp', 'agentdeck-e2e-queue');
 
 // Start time of a process; tells a live holder apart from a new process that reused its pid.
+// Always read in one format: `ps` prints it in the reader's locale and time zone, and a waiter
+// compares it with what the holder recorded in its own environment.
 function processIdentity(pid) {
   if (process.platform === 'win32') return null;
+  const env = { ...process.env, LC_ALL: 'C', LANG: 'C' };
+  delete env.TZ;
   try {
-    return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+    return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
   } catch { return null; }
 }
 
