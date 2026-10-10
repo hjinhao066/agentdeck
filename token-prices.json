@@ -56,14 +56,14 @@
       "source": "https://ai.google.dev/gemini-api/docs/pricing", "checked": "2026-10-09", "note": "官方型号 gemini-3.1-pro-preview。" },
 
     "grok-4.7": { "vendor": "xAI", "name": "Grok 4.7", "input": 2, "cacheRead": 0.5, "output": 6,
-      "over": { "prompt": 200000, "input": 4, "cacheRead": 1, "output": 12 },
-      "source": "https://docs.x.ai/developers/pricing", "checked": "2026-10-09" },
+      "over": { "prompt": 199999, "input": 4, "cacheRead": 1, "output": 12 },
+      "source": "https://docs.x.ai/developers/pricing", "checked": "2026-10-09", "note": "长提示档从 20 万 token 起（含 20 万），所以写成超过 199999。" },
     "grok-4.7-fast": { "vendor": "xAI", "name": "Grok 4.7 Fast", "input": 4, "cacheRead": 1, "output": 12,
       "over": { "prompt": 200000, "input": 6, "cacheRead": 1.5, "output": 18 },
       "source": "https://docs.x.ai/developers/pricing", "checked": "2026-10-09", "note": "同一个 Grok 4.7 跑在更快的机器上，官方价是标准价的 2 倍（长提示 1.5 倍）；只在 Cursor 和 Grok Build 里用得到。" },
     "grok-4.6": { "vendor": "xAI", "name": "Grok 4.6", "input": 2, "cacheRead": 0.5, "output": 6,
-      "over": { "prompt": 200000, "input": 4, "cacheRead": 1, "output": 12 },
-      "source": "https://docs.x.ai/developers/pricing", "checked": "2026-10-09" },
+      "over": { "prompt": 199999, "input": 4, "cacheRead": 1, "output": 12 },
+      "source": "https://docs.x.ai/developers/pricing", "checked": "2026-10-09", "note": "长提示档从 20 万 token 起（含 20 万）。" },
 
     "deepseek-v4-pro": { "vendor": "DeepSeek", "name": "DeepSeek V4 Pro", "input": 1.32, "cacheRead": 0.044, "output": 3.96,
       "offPeak": { "input": 0.66, "cacheRead": 0.022, "output": 1.98, "peakUtc": [[1, 4], [6, 10]] },

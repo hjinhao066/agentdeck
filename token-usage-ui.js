@@ -11,8 +11,9 @@
 // narrow for its days scrolls sideways inside its own box, opened at today.
 // The Token / 金额 switch redraws everything in dollars at each vendor's official
 // API price (token-prices.json, priced by the scanner); a model without one says
-// 无官方价 and is never drawn as $0. In 金额 the 订阅值不值 card weighs each Claude
-// account's dollars this billing cycle against its plan's price.
+// 无官方价 and is never drawn as $0. The 订阅值不值 card (in both units) weighs each
+// Claude account's dollars this billing cycle against its plan's price; the
+// dearest subscription leads, large, the others follow small to compare.
 (function () {
   'use strict';
   const C = window.TokenUsageCore;
@@ -375,16 +376,16 @@
   // ---- 订阅值不值: each Claude account's dollars this billing cycle against its plan ----
   const dayName = (day) => { const p = C.dayParts(day); return `${p.m}月${p.d}日`; };
   function renderValue(m) {
-    const rows = m.money && seats && data.seatCosts ? C.valueRows({ seatCosts: data.seatCosts, infos: seats, plans: data.plans || {}, starts, today: data.today, now: Date.now() }) : [];
+    const rows = seats && data.seatCosts ? C.valueRows({ seatCosts: data.seatCosts, infos: seats, plans: data.plans || {}, starts, today: data.today, now: Date.now() }) : [];
     valueEl.hidden = !rows.length;
     if (!rows.length) { valueEl.replaceChildren(); return; }
     const head = el('div', 'tu-value-head');
     head.append(el('h2', 'tu-value-title', '订阅值不值'), el('span', 'tu-value-note', '按 API 标价折算 · 只算本机日志'));
     const list = el('div', 'tu-value-list');
     const names = (ids) => ids.map((id) => { const s = seats.find((x) => x.id === id); return (s && s.name) || id; }).join('、');
-    for (const r of rows) {
+    rows.forEach((r, i) => {
       const v = r.value;
-      const item = el('div', 'tu-value-row');
+      const item = el('div', 'tu-value-row' + (i === 0 && rows.length > 1 ? ' lead' : ''));
       item.dataset.key = r.key;
       const who = el('div', 'tu-value-who');
       const name = el('span', 'tu-value-name', r.names.join(' / ') || '未登录');
@@ -427,7 +428,7 @@
       }
       item.append(who, times, nums, cycle);
       list.append(item);
-    }
+    });
     valueEl.replaceChildren(head, list);
   }
   function setStart(key, value) {

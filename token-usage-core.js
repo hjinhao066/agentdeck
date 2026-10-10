@@ -468,7 +468,9 @@
   // links to ~/.claude/projects) cannot be told apart and share a row, and two
   // directories signed in to one account are one row. infos: seats:list rows.
   // starts: a cycle start the user set, by row key; otherwise monthly from the
-  // first account's subscription day, else the calendar month.
+  // first account's subscription day, else the calendar month. The dearest
+  // subscription comes first (the page shows it large; the others are there to
+  // compare), then the biggest value.
   function valueRows({ seatCosts, infos, plans, starts, today, now }) {
     const byId = new Map((infos || []).filter((i) => i && i.id).map((i) => [i.id, i]));
     const usdOf = (p) => (typeof p === 'number' ? p : p && p.usd) || 0;
@@ -502,7 +504,7 @@
       return { key, names, seats: g.seats, plan: [...new Set(plansOf.filter(Boolean))].join(' + '), price, cycle, custom: !!set,
         value: subscriptionValue({ days: g.days, cycle, now, price }) };
     });
-    return rows.sort((a, b) => b.value.spent - a.value.spent || (a.key < b.key ? -1 : 1));
+    return rows.sort((a, b) => b.price - a.price || b.value.spent - a.value.spent || (a.key < b.key ? -1 : 1));
   }
 
   // The Token 用量 view's saved settings: the range, Token or 金额, and the cycle

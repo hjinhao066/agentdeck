@@ -68,6 +68,11 @@ test('cost: a long prompt moves the whole request to the long-context price; Dee
   near(usd(C.recordCost(rec('deepseek-v4-pro', { input: M, ts: at(5, 4) }), ds)), 0.66, 'Monday 04:30 UTC is off-peak');
   near(usd(C.recordCost(rec('deepseek-v4-pro', { input: M, ts: at(5, 9) }), ds)), 1.32);
   near(usd(C.recordCost(rec('deepseek-v4-pro', { input: M, ts: at(4, 2) }), ds)), 0.66, 'Sunday is off-peak');
+  // Grok's long tier starts at 200,000 prompt tokens (≥), Grok 4.7 Fast is twice the standard price
+  const grok = C.priceOf('grok-4.7', PRICES);
+  near(usd(C.recordCost(rec('grok-4.7', { input: 199999 }), grok)), 2 * 0.199999);
+  near(usd(C.recordCost(rec('grok-4.7', { input: 200000 }), grok)), 4 * 0.2);
+  near(usd(C.recordCost(rec('grok-4.7-high-fast', { input: 1000, cacheRead: 1000, output: 1000 }), C.priceOf('grok-4.7-high-fast', PRICES))), (4 + 1 + 12) / 1000);
 });
 
 test('Claude lines carry the 1-hour cache write, fast mode and US-only inference only when the log says so', () => {
@@ -151,7 +156,7 @@ test('value rows: one row per account; seats sharing a log directory share a row
     { id: 'us2', name: 'US2', accountEmail: 'paid@example.com', plan: 'Max 20x', subscribedAt: '2026-06-11T21:50:13Z', loggedIn: true },
   ];
   const rows = C.valueRows({ seatCosts, infos, plans: PRICES.plans, starts: { paid: '2026-10-08' }, today: '2026-10-09', now });
-  assert.deepEqual(rows.map((r) => r.key), ['paid', 'sub'], 'the biggest value first; a seat gone from the settings is left out');
+  assert.deepEqual(rows.map((r) => r.key), ['paid', 'sub'], 'the dearest plan first; a seat gone from the settings is left out');
   const [paid, sub] = rows;
   assert.equal(paid.plan, 'Max 20x');
   assert.equal(paid.price, 200);
@@ -170,6 +175,9 @@ test('value rows: one row per account; seats sharing a log directory share a row
   assert.equal(shared.length, 1);
   assert.equal(shared[0].key, 'other+sub');
   assert.equal(shared[0].price, 120);
+  // the dearest subscription leads (it is the one being weighed) even when a cheaper one has spent more
+  const lead = C.valueRows({ seatCosts: [seatCosts[0], { seats: ['us2'], days: { '2026-10-09': 5 } }], infos, plans: PRICES.plans, starts: {}, today: '2026-10-09', now });
+  assert.deepEqual(lead.map((r) => r.key), ['paid', 'sub']);
   // an unknown plan: no price, so no multiple
   const unknown = C.valueRows({ seatCosts: [seatCosts[1]], infos: [{ ...infos[2], plan: 'Team' }], plans: PRICES.plans, starts: {}, today: '2026-10-09', now });
   assert.equal(unknown[0].price, 0);

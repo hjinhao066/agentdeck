@@ -325,7 +325,8 @@ test('金额: dollars on every cap, in the tiles, the legend and the table; 无�
   const usd = view.locator('.tu-unit button[data-unit="usd"]');
   await expect(usd).toHaveText('金额');
   await expect(view.locator('.tu-unit button[data-unit="tokens"]')).toHaveAttribute('aria-pressed', 'true');
-  await expect(view.locator('.tu-value')).toBeHidden();
+  // the 订阅值不值 card is there in both units
+  await expect(view.locator('.tu-value')).toBeVisible({ timeout: 30000 });
   await usd.click();
   await expect(usd).toHaveAttribute('aria-pressed', 'true');
   await expect(view.locator('.tu-hero-num')).toHaveText(C.formatUsd(rangeCost(7)));
@@ -361,12 +362,17 @@ test('金额: dollars on every cap, in the tiles, the legend and the table; 无�
   await expect(opusRow.locator('td.strong')).toHaveText(C.formatUsd(usdOf(fixture.costs[miniDay]['claude:claude-opus-5-5'])));
   await page.mouse.move(5, 5);
 
-  // 订阅值不值: one row per account, the biggest value first, against its plan's price, this billing cycle
+  // 订阅值不值: one row per account against its plan's price, this billing cycle; the dearest
+  // plan leads, large, even though the Pro account here has spent more
   const card = view.locator('.tu-value');
   await expect(card).toBeVisible();
   const rows = card.locator('.tu-value-row');
   await expect(rows).toHaveCount(2, { timeout: 30000 });
-  const pro = rows.nth(0), max = rows.nth(1);
+  const max = rows.nth(0), pro = rows.nth(1);
+  await expect(max).toHaveClass(/lead/);
+  await expect(pro).not.toHaveClass(/lead/);
+  const size = (row) => row.locator('.tu-value-times').evaluate((n) => parseFloat(getComputedStyle(n).fontSize));
+  expect(await size(max)).toBeGreaterThan(await size(pro) * 1.5);
   await expect(pro.locator('.tu-value-name')).toHaveText('pro');
   await expect(pro.locator('.tu-value-plan')).toHaveText('Pro');
   const proSpent = groupSince('cn', C.addDays(fixture.today, -20));
@@ -419,10 +425,10 @@ test('金额: dollars on every cap, in the tiles, the legend and the table; 无�
     expect(cut, `${w}px`).toEqual([]);
     await screenshot(`usd-light-${w}-30d`);
   }
-  // back to Token: tokens again, no dollars card
+  // back to Token: tokens again; the 订阅值不值 card stays
   await view.locator('.tu-unit button[data-unit="tokens"]').click();
   await expect(view.locator('.tu-hero-num')).toHaveText(C.formatShort(rangeTotal(30)));
-  await expect(view.locator('.tu-value')).toBeHidden();
+  await expect(view.locator('.tu-value-row.lead .tu-value-name')).toHaveText('max');
   expect(errors).toEqual([]);
 });
 
