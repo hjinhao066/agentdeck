@@ -2691,7 +2691,13 @@
       // A Claude turn that is over while its background shell or Monitor runs draws nothing (a static status
       // row; its cursor queries are not output): that wait is work, not silence, and is reported only when
       // it lasts hours.
-      const backgroundWait = M.claudeBackgroundTasks(entry.lastScreen, col?.cmd);
+      // A screen at rest can still hide a background command (a cut footer, a status row scrolled away): the
+      // terminal's process tree is the other witness, and the same one that holds back the three-minute fallback
+      // below. That is a background wait too (3 hours), not a stuck session and not silence to ignore forever.
+      const claudeRest = entry.state === 'done' && entry.alive && /\bclaude\b/i.test(col?.cmd || '');
+      const restWork = claudeRest && host.ptyBackgroundWork ? host.ptyBackgroundWork(col) : null;   // asked once per tick
+      const restCommand = restWork === true;
+      const backgroundWait = M.claudeBackgroundTasks(entry.lastScreen, col?.cmd) || restCommand;
       const quietLimit = M.silenceTimeout(col?.cmd, backgroundWait);
       // A turn that is over, the agent resting at its empty input box (state 'done': no spinner, no background
       // work), waits for 队长 or the user: nothing is stuck, so that is no silence. The three-minute
@@ -2699,7 +2705,7 @@
       // and not interrupted. Without that the fallback never arms, so the ordinary notice stays as the backstop
       // (once, after the usual limit, as for any task).
       const restTurn = entry.state === 'done' && task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
-      const fallbackArmed = !!(restTurn && restTurn.done && !restTurn.interrupted);
+      const fallbackArmed = !!(restTurn && restTurn.done && !restTurn.interrupted) && !restCommand;
       if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' && !fallbackArmed &&
           (task.status === 'working' || task.status === 'queued' && !task.supplement)) {
         const summary = backgroundWait
@@ -2768,7 +2774,7 @@
       // the three minutes count from when it is gone. No answer yet is no verdict; a listing that failed (null)
       // leaves it to the screen.
       const claude = /\bclaude\b/i.test(col?.cmd || '');
-      const work = claude && !task.processEnded && entry.alive && host.ptyBackgroundWork ? host.ptyBackgroundWork(col) : null;
+      const work = claude && !task.processEnded && entry.alive && host.ptyBackgroundWork ? (claudeRest ? restWork : host.ptyBackgroundWork(col)) : null;
       if (work === true) { task.endedAt = 0; continue; }
       const anchor = entry.state === 'done' ? ended : Math.max(ended, entry.lastOutputAt || 0);
       if (Date.now() - anchor < STOP_QUIET) continue;

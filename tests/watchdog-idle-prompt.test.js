@@ -17,6 +17,9 @@ const RULE = '──────────────────────
 const IDLE = ['  ⏺ 阶段回执已交，等队长说「齐了」。', '', '✻ Baked for 41s · done 2:10 AM', RULE, '❯ ', RULE, 'Sonnet 5h 69%'].join('\n');
 // a working Claude whose screen is static (deep thinking): the spinner row is there, nothing is drawn
 const THINKING = ['  ⏺ 正在想。', '', '✻ Pondering… (12m 3s · esc to interrupt)', RULE, '❯ ', RULE, 'Sonnet 5h 69%'].join('\n');
+// the real shape of a worker screen found idle 10-10 (text masked): turn over, bare input box, a status line
+// under it, and NO background-shell count anywhere (footer cut): only the process tree knows a command still runs
+const IDLE_WITH_HIDDEN_COMMAND = ['  - xxxxx/a31-xxxxxx-10s.mp4', '', '✻ Worked for 23m 5s · done 4:54 AM', '', '', '❯ ', '', '            7d 43', '             7   71      ⎇ xxxx*'].join('\n');
 const WAITING = ['  ⏺ 继续等测试排队。', '', '✻ Baked for 27s · done 1:23 AM · 1 shell still running', RULE, '❯ ', RULE, 'Sonnet 5h 69%'].join('\n');
 
 function world(cmd = 'claude') {
@@ -34,11 +37,11 @@ function world(cmd = 'claude') {
     .replace('  window.MainSession = {', '  window.__test = { setHost(h) { host = h; } };\n  window.MainSession = {');
   vm.runInContext(source, context);
   window.__test.setHost({ config: { mainSession: s }, terms, columns: () => columns, saveConfig() {},
-    isBackstage: () => true, focusedId: () => 'captain', lastTurnTs: () => 1, archiveColumn() {},
+    ptyBackgroundWork: () => w.work, isBackstage: () => true, focusedId: () => 'captain', lastTurnTs: () => 1, archiveColumn() {},
     columnLabel: (c) => c.id, userComposing: () => false, agentInForeground: async () => true });
   const entry = terms.get(worker.id);
-  return {
-    s, entry, turns,
+  const w = {
+    s, entry, turns, work: null,   // work: what the process-tree listing says (true / false / null unknown)
     task(extra = {}) { const t = { id: 'task-' + s.tasks.length, colId: worker.id, gen: 1, status: 'working', title: 'x', startedAt: now, sentAt: now, ...extra }; s.tasks.push(t); return t; },
     // the terminal draws nothing (only cursor queries) for `ms`
     quiet(ms) { for (let t = 0; t < ms; t += 2000) { now += 2000; if (M.drawsOutput('\x1b[?6n')) entry.lastOutputAt = now; window.MainSession.onTick(worker.id, entry); } },
@@ -46,6 +49,7 @@ function world(cmd = 'claude') {
     // the chat record shows this task's turn as over: the three-minute 已结束，未提交回执 fallback can speak for it
     finishTurn(t) { t.turnId = 'turn-' + t.id; turns.push({ id: t.turnId, done: true }); return t; },
   };
+  return w;
 }
 
 test('waiting at the input box for 队长: no 「没有输出」 report, however long', () => {
@@ -128,4 +132,41 @@ test('a Claude that goes back to work after resting is watched again from its ne
   w.entry.lastOutputAt = 10_000_000 + 60 * 60_000;
   w.quiet(25 * 60_000);
   assert.equal(w.silent().length, 1);
+});
+
+test('at the input box, turn over, but the process tree still has a command running (the fallback is held off): quiet for 90 minutes, reported once at 3 hours as a background wait', () => {
+  const w = world(), t = w.finishTurn(w.task());
+  w.entry.lastScreen = IDLE_WITH_HIDDEN_COMMAND;
+  assert.equal(M.claudeBackgroundTasks(IDLE_WITH_HIDDEN_COMMAND, 'claude'), false, 'the screen alone shows no background task');
+  w.work = true;
+  w.quiet(90 * 60_000);
+  assert.deepEqual(w.silent(), [], 'no 20-minute notice');
+  assert.equal(t.status, 'working', 'the fallback stays out while the command runs');
+  w.quiet(1.4 * 3600_000);
+  assert.deepEqual(w.silent(), [], 'still quiet before 3 hours');
+  w.quiet(0.2 * 3600_000);
+  assert.equal(w.silent().length, 1);
+  assert.match(w.silent()[0].summary, /在等后台命令，已经 3 小时没有输出/);
+  assert.doesNotMatch(w.silent()[0].summary, /20 分钟/);
+  w.quiet(2 * 3600_000);
+  assert.equal(w.silent().length, 1, 'only once');
+  assert.equal(t.status, 'working');
+});
+
+test('the same screen and finished turn, command gone from the process tree: the fallback closes it once and no silence notice follows', () => {
+  const w = world(), t = w.finishTurn(w.task());
+  w.entry.lastScreen = IDLE_WITH_HIDDEN_COMMAND;
+  w.work = false;
+  w.quiet(90 * 60_000);
+  assert.deepEqual(w.silent(), []);
+  assert.equal(t.status, 'stopped');
+  assert.equal(w.s.pending.filter((p) => /已结束，未提交回执/.test(p.summary || '')).length, 1);
+});
+
+test('a command in the process tree under a screen that is not at rest (spinner) changes nothing: still the 20-minute notice', () => {
+  const w = world(), t = w.task();
+  w.entry.state = 'working'; w.entry.lastScreen = THINKING; w.work = true;
+  w.quiet(25 * 60_000);
+  assert.equal(w.silent().length, 1);
+  assert.match(w.silent()[0].summary, /20 分钟/);
 });
