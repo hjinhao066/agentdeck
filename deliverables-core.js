@@ -22,8 +22,9 @@
       'html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic', 'mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav']),
     skip: Object.freeze(['node_modules', '.git', 'scratchpad', 'tmp', 'temp', 'var/folders', '.cache', 'caches', '__pycache__',
       '.venv', 'venv', 'site-packages', 'test-results', 'playwright-report', '.next', 'dist']),
-    process: Object.freeze(['py', 'pyc', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'json', 'jsonl', 'log', 'sqlite', 'sqlite3', 'db',
-      'sh', 'bash', 'zsh', 'ps1', 'bat', 'cmd', 'lock', 'map', 'css', 'scss', 'yml', 'yaml', 'toml', 'ini', 'env', 'tmp', 'bak', 'swp', 'pid']),
+    process: Object.freeze(['py', 'pyc', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'go', 'rs', 'java', 'c', 'swift', 'sql', 'patch',
+      'json', 'jsonl', 'log', 'sqlite', 'sqlite3', 'db', 'sh', 'bash', 'zsh', 'ps1', 'bat', 'cmd', 'lock', 'map', 'css', 'scss',
+      'yml', 'yaml', 'toml', 'ini', 'env', 'tmp', 'bak', 'swp', 'pid']),
   });
   const MAX_RULES = 200;
 
@@ -114,7 +115,8 @@
         for (const found of findLinks(line)) {
           const path = trimProse(String(found.text || '').trim(), rules);
           if (found.kind !== 'file' || !path || !ABS_PATH.test(path)) continue;
-          out.push({ path, ts: Number(turn.ts) || 0, from: 'reply', colId: colId || '', chatId: chatId || '', turnId: String(turn.id || ''), old: !!old });
+          // at: when the reply (and so the file) came in, its turn's end; the 交付文件 button counts by it
+          out.push({ path, ts: Number(turn.ts) || 0, at: Number(turn.end) || 0, from: 'reply', colId: colId || '', chatId: chatId || '', turnId: String(turn.id || ''), old: !!old });
         }
       }
     }
@@ -155,6 +157,8 @@
       project: clip(raw.project, 120), colId: clip(raw.colId, 160), session: clip(raw.session, 120), task: clip(raw.task, 200),
       chatId: clip(raw.chatId, 160), turnId: clip(raw.turnId, 160),
     };
+    // when it came in, if later than ts (a reply's file: the turn's end; ts stays the turn's start)
+    if (Number.isFinite(raw.at) && raw.at > item.ts) item.at = raw.at;
     if (raw.old === true) item.old = true;
     if (raw.gone === true) item.gone = true;
     if (raw.archived === true) item.archived = true;
@@ -175,13 +179,14 @@
   // showed them (index.seen: the newest time it showed). An index without the
   // mark (saved by an older version, or empty) counts from what it holds, or
   // from now, so nothing already there reads as new.
-  const newest = (items) => items.reduce((m, i) => Math.max(m, i.ts || 0), 0);
+  const arrived = (i) => i.at || i.ts || 0;
+  const newest = (items) => items.reduce((m, i) => Math.max(m, arrived(i)), 0);
   function markSeen(index, now = Date.now()) {
     const seen = Math.max(index.seen || 0, newest(index.items)) || now;
     return seen === index.seen ? index : { ...index, seen };
   }
   function unseenCount(index) {
-    return index.seen ? index.items.filter((i) => i.ts > index.seen).length : 0;
+    return index.seen ? index.items.filter((i) => arrived(i) > index.seen).length : 0;
   }
 
   // Fold what was just found into the index: one item per path (Windows paths
@@ -201,6 +206,8 @@
         const newer = item.ts > prev.ts || (item.ts === prev.ts && item.from === 'receipt' && prev.from !== 'receipt');
         const winner = newer ? item : prev, other = newer ? prev : item;
         if (!winner.project && other.project) winner.project = other.project;
+        // the same mention read again once its turn is over: it came in then
+        if (!newer && item.ts === prev.ts && (item.at || 0) > (prev.at || 0)) prev.at = item.at;
         if (!newer) continue;
       }
       byKey.set(key, item);

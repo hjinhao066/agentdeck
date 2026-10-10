@@ -13,6 +13,8 @@
 //   checkbox  done, doneAt, by doneUpdated
 //   deletion  deleted, by deletedUpdated
 //   AI        ai, by ai.updated, only from copies of the winning content version
+//   aiBefore  what AI had of the text before an edit (its card, state, who handed it
+//             over), from the copies of the winning content version: the edit wrote both
 // `updated` is the copy's last change of any kind. A deletion is kept as
 // `deleted: true` so an older copy on the other computer cannot bring it back.
 // The phone hub merges the computers' answers by the same rules (mergeTodos).
@@ -96,8 +98,12 @@ function combine(copies) {
   const check = latest(copies, (c) => c.doneUpdated);
   const removal = latest(copies, (c) => c.deletedUpdated);
   const ai = latest(version, (c) => (isTime(c.ai?.updated) ? c.ai.updated : NO_TIME)).ai;
-  return { ...whole, text: content.text, textUpdated: content.textUpdated, textDevice: origin.textDevice, awaitingOrigin: origin.awaitingOrigin === true,
-    done: check.done, doneAt: check.doneAt, doneUpdated: check.doneUpdated, deleted: removal.deleted, deletedUpdated: removal.deletedUpdated, ai };
+  const before = version.filter((c) => c.aiBefore && typeof c.aiBefore === 'object');
+  const aiBefore = before.length ? latest(before, (c) => c.updated).aiBefore : null;
+  const { aiBefore: _old, ...rest } = whole;
+  return { ...rest, text: content.text, textUpdated: content.textUpdated, textDevice: origin.textDevice, awaitingOrigin: origin.awaitingOrigin === true,
+    done: check.done, doneAt: check.doneAt, doneUpdated: check.doneUpdated, deleted: removal.deleted, deletedUpdated: removal.deletedUpdated, ai,
+    ...(aiBefore ? { aiBefore } : {}) };
 }
 function merge(lists) {
   const copies = new Map();
@@ -124,7 +130,8 @@ const PHONE_DONE_LIMIT = 200;
 function phoneItem(t) {
   if (t.deleted) return { id: t.id, deleted: true, updated: t.updated, deletedUpdated: t.deletedUpdated };
   return { id: t.id, text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated,
-    textUpdated: t.textUpdated, doneUpdated: t.doneUpdated, deletedUpdated: t.deletedUpdated, ...(t.ai ? { ai: t.ai } : {}) };
+    textUpdated: t.textUpdated, doneUpdated: t.doneUpdated, deletedUpdated: t.deletedUpdated, ...(t.ai ? { ai: t.ai } : {}),
+    ...(t.aiBefore && typeof t.aiBefore.status === 'string' ? { aiBefore: { status: t.aiBefore.status } } : {}) };
 }
 function phoneView(items) {
   const live = sorted(items.filter((t) => !t.deleted));
@@ -235,7 +242,18 @@ class TodoStore {
       if (!current) throw new Error('这条待办已经不在了，刷新一下。');
       const at = this.stamp(current.updated);
       const next = { ...current, updated: at, device: this.deviceId };
-      if (text !== undefined && text !== current.text) Object.assign(next, { text, textUpdated: at, textDevice: this.deviceId, awaitingOrigin: false, ai: null });
+      // An edit is a new content version: AI starts over on it. What AI had of the text
+      // before (its card, its state, the computer that handed it over) is kept, so that
+      // computer can tell its 队长 the 待办 changed, and a finished one is not handed over again.
+      if (text !== undefined && text !== current.text) {
+        Object.assign(next, { text, textUpdated: at, textDevice: this.deviceId, awaitingOrigin: false, ai: null });
+        const was = current.ai;
+        if (was && typeof was === 'object' && typeof was.taskId === 'string' && typeof was.status === 'string') {
+          next.aiBefore = { taskId: was.taskId, revision: typeof was.revision === 'string' ? was.revision : '', status: was.status,
+            ownerDevice: typeof was.ownerDevice === 'string' ? was.ownerDevice : '', deliveredAt: isTime(was.deliveredAt) ? was.deliveredAt : null,
+            text: current.text, editedAt: at };
+        }
+      }
       // A tick or untick is the user's latest word on the checkbox, even when
       // this computer's copy already shows it (the phone may have seen another
       // computer's newer untick), so it always gets a new clock. Same for delete.

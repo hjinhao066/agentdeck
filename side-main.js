@@ -4,6 +4,7 @@
 // can ask for is validated here; the page never gets Node or a raw file path
 // it did not click on.
 const crypto = require('crypto');
+const dns = require('dns');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -19,6 +20,11 @@ const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 // (never trimmed to fit) and the page is told, so nothing goes missing quietly.
 const MAX_CHAT_BYTES = 64 * 1024 * 1024;
 const MAX_DIR_ENTRIES = 300;
+// A previewed page's link goes to the browser tab only this soon after a real click or key press in it.
+const HAND_OVER_MS = 2000;
+// How long a name a previewed page asked for keeps its looked-up verdict (local or public).
+const NAME_TTL_MS = 60 * 1000;
+const NAMES_KEPT = 500;
 
 // ---- previews ----
 // What the phone refuses, the desktop pane refuses too (file-preview-core's localRefusal):
@@ -258,6 +264,23 @@ function registerSideIpc(ctx) {
   let opened = null;                 // { token, scope }: the one page the address serves right now
   let pageBounds = { x: 0, y: 0, width: 0, height: 0, visible: false };
   const tokens = new Map();          // folder (or lone file) → its address, the same for the whole run
+  // A name is looked up before a request to it leaves: a public name can point at this machine
+  // or the local network. Not proof against a name that answers differently a moment later
+  // (DNS rebinding), but every name that simply points there is refused.
+  const lookup = ctx.lookup || ((host) => dns.promises.lookup(host, { all: true, verbatim: true }));
+  const names = new Map();           // name → { at, local }: a page loads many files from one CDN
+  function nameIsLocal(host) {
+    const known = names.get(host);
+    if (known && Date.now() - known.at < NAME_TTL_MS) return Promise.resolve(known.local);
+    return Promise.resolve().then(() => lookup(host)).then(
+      (list) => !Array.isArray(list) || !list.length || list.some((entry) => PreviewHtml.privateHost(entry && entry.address)),
+      () => true,                      // a name that does not resolve: the request could not go anywhere anyway
+    ).then((local) => {
+      if (names.size >= NAMES_KEPT) names.clear();
+      names.set(host, { at: Date.now(), local });
+      return local;
+    });
+  }
   const refusal = (status) => new Response(null, { status, headers: { 'cache-control': 'no-store' } });
   async function serve(request) {
     if (request.method !== 'GET' && request.method !== 'HEAD') return refusal(405);
@@ -276,7 +299,12 @@ function registerSideIpc(ctx) {
     if (pageSession) return pageSession;
     const ses = session.fromPartition(PreviewHtml.PARTITION);
     ses.protocol.handle(PreviewHtml.SCHEME, serve);
-    ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !PreviewHtml.requestAllowed(details.url) }));
+    ses.webRequest.onBeforeRequest((details, callback) => {
+      if (!PreviewHtml.requestAllowed(details.url)) { callback({ cancel: true }); return; }
+      const host = PreviewHtml.namedHost(details.url);
+      if (!host) { callback({ cancel: false }); return; }
+      nameIsLocal(host).then((local) => callback({ cancel: local }));
+    });
     ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     ses.setPermissionCheckHandler(() => false);
     ses.on('will-download', (event) => event.preventDefault());
@@ -287,10 +315,15 @@ function registerSideIpc(ctx) {
     const win = getWindow();
     if (!win || win.isDestroyed()) return null;
     if (pageView && !pageView.webContents.isDestroyed()) return pageView;
+    // disableDialogs: a page's alert() or confirm() is a box over the whole deck window
+    // (Windows disables the window under it), and one in a loop locks the app.
     pageView = new WebContentsView({
-      webPreferences: { session: ensurePageSession(), sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, backgroundThrottling: true },
+      webPreferences: { session: ensurePageSession(), sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, backgroundThrottling: true, disableDialogs: true },
     });
     const wc = pageView.webContents;
+    // WebRTC does not pass onBeforeRequest: its STUN packets reached addresses on the local
+    // network and the WireGuard link. No UDP leaves the page that way.
+    wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
     wc.on('found-in-page', (_e, r) => {
       if (r && r.finalUpdate && r.requestId === findRequest) send('side:preview-found', { active: r.activeMatchOrdinal || 0, total: r.matches || 0 });
     });
@@ -306,8 +339,18 @@ function registerSideIpc(ctx) {
     });
     // A link to the public web is handed to the browser tab; nothing else leaves the
     // page. A script can "click" too, so an address on this machine or its network is
-    // not handed over: the browser tab would fetch it on the page's behalf.
-    const outside = (url) => { if (isWebUrl(url) && PreviewHtml.requestAllowed(url)) send('side:preview-link', { url }); };
+    // not handed over: the browser tab would fetch it on the page's behalf. And only
+    // right after the user really clicked or pressed a key in the page (input a script
+    // cannot make): a page that sends itself somewhere (location, <meta refresh>,
+    // window.open on a timer) would otherwise switch the pane to the browser tab, whose
+    // session keeps the user's sign-ins.
+    let touchedAt = 0;
+    wc.on('before-mouse-event', (_e, mouse) => { if (mouse && (mouse.type === 'mouseDown' || mouse.type === 'mouseUp')) touchedAt = Date.now(); });
+    wc.on('before-input-event', (_e, input) => { if (input && input.type === 'keyDown') touchedAt = Date.now(); });
+    const outside = (url) => {
+      if (Date.now() - touchedAt > HAND_OVER_MS) return;
+      if (isWebUrl(url) && PreviewHtml.requestAllowed(url)) send('side:preview-link', { url });
+    };
     wc.setWindowOpenHandler(({ url }) => { outside(url); return { action: 'deny' }; });
     const guard = (event, url) => {
       if (opened && PreviewHtml.sameSite(url, opened.token)) return;
@@ -316,6 +359,10 @@ function registerSideIpc(ctx) {
     };
     wc.on('will-navigate', guard);
     wc.on('will-redirect', guard);
+    // A page the user clicked in once may ask before it is left (beforeunload). Nobody is
+    // asked here: the next preview or 重新加载 replaces it (unanswered, Electron cancelled the
+    // load and the old page stayed under the new file's name).
+    wc.on('will-prevent-unload', (event) => event.preventDefault());
     win.contentView.addChildView(pageView);
     place(pageView, pageBounds);
     return pageView;
@@ -333,7 +380,16 @@ function registerSideIpc(ctx) {
     const r = resolveClick(msg, false);
     if (!r || !PreviewHtml.HTML_NAME.test(r.target)) return;
     const scope = PreviewHtml.scopeFor(r.target, { home, tmp: ctx.tmp || os.tmpdir() });
-    if (!scope || !PreviewHtml.resolveAsset(scope, PreviewHtml.entryPath(scope)).ok) return;
+    if (!scope || !PreviewHtml.resolveAsset(scope, PreviewHtml.entryPath(scope)).ok) {
+      // Not drawn here (over the size cap, or a name an address cannot carry: a leading dot, a
+      // colon). The page shown before is ended rather than left under this file's name, and
+      // the pane says why.
+      closePage();
+      let big = false;
+      try { big = fs.statSync(r.target).size > PreviewHtml.MAX_ASSET_BYTES; } catch (_) {}
+      send('side:preview-state', { refused: big ? 'big' : 'name', path: r.target });
+      return;
+    }
     const v = ensurePageView();
     if (!v) return;
     const key = scope.wide ? scope.file : scope.root;

@@ -4,6 +4,9 @@ const fs = require('fs');
 const path = require('path');
 
 const STATUSES = ['queued', 'working', 'needs_user', 'done', 'failed'];
+const CARD = /^todo-[a-f0-9]{64}$/;
+// A change to a 待办 (edit, tick, delete) reaches 队长 only while it is this recent.
+const CHANGE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const TRANSITIONS = {
   queued: ['working', 'needs_user', 'done', 'failed'],
   working: ['needs_user', 'done', 'failed'],
@@ -39,12 +42,62 @@ function taskDetail(item, id) {
     '回填后 AgentDeck 自动把结果登记到用户的「待我处理」（等你提供/没办成在「要你处理」，办完在「做完了你还没看」，附产物文件），不要再用 inbox 重复登记；用户在那里的回复会作为回执带着这张卡片 id 交给你。';
 }
 
+// What `todo list` gives 队长: only the 待办 handed to AI (an @ai mention) or that
+// already carry an AI state. The user's other to-dos stay theirs: 队长 never reads them.
+function forCaptain(items) {
+  return (Array.isArray(items) ? items : []).filter((t) => t && (isAi(t.text) || (t.ai && typeof t.ai === 'object')));
+}
+
 class TodoAI {
-  constructor({ todos, tasks, deliver, notify, changed = () => {} }) {
+  // hasCaptain: whether this computer has a 队长 to hand a 待办 to. Without one the
+  // item says so (on both computers and the phone) and waits; nothing hands it to the
+  // other computer's 队长. A 队长 starting here scans again and hands it over.
+  // report: hands 队长 a change to a 待办 it was given (see reportChanges); false when
+  // there is no 队长 to take it now (it is tried again on the next scan).
+  constructor({ todos, tasks, deliver, notify, changed = () => {}, hasCaptain = () => true, platform = process.platform, report = null, now = () => Date.now() }) {
     this.todos = todos; this.tasks = tasks; this.deliver = deliver; this.notify = notify; this.changed = changed;
+    this.hasCaptain = hasCaptain; this.platform = platform; this.report = report; this.now = now;
+    this.reported = new Set();
   }
+  // The computer that handed a 待办 to its 队长 tells that 队长 when the user edits it, or
+  // ticks it off or deletes it before AI finished it. Each change goes once (by id; 队长's
+  // side keeps the ids too, so a restart does not repeat one), and only for a change of the
+  // last day: an old one found after an upgrade would only be noise. A notice 队长 has not
+  // read yet is taken back there instead of being followed by a change (MainSession).
+  reportChanges() {
+    if (typeof this.report !== 'function') return;
+    const me = this.todos.deviceId, now = this.now();
+    const recent = (at) => typeof at === 'string' && now - Date.parse(at) < CHANGE_WINDOW_MS;
+    for (const t of this.todos.all()) {
+      const was = t.aiBefore;
+      if (!t.deleted && was && was.ownerDevice === me && was.deliveredAt && CARD.test(was.taskId || '') && recent(was.editedAt)) {
+        const again = was.status !== 'done' && isAi(t.text) && !t.done;
+        const result = was.status === 'done'
+          ? `用户改了一条你已经办完的待办：原来是「${was.text}」，现在是「${t.text}」。办完的待办改字后不会重新交给你，任务卡 ${was.taskId} 不用再动。`
+          : `用户改了一条交给你的待办：原来是「${was.text}」，现在是「${t.text}」。任务卡 ${was.taskId} 不用再按原来的办了；` +
+            (again ? '改后的内容会作为一条新的 Todo 任务交给你。' : '改后的内容不再交给 AI。');
+        this.sendChange('edit', was.taskId, result);
+      }
+      const ai = t.ai;
+      if (!ai || ai.ownerDevice !== me || !ai.deliveredAt || ai.status === 'done' || !CARD.test(ai.taskId || '')) continue;
+      if (t.deleted && recent(t.deletedUpdated)) {
+        this.sendChange('stop', ai.taskId, `用户删掉了这条交给你的待办：「${t.text || ai.taskId}」。任务卡 ${ai.taskId} 不用再办了。`);
+      } else if (!t.deleted && t.done && recent(t.doneUpdated)) {
+        this.sendChange('stop', ai.taskId, `用户自己勾掉了这条交给你的待办：「${t.text}」。任务卡 ${ai.taskId} 不用再办了；「待我处理」里它的那条也已关掉。`);
+      }
+    }
+  }
+  sendChange(kind, cardId, result) {
+    const id = 'todo-change-' + crypto.createHash('sha256').update(kind + ':' + cardId).digest('hex');
+    if (this.reported.has(id)) return;
+    if (this.report({ id, kind, taskId: cardId, result }) === false) return;
+    this.reported.add(id);
+  }
+  // A change 队长's side refused (it is tried again on the next scan).
+  forgetChange(id) { this.reported.delete(id); }
   scan() {
     if (this.todos.readFiles().some((file) => file.own && !file.doc)) throw Object.assign(new Error('Todo store is damaged.'), { code: 'TODO_STORE_CORRUPT' });
+    this.reportChanges();
     // One content revision has one writing device. Other computers display its
     // synced AI state but never wake a second Captain, even while Git is offline.
     for (const item of this.todos.list()) {
@@ -52,9 +105,11 @@ class TodoAI {
       const owner = item.textDevice || item.device;
       if (owner && owner !== this.todos.deviceId) continue;
       const rev = revision(item), id = taskId(item);
+      // a 待办 AI had finished is not handed over again when its text is edited
+      if (item.ai?.revision !== rev && item.aiBefore?.status === 'done') continue;
       let current = item;
       if (item.ai?.revision !== rev) current = this.todos.writeAi(item.id, () => ({
-        revision: rev, taskId: id, ownerDevice: this.todos.deviceId, status: 'queued',
+        revision: rev, taskId: id, ownerDevice: this.todos.deviceId, ownerPlatform: this.platform, status: 'queued',
         submittedAt: this.todos.stamp(), updated: this.todos.stamp(), deliveredAt: null,
         files: [], message: '', exceptionNotifiedAt: null,
       }));
@@ -65,7 +120,17 @@ class TodoAI {
         card = this.tasks.add({ id, project: 'todo', title: item.text, detail: taskDetail(item, id) }).card;
         this.changed();
       }
-      if (!ai.deliveredAt) this.deliver({ item: current, card });
+      if (ai.deliveredAt) continue;
+      const here = this.hasCaptain();
+      if (!here !== (ai.noCaptain === true)) {
+        current = this.todos.writeAi(item.id, (t) => {
+          if (t.ai?.revision !== rev) throw new Error('Todo delivery version changed.');
+          const { noCaptain, ...rest } = t.ai;
+          return { ...rest, ...(here ? {} : { noCaptain: true }), updated: this.todos.stamp(t.ai.updated) };
+        });
+        this.changed();
+      }
+      if (here) this.deliver({ item: current, card });
     }
   }
   acknowledge(id, cardId) {
@@ -74,7 +139,8 @@ class TodoAI {
     this.todos.writeAi(id, (t) => {
       if (t.ai?.taskId !== cardId || t.ai.revision !== revision(t)) throw new Error('Todo delivery version changed.');
       const at = this.todos.stamp(t.ai.updated);
-      return { ...t.ai, deliveredAt: at, updated: at };
+      const { noCaptain, ...rest } = t.ai;
+      return { ...rest, deliveredAt: at, updated: at };
     });
     this.changed();
   }
@@ -115,4 +181,4 @@ class TodoAI {
     return next;
   }
 }
-module.exports = { TodoAI, isAi, revision, taskId, taskDetail, STATUSES, TRANSITIONS };
+module.exports = { TodoAI, isAi, forCaptain, revision, taskId, taskDetail, STATUSES, TRANSITIONS };

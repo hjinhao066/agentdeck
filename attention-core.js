@@ -45,10 +45,11 @@
   const REPORT_LABEL = '结果汇报';
   const LIMITS = { title: 300, ask: 1000, detail: 8000, note: 500, reply: 4000, files: 20, path: 1024, project: 120, options: 6, option: 24, toCaptain: 8000 };
   const KEEP_DONE = 200;
-  const TODO_FILED_KEEP = 500;
+  // Every answer a live 待办 still shows has to stay remembered (or it is filed again): room for many.
+  const TODO_FILED_KEEP = 5000;
   const ID = /^at-[a-z0-9-]{4,40}$/;
   const REF = /^[A-Za-z0-9_-]{1,160}$/;
-  const DONE_BY = ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat'];
+  const DONE_BY = ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat', 'todo'];
   const SOURCES = ['captain', 'notify', 'card', 'automation', 'todo'];
 
   const isTime = (v) => Number.isSafeInteger(v) && v > 0;
@@ -293,19 +294,23 @@
       if (ai && typeof ai.taskId === 'string' && REF.test(ai.taskId) && ai.ownerDevice === device) live.set(ai.taskId, { t, ai });
     }
     let changed = 0;
-    // A question or a failure the AI has moved past is settled.
+    // A question or a failure the AI has moved past is settled. One whose 待办 the user
+    // ticked off is settled too, a report as well: the user is done with it.
     for (const item of store.items) {
-      if (item.done || item.source !== 'todo' || item.kind !== 'need' || !item.card) continue;
+      if (item.done || item.source !== 'todo' || !item.card) continue;
       const cur = live.get(item.card);
+      if (cur && cur.t.done) { finish(item, 'todo', '', now); changed++; continue; }
+      if (item.kind !== 'need') continue;
       if (cur && TODO_STATES.includes(cur.ai.status) && todoKey(cur.ai) === item.key) continue;
       finish(item, 'card', cur ? 'AI 已接着办' : '这条待办已改动或删除', now);
       changed++;
     }
-    const filed = new Set(store.todoFiled || []);
+    const filed = new Set(store.todoFiled || []), current = new Set();
     for (const { t, ai } of live.values()) {
       if (!TODO_STATES.includes(ai.status)) continue;
       const key = todoKey(ai);
-      if (filed.has(key)) continue;
+      current.add(key);
+      if (filed.has(key) || t.done) continue;   // a ticked-off 待办 files nothing new (it would close at once)
       const what = clip(line(t.text), 80), message = clip(line(ai.message), LIMITS.ask - 20);
       const input = ai.status === 'needs_user' ? { kind: 'need', type: 'question', title: 'AI 在等你：' + what, ask: message || '缺材料，回复里告诉 AI 在哪。' }
         : ai.status === 'failed' ? { kind: 'need', type: 'decide', title: 'AI 没办成：' + what, ask: (message ? message + ' ' : '') + '要重试还是先放着？', options: ['重试', '先放着'] }
@@ -315,7 +320,14 @@
       filed.add(key);
       changed++;
     }
-    if (changed) store.todoFiled = [...filed].slice(-TODO_FILED_KEEP);
+    if (changed) {
+      // Over the cap, answers no longer on a live 待办 go first: one still standing is never
+      // dropped (it would be filed again). One missing from this read only (a damaged or
+      // half-synced file) is kept while there is room.
+      const all = [...filed];
+      store.todoFiled = all.length <= TODO_FILED_KEEP ? all
+        : all.filter((key) => !current.has(key)).concat(all.filter((key) => current.has(key))).slice(-TODO_FILED_KEEP);
+    }
     return changed;
   }
 
@@ -394,7 +406,7 @@
       counts: counts(store),
     };
   }
-  const DONE_TEXT = { user: '你标记已处理', reply: '你已回复', captain: '队长标记已解决', card: '任务那边已解决', session: '会话的问题已答复', seen: '你看过了', chat: '你在队长对话里看过了' };
+  const DONE_TEXT = { user: '你标记已处理', reply: '你已回复', captain: '队长标记已解决', card: '任务那边已解决', session: '会话的问题已答复', seen: '你看过了', chat: '你在队长对话里看过了', todo: '你勾掉了这条待办' };
   function doneText(item) {
     const who = item.kind === 'report' && item.doneBy === 'user' ? '你看过了' : DONE_TEXT[item.doneBy] || '已完成';
     return item.doneNote && item.doneNote !== who && item.doneBy !== 'reply' && item.doneBy !== 'user' ? `${who}：${item.doneNote}` : who;

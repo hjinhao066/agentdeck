@@ -185,7 +185,7 @@ if (saved) {
   // 待我处理 (attention-ui.js normalizes and migrates it); without this every restart emptied the page.
   if (saved.attention && typeof saved.attention === 'object') config.attention = saved.attention;
   if (saved.todoDeliveries && typeof saved.todoDeliveries === 'object' && !Array.isArray(saved.todoDeliveries)) {
-    config.todoDeliveries = Object.fromEntries(Object.entries(saved.todoDeliveries).filter(([id, accepted]) => /^todo-(?:error-)?[a-f0-9]{64}$/.test(id) && accepted === true));
+    config.todoDeliveries = Object.fromEntries(Object.entries(saved.todoDeliveries).filter(([id, accepted]) => /^todo-(?:error-|change-)?[a-f0-9]{64}$/.test(id) && accepted === true));
   }
   if (saved.todoInbox && typeof saved.todoInbox === 'object' && !Array.isArray(saved.todoInbox)) config.todoInbox = saved.todoInbox;
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
@@ -2509,8 +2509,10 @@ function wrappedLineToCells(buf, row, cols) {
     let width = cols;
     const next = buf.getLine(r + 1);
     if (next && next.isWrapped) {
-      const head = next.getCell(0), tail = line.getCell(cols - 1);
-      if (head && head.getWidth() === 2 && tail && tail.getWidth() === 1 && !(tail.getChars() || ' ').trim()) width = cols - 1;
+      const head = next.getCell(0), tail = line.getCell(cols - 1), pad = (tail && tail.getChars()) || '';
+      // xterm leaves that column empty (''); a space there was printed, except on Windows, whose console writes one
+      const left = pad === '' || (!pad.trim() && (typeof env === 'undefined' || env.platform === 'win32'));
+      if (head && head.getWidth() === 2 && tail && tail.getWidth() === 1 && left) width = cols - 1;
     }
     for (let x = 0; x < width; x++) {
       cell = line.getCell(x, cell);
@@ -2530,9 +2532,12 @@ function trimTrail(text, s, e) {
 }
 // Characters no path in agent output goes past: Chinese and full-width
 // punctuation (，。、；：（）「」…), full-width letters, curly quotes, "…" and "—".
-const PATH_STOP = '\\u2014\\u2015\\u2018-\\u201f\\u2026\\u3000-\\u3004\\u3008-\\u303f\\uff01-\\uff60\\uffe0-\\uffe6';
+// Not the title marks 《》『』〈〉〔〕〖〗: they stand inside Chinese file names
+// ("《三体》笔记.md"); pathEnd ends a path at a closing one that nothing opened.
+const PATH_STOP = '\\u2014\\u2015\\u2018-\\u201f\\u2026\\u3000-\\u3004\\u300c\\u300d\\u3010-\\u3013\\u3018-\\u303f\\uff01-\\uff60\\uffe0-\\uffe6';
+const NAME_OPEN = '\u3008\u300a\u300e\u3014\u3016', NAME_CLOSE = '\u3009\u300b\u300f\u3015\u3017';
 const FILE_EXT = /\.[A-Za-z][A-Za-z0-9]{0,7}(?::\d+(?::\d+)?)?$/;
-const CJK_WORD = /^[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]+$/;
+const CJK_WORD = /^[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\u3008-\u300b\u300e\u300f\u3014-\u3017]+$/;
 // Where an absolute path the pattern took really ends. The pattern lets single
 // spaces through for folder names ("Application Support", "My Project"), so it
 // also took the prose after a path: "…/renderer.js 里的 findLinks", or
@@ -2561,9 +2566,15 @@ function pathEnd(text, s, e, sep) {
     if (cut >= 0) { p = p.slice(0, from + cut); break; }
     from = i + 1;
   }
+  // a closing title mark with no opening one before it in the same name: "《/Users/me/a.md》"
+  for (let i = 0, open = 0; i < p.length; i++) {
+    if (sep.test(p[i])) open = 0;
+    else if (NAME_OPEN.includes(p[i])) open++;
+    else if (NAME_CLOSE.includes(p[i]) && open-- <= 0) { p = p.slice(0, i); break; }
+  }
   let name = p.length;
   while (name > 0 && !sep.test(p[name - 1])) name--;
-  const glued = /^(.*?\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?)[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/.exec(p.slice(name));
+  const glued = /^(.*?\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?)[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\u3008\u300a\u300e\u3014\u3016]/.exec(p.slice(name));
   if (glued && !p.slice(name + glued[1].length).includes('.')) p = p.slice(0, name + glued[1].length);
   return trimTrail(text, s, s + p.length);
 }
@@ -2636,7 +2647,8 @@ function findLinks(text) {
   // once per path. What remains ambiguous is settled in the main process, which
   // resolves the longest path that actually exists on disk.
   const sep = env.platform === 'win32' ? /[\\/]/ : /\//;
-  const fileRe = new RegExp('(?:file:\\/\\/)?(?:~\\/|\\/)(?:\\\\ |[^\\s"\'`<>|' + PATH_STOP + ']| (?![\\s/])){1,1024}', 'gu');
+  // (" ~/" starts the next path just as " /" does)
+  const fileRe = new RegExp('(?:file:\\/\\/)?(?:~\\/|\\/)(?:\\\\ |[^\\s"\'`<>|' + PATH_STOP + ']| (?![\\s/]|~\\/)){1,1024}', 'gu');
   while ((m = fileRe.exec(text))) {
     const raw = m[0], s = m.index;
     if (/^https?:/.test(raw) || raw.length < 4) continue;
@@ -2653,7 +2665,7 @@ function findLinks(text) {
   // Windows absolute paths: "C:\Users\jinhao\proj\file.js:12" or "C:/…". Only
   // matched on Windows so a stray "C:\" in prose can't hijack macOS output.
   if (env.platform === 'win32') {
-    const winRe = new RegExp('\\b[A-Za-z]:[\\\\/](?:[^\\s"\'`<>|:*?' + PATH_STOP + ']| (?![\\s\\\\/])){1,1024}(?::\\d+(?::\\d+)?)?', 'gu');
+    const winRe = new RegExp('\\b[A-Za-z]:[\\\\/](?:[^\\s"\'`<>|:*?' + PATH_STOP + ']| (?![\\s\\\\/]|~[\\\\/])){1,1024}(?::\\d+(?::\\d+)?)?', 'gu');
     while ((m = winRe.exec(text))) {
       const s = m.index, e = pathEnd(text, s, trimTrail(text, s, s + m[0].length), sep);
       winRe.lastIndex = Math.max(e, s + 1);
@@ -3899,7 +3911,7 @@ window.deck.onBoardCommand(async (message) => {
       if (message.action === 'session-exit') { respondBoard(message.id, { done: true }); return; }
     } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
   }
-  if (message.action === 'main-todo-delivery' || message.action === 'main-todo-error') {
+  if (message.action === 'main-todo-delivery' || message.action === 'main-todo-error' || message.action === 'main-todo-change') {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => window.deck.boardRespond({ requestId: message.id, ...response }),
       (error) => window.deck.boardRespond({ requestId: message.id, done: true, error: error.message }));

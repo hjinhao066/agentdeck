@@ -91,7 +91,7 @@
 
   // Unread Todo receipts outlive the Captain column. Accepted is not delivered:
   // the consuming channel, native ack or a finished legacy turn confirms delivery.
-  const todoReceiptKey = (id) => typeof id === 'string' && /^todo-(?:error-)?[a-f0-9]{64}$/.test(id);
+  const todoReceiptKey = (id) => typeof id === 'string' && /^todo-(?:error-|change-)?[a-f0-9]{64}$/.test(id);
   function normalizeTodoInbox() {
     const raw = host.config.todoInbox;
     host.config.todoInbox = raw && typeof raw === 'object' && !Array.isArray(raw)
@@ -2603,7 +2603,10 @@
       }
       const quietSince = Math.max(entry.lastOutputAt || 0, task.startedAt || task.sentAt || 0);
       const quietLimit = M.silenceTimeout(col?.cmd);
+      // A Claude turn that is over while its background shell or Monitor runs draws nothing (a static status
+      // row; its cursor queries are not output): that wait is work, not silence.
       if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' &&
+          !M.claudeBackgroundTasks(entry.lastScreen, col?.cmd) &&
           (task.status === 'working' || task.status === 'queued' && !task.supplement)) {
         if (push(task, { summary: `已连续 ${quietLimit / 60_000} 分钟没有任何终端输出，请检查会话；可能仍在深度思考，未自动中断或重派。`, source: 'watchdog' })) {
           task.silenceNotifiedAt = quietSince; // Fresh output or a new task rearms the watchdog.
@@ -3072,8 +3075,11 @@
     } else if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
     // Run from its own terminal (not one the program files on its behalf): it is back at work.
     if (!message.nativeWeb && !message.automation) restartWatch?.confirm(caller.id, Date.now());
-    if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id &&
-        !['main-receipt-listener-status', 'main-install-result'].includes(message.action)) {
+    // Only the Captain's own work proves a Relay started: messages the program sends
+    // in its name (listener heartbeats, install results, the Todo backend) do not.
+    const programMade = ['main-receipt-listener-status', 'main-install-result', 'main-todo-delivery', 'main-todo-error', 'main-todo-change'].includes(message.action) ||
+      (message.action === 'main-notify-user' && message.nativeWeb === true && /^todo-failures-/.test(String(message.id || '')));
+    if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id && !programMade) {
       s.relayStartup.attempt.output = true; save();
     }
     switch (message.action) {
@@ -3093,6 +3099,33 @@
           catch (error) { s.pending = pending; host.config.todoInbox = inbox; save(); throw error; }
         }
         return { done: true };
+      }
+      // The user edited, ticked off or deleted a 待办 handed to this 队长. A 新任务 notice for it
+      // that 队长 has not read yet is taken back (it is out of date and nothing else is said);
+      // one already read is followed by a short 待办有变 notice. Each change counts once (its id
+      // stays in todoDeliveries, so the same change sent again after a restart is not repeated).
+      case 'main-todo-change': {
+        const key = message.id, card = message.taskId;
+        if (!message.nativeWeb || !/^todo-change-[a-f0-9]{64}$/.test(String(key)) || !/^todo-[a-f0-9]{64}$/.test(String(card)) ||
+            !['edit', 'stop'].includes(message.kind) || typeof message.result !== 'string' || message.result.length > 4000) throw new Error('Invalid Todo change.');
+        const accepted = host.config.todoDeliveries || {}, inbox = host.config.todoInbox || {}, pending = s.pending;
+        if (accepted[key] || inbox['r-' + key]) return { done: true };
+        const unreadId = 'r-' + card;
+        const unread = !!inbox[unreadId] && !s.inflight.some((p) => p.receiptId === unreadId);
+        if (unread) {
+          const left = { ...inbox }; delete left[unreadId];
+          host.config.todoInbox = left;
+          host.config.todoDeliveries = { ...accepted, [key]: true };
+          s.pending = pending.filter((p) => p.receiptId !== unreadId);
+        } else {
+          const receiptId = 'r-' + key;
+          const notice = { receiptId, taskId: key, colId: s.colId, title: '待办有变', ts: Date.now(), summary: message.result, source: 'command' };
+          host.config.todoInbox = { ...inbox, [receiptId]: notice };
+          if (![...pending, ...s.inflight].some((p) => p.receiptId === receiptId)) s.pending = [...pending, { ...notice, colId: s.colId }];
+        }
+        try { persistTodoInbox(); }
+        catch (error) { s.pending = pending; host.config.todoInbox = inbox; host.config.todoDeliveries = accepted; save(); throw error; }
+        return { done: true, result: unread ? 'Todo notice taken back.' : 'Todo change recorded.' };
       }
       case 'main-install-result': {
         const r = message.installResult;

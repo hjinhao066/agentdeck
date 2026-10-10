@@ -55,6 +55,14 @@ const pageView = (run) => application.evaluate(async ({ webContents, BrowserWind
     result: source ? await wc.executeJavaScript(source) : null,
   };
 }, run || '');
+// A real click on an element of the page: mouse input through the view, as a hand makes it
+// (a script's element.click() does not count as the user clicking).
+const clickInPage = (selector) => application.evaluate(async ({ webContents }, sel) => {
+  const wc = webContents.getAllWebContents().find((w) => !w.isDestroyed() && w.getURL().startsWith('agentdeck-preview://'));
+  const [x, y] = (await wc.executeJavaScript(`(() => { const b = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; })()`)).map(Math.round);
+  wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+  wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+}, selector);
 async function shot(name, withPage) {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, { recursive: true });
@@ -277,7 +285,11 @@ test('reload shows the file as it is now; its own links work; a web link goes to
   await pageView('document.getElementById("back").click()');
   await expect.poll(async () => (await pageView())?.url).toMatch(/index\.html$/);
 
+  // a script's own click does not take the pane anywhere; the user's click does
   await pageView('document.getElementById("web").click()');
+  await page.waitForTimeout(600);
+  await expect(page.locator('#sideTabs .side-tab.active')).toHaveAttribute('data-tab', 'preview');
+  await clickInPage('#web');
   await expect(page.locator('#sideTabs .side-tab.active')).toHaveAttribute('data-tab', 'browser');
   await expect(page.locator('#sbUrl')).toHaveValue(/^https:\/\/example\.invalid\/docs/);
   expect((await pageView()).url).toMatch(/index\.html$/);
@@ -430,4 +442,17 @@ test('the keyboard picks a theme too, and the choice is still there after a rest
   await page.evaluate(([file, id]) => SidePane.openPreview(file, id), [P('report', 'notes.md'), COL]);
   await expect(page.locator('#pvBody .pv-md')).toHaveAttribute('data-md-theme', picked);
   expect((await measure()).bg).toBe(asRgb(Themes.THEMES[1].dark.bg));
+});
+test('a web page that cannot be drawn here says why, and the page before it does not stay behind', async () => {
+  await page.evaluate(([file, id]) => SidePane.openPreview(file, id), [P('report', 'index.html'), COL]);
+  await expect.poll(async () => (await pageView())?.title, { timeout: 20000 }).toBe('probe-done');
+  // a leading dot cannot be carried by the page's address
+  fs.writeFileSync(P('report', '.draft.html'), '<!doctype html><meta charset="utf-8"><title>草稿</title><p>草稿</p>');
+  await page.evaluate(([file, id]) => SidePane.openPreview(file, id), [P('report', '.draft.html'), COL]);
+  await expect(page.locator('#pvHead .pv-title strong')).toHaveText('.draft.html');
+  await expect(page.locator('#pvBody .pv-empty')).toContainText('不能当网址打开');
+  await expect.poll(pageView).toBeNull();
+  // its source is still one click away
+  await page.locator('#pvHead .pv-flip').click();
+  await expect(page.locator('#pvBody .pv-code .pv-src')).toContainText('<title>草稿</title>');
 });

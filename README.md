@@ -417,7 +417,7 @@ Retina 这类 2 倍屏上就是 80%，Windows 100% 缩放这类 1 倍屏上是 1
 架构图自己的 100% 是画布原始大小的 70%（1.3 及以前显示为 70% 的那个大小）：智能一页最大放大到 140%，按栏排也一样
 （整张图放得下就放大铺满，放不下就保持 100%、1 倍屏上 124% 往下滚）；
 缩放范围 40%–250%，「缩小 / 放大」按钮每次走 10%
-并落在整十上，点中间的比例回到 100%，⌘/Ctrl+滚轮和触控板捏合照旧连续缩放。保存的视角仍按画布原始大小记
+并落在整十上，点中间的比例弹出两项：「回到 100%」和「回到自动大小」（见下），⌘/Ctrl+滚轮和触控板捏合照旧连续缩放。保存的视角仍按画布原始大小记
 （老版本存下的值不用换算，屏幕上大小不变，只是读数变了：原来的 70% 现在读 100%，原来的 100% 读 143%）。
 手动设过的比例（按钮、点中间的数字、⌘/Ctrl+滚轮、捏合，任意百分比）从此归你：存进配置（`crewMap.zoom`），重启后还是它。
 之后每当架构图自己摆视角（点「智能一页」、启动、从底部托盘展开项目），都按你的比例重新排：上面同一套打分，只是比例不再是
@@ -429,12 +429,15 @@ Retina 这类 2 倍屏上就是 80%，Windows 100% 缩放这类 1 倍屏上是 1
 比例小到卡片上最小的字不到 10 个设备像素时（2 倍屏低于约 63%，1 倍屏低于约 125%）照样保留，画布底部提示一句
 「X% 下卡片上最小的字不到 10 像素，可能看不清（放大到 Y% 或以上就清楚）」，不强行改。只有从没手动设过比例时，
 才按上面那套自动选比例（一页铺满，最大 140%；下限 80%，1 倍屏上 124%）。
+想交回自动：点中间的比例，选「回到自动大小」，就丢掉你设的比例（配置里的 `crewMap.zoom` 清空），架构图马上按窗口重新自动定大小、
+铺满一屏，之后窗口变了也跟着自动调，就像从没设过比例；拖过的位置不动。这是唯一会清掉你设的比例的操作：改窗口大小、点「智能一页」、
+「一键整理」、重启都不会动它。没设过比例时这一项是灰的（悬停提示「现在就是自动大小」）。菜单可以用方向键上下选，Esc 或点别处关上。
 手动拖过卡片或项目框之后，当时那套排法会被留住，窗口再变大小也不会把手摆的位置顶乱；手动缩放平移过之后视角也归你。
 所以以前手动拖过框的图，升级后打开仍是原来那套排法；点一下右下角「智能一页」就换成新的横排。「智能一页」按钮在自动排法时
 是亮的，手动摆过后变暗、带一个小圆点；离开自动排法的那一次拖动可以「撤销」回去（撤销按钮出现，画布底部也提示一句）。
 画布右下角（图例行右侧）的图标按钮：「一键整理」把拖乱的框和卡片对齐排回网格——按你摆的先后（像读文字一样：顶边差不多高的
 框算一行、从左往右读，再读下一行）排，记住这个先后，不动你手动设的缩放，移动有过渡动画；「撤销」回到整理前
-的位置和缩放（再手动拖一下就不能撤了）；缩小 / 比例 / 放大；「智能一页」把排布和先后交回自动，按当前窗口重新算：
+的位置和缩放（再手动拖一下就不能撤了）；缩小 / 比例（点开：回到 100%、回到自动大小）/ 放大；「智能一页」把排布和先后交回自动，按当前窗口重新算：
 没手动设过比例时缩放回到正好铺满一屏的大小（最大 140%）；设过比例就保持你的比例，只重新排列数、栏数和折行（见上）。
 一页放不下时在画布底部提示一句，同样可以撤销。系统开了「减少动态效果」时整理直接到位、没有动画。
 没有会话在干活/待补充/排队的项目默认收进底部「非活跃项目」托盘（真实数量，点 chip 展开到画布，失败项目标红）；
@@ -1010,7 +1013,8 @@ including the conversations from before a context clear. A path 队长 only
 mentions counts when it is a result type (documents, PDFs, Office files, HTML
 reports, pictures, video, audio); a file a receipt hands in counts whatever its
 type (a final .csv or .txt too). Neither counts when it is a process type
-(code, .json, logs, databases, shell scripts…) or sits under node_modules, .git,
+(code: .js, .ts, .py, .go, .rs, .java, .c, .swift, .sql, .patch…; .json, logs,
+databases, shell scripts…) or sits under node_modules, .git,
 tmp, scratchpad or the system temp folders. The three lists are editable from
 the panel's gear (saved as `deliverableRules` only when changed). Each row shows the file name, its
 project (a receipt's own, or the project a folder on its path is named after),
@@ -1098,10 +1102,12 @@ an index from before this counts nothing as new). The phone hub does not have it
   page lies in (real paths: no `..`, no symbolic link leading out, no hidden file, no
   key or credential name, only formats a page is made of, 64 MB each). Requests to
   `file:`, to this machine (`localhost`, `127.*`, `::1`), to the local network and to
-  anything but `http(s)` on the public web are cancelled, so a CDN chart library loads
+  anything but `http(s)` on the public web are cancelled (a name is looked up first, so a
+  public name that points at this machine or the local network is cancelled too), so a CDN chart library loads
   and the deck's own phone page or sync server cannot be reached. Permissions,
-  downloads and new windows are denied; the page can move between its own pages; a
-  link to the public web opens in the 浏览器 tab. A page lying in a catch-all folder
+  downloads, dialogs (`alert`, `confirm`) and new windows are denied; the page can move
+  between its own pages; a link to the public web that you click opens in the 浏览器 tab
+  (a page that sends itself somewhere without your click stays where it is). A page lying in a catch-all folder
   (the home folder and what sits right in it such as Desktop, Downloads or `~/reports`,
   a drive, the temporary folder) is given only itself, and the pane says so: put it in
   a folder of its own to load the pictures and scripts next to it. Leaving the page
@@ -1150,7 +1156,8 @@ an index from before this counts nothing as new). The phone hub does not have it
     back, + − 0 1 on the keyboard; Esc or a click beside it closes.
 - Terminal output and bubbles find paths with the same rules
   (`findLinks` in `renderer.js`): a path ends at Chinese or full-width punctuation,
-  curly quotes and the space before the words after it, so two paths on one line
+  curly quotes and the space before the words after it (title marks such as 《》『』 stay
+  inside a file name, `《三体》笔记.md`; one that closes nothing it opened ends the path), so two paths on one line
   are two links. Spaces stay inside a folder name (`Application Support`,
   `Program Files (x86)`), also when that folder ends the path, and in a file name
   that reads as one (`截屏2026-10-09 下午3.04.12.png`); English words after a path

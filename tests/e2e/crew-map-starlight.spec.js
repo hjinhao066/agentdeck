@@ -497,16 +497,16 @@ test('智能一页: one click hands the arrangement back to the window, filling 
   // back to the zoom it filled the page at, by hand: 140%
   await page.locator('[data-cm="out"]').click(); await page.locator('[data-cm="out"]').click();
 
-  // the zoom control reads and steps from the map's own 100%: tenths of it, and a click on the number comes back to it
+  // the zoom control reads and steps from the map's own 100%: tenths of it, and the number's 回到 100% comes back to it
   await expect(label).toHaveText('140%');
-  await label.click();
+  await label.click(); await page.locator('[data-cm="zoom-100"]').click();
   await expect(label).toHaveText('100%');
   await page.locator('[data-cm="out"]').click();
   await expect(label).toHaveText('90%');
   expect((await page.evaluate(() => CrewMap.view())).scale).toBeCloseTo(0.63, 5);
   await page.locator('[data-cm="out"]').click(); await page.locator('[data-cm="out"]').click();
   await expect(label).toHaveText('70%');
-  await expect(label).toHaveAttribute('aria-label', '回到 100%（当前 70%）');
+  await expect(label).toHaveAttribute('aria-label', '缩放比例（当前 70%）：点开可回到 100% 或回到自动大小');
   // a pinch leaves it between two steps: the next press lands on a whole tenth
   await page.evaluate(() => { const vp = document.querySelector('.cm-viewport'), r = vp.getBoundingClientRect(); vp.dispatchEvent(new WheelEvent('wheel', { deltaY: -30, ctrlKey: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); });
   const pinched = await label.textContent();
@@ -514,7 +514,7 @@ test('智能一页: one click hands the arrangement back to the window, filling 
   expect(Number(pinched.replace('%', ''))).toBeLessThan(80);
   await page.locator('[data-cm="in"]').click();
   await expect(label).toHaveText('80%');
-  await label.click();
+  await label.click(); await page.locator('[data-cm="zoom-100"]').click();
   await expect(label).toHaveText('100%');
   expect((await page.evaluate(() => CrewMap.view())).scale).toBeCloseTo(0.7, 5);
   expect(await page.evaluate(() => config.crewMap.view.scale), 'the view is saved in drawn units, as older versions saved it').toBeCloseTo(0.7, 5);

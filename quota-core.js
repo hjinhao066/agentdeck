@@ -71,7 +71,9 @@
     const info = seat?.info || {}, cred = info.credential;
     const where = cred?.store === 'file' ? '凭据文件' : '钥匙串';
     const relogin = seat ? '需要重新登录这个席位' : '需要重新登录';
-    const clock = (t) => { const d = new Date(t), pad = (v) => String(v).padStart(2, '0'); return `${t - now > 86400000 ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` : ''}${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+    // the date too for a time more than a day ahead, or one on an earlier day (old numbers)
+    const clock = (t) => { const d = new Date(t), pad = (v) => String(v).padStart(2, '0'), day = t - now > 86400000 || (t < now && d.toDateString() !== new Date(now).toDateString());
+      return `${day ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` : ''}${pad(d.getHours())}:${pad(d.getMinutes())}`; };
     const make = (level, kind, label, reason, action) => ({ level, kind, label, reason, action });
     if (cred?.state === 'invalid') return make('bad', 'credential', '登录凭据坏了', `${where}里的登录凭据有 ${cred.bytes} 字节，不是合法 JSON，读不出来`, relogin);
     if (cred?.state === 'no-oauth') return make('bad', 'credential', '登录凭据坏了', `${where}里没有 Claude 登录令牌`, relogin);

@@ -534,10 +534,28 @@
   function cleanTodoAi(ai) {
     if (!ai || typeof ai !== 'object' || !TODO_AI.includes(ai.status)) return null;
     return { status: ai.status, delivered: time(ai.deliveredAt), updated: time(ai.updated) ? ai.updated : '',
+      ...(ai.noCaptain === true ? { noCaptain: true } : {}), ...(['darwin', 'win32'].includes(ai.ownerPlatform) ? { ownerPlatform: ai.ownerPlatform } : {}),
       message: typeof ai.message === 'string' ? ai.message.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500) : '',
       files: ai.status !== 'done' || !Array.isArray(ai.files) ? [] : ai.files.filter((f) => typeof f === 'string').slice(0, 10)
         .map((f) => (f.split(/[\\/]/).filter(Boolean).pop() || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200)).filter(Boolean) };
   }
+  // The line under a 待办 handed to AI while 队长 has not taken it yet; both the
+  // desktop page and the phone read it here. `here`: the page runs on the computer
+  // that hands this 待办 over (no 队长 there means it waits; nothing hands it to the other one).
+  const TODO_AI_DONE = { working: 'AI 正在办', needs_user: 'AI 在等你', done: 'AI 办完了', failed: 'AI 没办成' };
+  function todoAiChip(ai, here) {
+    if (!ai) return '';
+    if (TODO_AI_DONE[ai.status]) return TODO_AI_DONE[ai.status];
+    if (ai.delivered === true || time(ai.deliveredAt)) return '已交给 AI · 队长已收到';
+    if (ai.noCaptain === true) {
+      if (here) return '这台电脑没有队长，打开队长后才会交出去';
+      const name = ai.ownerPlatform === 'darwin' ? 'Mac' : ai.ownerPlatform === 'win32' ? 'Windows' : '记下它的那台电脑';
+      return `${name} 上没有队长，在那台打开队长后才会交出去`;
+    }
+    return '已交给 AI · 等队长接收';
+  }
+  // A 待办 AI had finished and the user then edited: it is not handed over again, and the line says so.
+  const todoAiBefore = (item) => (item && !item.ai && item.aiBefore && item.aiBefore.status === 'done' ? 'AI 改字前已办完；改字后不会再交给 AI' : '');
   // The clocks of each part of a 待办 (see mergeTodos), kept when well-formed.
   const TODO_CLOCKS = ['textUpdated', 'doneUpdated', 'deletedUpdated'];
   const todoClocks = (item, keys = TODO_CLOCKS) => Object.fromEntries(keys.filter((key) => time(item[key])).map((key) => [key, item[key]]));
@@ -550,7 +568,8 @@
       if (typeof item.text !== 'string' || !item.text.trim()) continue;
       out.push({ id: item.id, text: item.text.slice(0, 500), done: item.done === true, doneAt: item.done === true && time(item.doneAt) ? item.doneAt : null,
         created: time(item.created) ? item.created : item.updated, updated: item.updated, ...todoClocks(item),
-        ...(cleanTodoAi(item.ai) ? { ai: cleanTodoAi(item.ai) } : {}) });
+        ...(cleanTodoAi(item.ai) ? { ai: cleanTodoAi(item.ai) } : {}),
+        ...(item.aiBefore && item.aiBefore.status === 'done' ? { aiBefore: { status: 'done' } } : {}) });
     }
     return out;
   }
@@ -592,9 +611,11 @@
       const version = shown.filter((c) => c.item.text === content.text && todoClock.text(c.item) === todoClock.text(content));
       const ai = latestTodo(version, todoClock.ai).item.ai;
       const check = latestTodo(shown, todoClock.done).item;
-      const { ai: _ai, ...rest } = whole.item;
+      // what AI had before an edit goes with the edited text, as on the desktop (todo-store combine)
+      const aiBefore = (version.find((c) => c.item.aiBefore) || {}).item?.aiBefore;
+      const { ai: _ai, aiBefore: _before, ...rest } = whole.item;
       live.push({ ...rest, text: content.text, textUpdated: todoClock.text(content), done: check.done, doneAt: check.doneAt, doneUpdated: todoClock.done(check),
-        ...(ai ? { ai } : {}), seenOn: whole.from });
+        ...(ai ? { ai } : {}), ...(aiBefore ? { aiBefore } : {}), seenOn: whole.from });
     }
     const open = live.filter((t) => !t.done).sort((a, b) => Date.parse(b.created) - Date.parse(a.created) || a.id.localeCompare(b.id));
     const done = live.filter((t) => t.done).sort((a, b) => Date.parse(b.doneAt || b.updated) - Date.parse(a.doneAt || a.updated) || a.id.localeCompare(b.id));
@@ -633,7 +654,7 @@
     return `${name} 没有记下这条（HTTP ${result.status}）。`;
   }
 
-  return { cleanTodos, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt, cardQuestion,
+  return { cleanTodos, todoAiChip, todoAiBefore, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt, cardQuestion,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, rowHealth, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 
@@ -649,7 +670,7 @@
 })(typeof self !== 'undefined' ? self : this, () => {
   const ID = /^at-[a-z0-9-]{4,40}$/;
   const TURN = /^[A-Za-z0-9_-]{1,160}$/;
-  const DONE_BY = ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat'];
+  const DONE_BY = ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat', 'todo'];
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : 0;
   const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ').slice(0, max) : '';
   const line = (value, max) => text(value, max).replace(/\s+/g, ' ').trim();
@@ -950,8 +971,9 @@
   const SAFE_URL = /^(https?:\/\/|mailto:)/i;
   // next to Chinese text a star needs no space around it: "这是*重点*内容"
   const EM_BEFORE = '(^|[\\s(（“"「【：，。、\\u3400-\\u9fff])', EM_AFTER = '(?=[\\s).,;:!?，。；：、）”"」】\\u3400-\\u9fff]|$)';
-  // "C:\…" up to white space, quotes or Chinese punctuation; single spaces as in "Program Files"
-  const WIN_PATH = /\b[A-Za-z]:\\(?:[^\s`"'<>|\u3000-\u303f\uff01-\uff60]| (?=[^\s`"'<>|]))*/g;
+  // "C:\…" up to white space, quotes or Chinese punctuation; single spaces as in "Program Files", when
+  // another folder follows (the words after a path are not part of it: their escapes still work)
+  const WIN_PATH = /\b[A-Za-z]:\\(?:[^\s`"'<>|\u3000-\u303f\uff01-\uff60]| (?=[^\s`"'<>|\\][^\s`"'<>|]*\\))*/g;
   const EM_STAR = new RegExp(EM_BEFORE + '\\*([^*\\s][^*\\n]*)\\*' + EM_AFTER, 'g'), EM_BAR = new RegExp(EM_BEFORE + '_([^_\\s][^_\\n]*)_' + EM_AFTER, 'g');
   function inline(src, opts) {
     const held = [], links = !!(opts && opts.links), rich = !!(opts && opts.rich);

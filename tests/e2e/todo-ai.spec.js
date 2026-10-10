@@ -105,8 +105,8 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     expect(submitted.ai).toMatchObject({ status: 'queued', taskId: taskId(submitted), deliveredAt: null });
     expect((await items()).find((i) => i.text === '自己去取快递').ai).toBe(null);
     expect((await cards())[0]).toMatchObject({ id: submitted.ai.taskId, project: 'todo', status: 'todo', title: taskBody });
-    // The row says it went to AI; a plain 待办 says nothing.
-    await expect(page.locator('.todo-row', { hasText: original }).locator('.todo-ai-chip')).toHaveText('已交给 AI · 等队长接收');
+    // The row says it went to AI and that this computer has no 队长 yet to take it; a plain 待办 says nothing.
+    await expect(page.locator('.todo-row', { hasText: original }).locator('.todo-ai-chip')).toHaveText('这台电脑没有队长，打开队长后才会交出去');
     await expect(page.locator('.todo-row', { hasText: '自己去取快递' }).locator('.todo-ai')).toHaveCount(0);
     expect(await filed()).toEqual([]);
 
@@ -217,28 +217,39 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     await expect(report.locator('.at-from')).toHaveText('来自待办');
     await shot(page, 'desktop-attention-ai-done');
 
-    // Editing the original creates a fresh version; late old results are refused.
+    // A finished 待办 edited later is not handed over again (队长 decided, bug hunt ④): its 队长 is told
+    // it changed, the row says so, and late results for the old version are refused.
     await page.locator('#todoBtn').click();
     const row = page.locator('.todo-row', { hasText: original });
     await row.hover();
     await row.locator('button[title="编辑"]').click();
-    const edited = '@ai 查另一份公开资料并存下来';
-    await page.locator('.todo-edit').fill(edited);
+    const reworded = original + '（要 3.13 的）';
+    await page.locator('.todo-edit').fill(reworded);
     await page.locator('.todo-edit').press('Enter');
-    await expect.poll(async () => (await cards()).length).toBe(2);
-    const next = (await items()).find((i) => i.id === submitted.id);
-    expect(next.ai.taskId).toBe(taskId(next));
-    expect(next.ai.taskId).not.toBe(submitted.ai.taskId);
+    await expect(page.locator('.todo-row', { hasText: reworded }).locator('.todo-ai')).toHaveText('AI 改字前已办完；改字后不会再交给 AI');
+    let told = '';
+    await expect.poll(async () => { told += (await cli(['receipts'])).stdout; return told; }).toContain('用户改了一条你已经办完的待办');
+    expect(told).toContain(reworded);
+    expect(await cards()).toHaveLength(1);
     const stale = await status(submitted, 'working');
     expect(stale.code).not.toBe(0);
     expect(stale.stderr).toContain('版本过期');
+
+    // A new @ai 待办 is a fresh task; it carries the failure path below.
+    const edited = '@ai 查另一份公开资料并存下来';
+    await page.locator('.todo-add-input').fill(edited);
+    await page.locator('.todo-add-input').press('Enter');
+    await expect.poll(async () => (await cards()).length).toBe(2);
+    const next = (await items()).find((i) => i.text === edited);
+    expect(next.ai.taskId).toBe(taskId(next));
+    expect(next.ai.taskId).not.toBe(submitted.ai.taskId);
     expect((await status(next, 'failed', ['--message', '测试异常：没有找到资料'])).code).toBe(0);
     await expect.poll(async () => (await bark()).length).toBe(1);
     expect((await bark())[0]).toMatchObject({ body: 'Todo AI 有 1 条任务没办成或出错，请在 AgentDeck 查看详情。', level: 'timeSensitive' });
     expect((await bark())[0].volume).toBeUndefined();
     expect((await status(next, 'failed', ['--message', '测试异常：没有找到资料'])).code).toBe(0);
     expect(await bark()).toHaveLength(1);
-    expect((await items()).find((i) => i.id === submitted.id).ai.status).toBe('failed');
+    expect((await items()).find((i) => i.id === next.id).ai.status).toBe('failed');
     expect((await cards()).find((c) => c.id === next.ai.taskId)).toMatchObject({ status: 'needs_user', flag: 'failed' });
     // The failure is one decision with quick answers, not a second generic alert item.
     // (The report above may already count as read: it was on screen.)
@@ -256,7 +267,7 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     // One tap answers: it reaches 队长 with the card, and the decision is ticked.
     await failed.locator('.at-quick button', { hasText: '重试' }).click();
     await expect.poll(async () => (await filed()).find((i) => i.kind === 'need' && i.card === next.ai.taskId).done).toBe(true);
-    await expect.poll(async () => (await items()).find((i) => i.id === submitted.id).ai.deliveredAt).not.toBeNull();
+    await expect.poll(async () => (await items()).find((i) => i.id === next.id).ai.deliveredAt).not.toBeNull();
     const received = await cli(['receipts']);
     expect(received.stdout).toContain(edited);
     expect(received.stdout).toContain('用户的回复：重试');
@@ -264,7 +275,7 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     await page.reload();
     await expect.poll(() => page.evaluate(() => !!window.MainSession?.state())).toBe(true);
     expect(await cards()).toHaveLength(2);
-    expect(await page.evaluate(() => Object.keys(config.todoDeliveries).length)).toBe(2);
+    expect(await page.evaluate(() => Object.keys(config.todoDeliveries).length)).toBe(3); // the first task, the change notice, the new task
     // Simulate a crash between the Captain's durable acceptance and the Todo
     // acknowledgement: the watcher retries, but the restored marker dedups it.
     const ownFile = fs.readdirSync(path.join(profile, 'todos')).find((file) => file.endsWith('.json'));
@@ -276,7 +287,7 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     await expect.poll(async () => (await items()).find((i) => i.id === next.id).ai.deliveredAt).not.toBeNull();
     expect((await cli(['receipts'])).stdout).not.toContain(edited);
     expect(await bark()).toHaveLength(1);
-    expect(await page.evaluate(() => Object.keys(config.todoDeliveries).length)).toBe(2);
+    expect(await page.evaluate(() => Object.keys(config.todoDeliveries).length)).toBe(3); // the first task, the change notice, the new task
     expect(await page.evaluate(() => Object.keys(config.todoInbox).length)).toBe(0);
     // Backend filesystem failures must reach the Captain, without leaking the
     // damaged data into the receipt or making success/waiting tasks ring.
@@ -287,7 +298,7 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     expect(exception.stdout).toContain('TODO_STORE_CORRUPT');
     expect(exception.stdout).not.toContain('private-CT-material');
     fs.writeFileSync(file, healthy);
-    await expect.poll(async () => (await items()).length).toBe(2);
+    await expect.poll(async () => (await items()).length).toBe(3);
     expect(await bark()).toHaveLength(1);
     if (process.platform === 'darwin') {
       expect(foregroundPids.length).toBeGreaterThan(0);

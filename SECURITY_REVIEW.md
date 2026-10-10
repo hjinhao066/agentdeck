@@ -72,11 +72,18 @@ and regression pass, not a penetration-test certification.
   root or the temporary folder gets only itself.
 - Network: `file:`, loopback, private and link-local addresses, single-label and
   `.local`-style names, and every scheme but public `http(s)` are cancelled in the
-  session's `onBeforeRequest`. Permissions, downloads and popups are denied; navigation
-  stays on the page's own address; only a public web link is passed to the browser tab.
-- Remaining boundary: the check is on the host name, so a public name that resolves to a
-  local address (DNS rebinding) is not caught; the same holds for any page in the browser
-  tab. A page can send what it can read (its own folder) to the public web.
+  session's `onBeforeRequest`. Permissions, downloads, dialogs (`alert`, `confirm`) and popups are denied; navigation
+  stays on the page's own address; only a public web link the user clicked (a real mouse or key
+  press in the page within 2 s, which a script cannot make) is passed to the browser tab.
+- A name is looked up before its request leaves (verdict kept for a minute) and refused when
+  any of its addresses is local, so a public name pointing at this machine or the local
+  network (`*.nip.io`, `localtest.me`, anyone's own domain) is refused like the address.
+- WebRTC does not pass `onBeforeRequest`: the view's policy is `disable_non_proxied_udp`, so no
+  STUN/UDP leaves the page. A TURN server reached over TCP is still dialled (a fixed handshake,
+  no answer reaches the page).
+- Remaining boundary: a name that answers our lookup with a public address and Chromium's a
+  moment later with a local one (DNS rebinding with a zero TTL) is not caught; the browser tab
+  checks no names at all. A page can send what it can read (its own folder) to the public web.
 - Reading tools: the file watch is set only on a path resolved like a preview click
   (`resolveClick`), one file at a time, and reports a counter, not a path. Find in a page
   passes only the typed words (at most 200 characters) to Chromium's find in the page's
