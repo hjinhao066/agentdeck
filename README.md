@@ -1046,7 +1046,8 @@ an index from before this counts nothing as new). The phone hub does not have it
   default 13). The native View menu uses the same control; it does not zoom the
   page, so the sidebar and column geometry stay stable.
 - The left sidebar searches every conversation, titles and full text of prompts and
-  replies only. Shortcuts: ⌘/Ctrl+K search, ⌘/Ctrl+\ toggle the side pane.
+  replies only, including the 队长's conversations from before each context clear (marked
+  只读; a hit opens it in the 队长 column's read-only history). Shortcuts: ⌘/Ctrl+K search, ⌘/Ctrl+\ toggle the side pane.
 - Conversations are saved locally in the app's userData folder under `chats`
   (one private JSON file per session, written atomically) and are not committed.
   Folders, archived sessions and schedules live in the

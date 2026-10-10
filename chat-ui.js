@@ -953,6 +953,21 @@
       seg.addEventListener('toggle', () => { if (seg.open && !list.childNodes.length) fill(); });
       seg.appendChild(list);
       box.appendChild(seg);
+      // a search hit in this conversation opens it at that turn
+      const hit = v.retiredHit && v.retiredHit.chatId === chat.id ? v.retiredHit : null;
+      if (!hit) return;
+      v.retiredHit = null;
+      const at = chat.turns.findIndex((t) => t.id === hit.turnId);
+      if (at >= 0) shown = Math.max(shown, chat.turns.length - at);
+      seg.open = true;
+      fill();
+      const rows = [...list.querySelectorAll('[data-turn]')].filter((n) => n.dataset.turn === hit.turnId);
+      const row = hit.role === 'reply' ? rows[rows.length - 1] : rows[0];
+      if (row) requestAnimationFrame(() => {
+        row.scrollIntoView({ block: 'center' });
+        row.classList.add('flash');
+        setTimeout(() => row.classList.remove('flash'), 1800);
+      });
     });
     return box;
   }
@@ -1751,7 +1766,10 @@
     if (!q) { nav.results.hidden = true; list.hidden = false; return; }
     list.hidden = true; nav.results.hidden = false;
     const archivedIds = new Set(host.archived().map((a) => a.id));
-    const hits = C.searchChats(artifactSources(), q);
+    // the 队长's conversations from before each context clear are searched too
+    const retired = captainArchives().map((c) => ({ colId: c.id, title: '清空前的队长对话', turns: c.turns }));
+    const retiredIds = new Set(retired.map((c) => c.colId));
+    const hits = C.searchChats([...artifactSources(), ...retired], q);
     if (!hits.length) { nav.results.appendChild(el('div', 'nr-empty', '没有匹配的对话')); return; }
     hits.forEach((h) => {
       const item = el('button', 'nr-item');
@@ -1759,6 +1777,7 @@
       const head = el('div', 'nr-head');
       head.append(el('span', 'nr-title', h.title), el('span', 'nr-role', h.role === 'user' ? '我' : h.role === 'reply' ? '回复' : '标题'));
       if (archivedIds.has(h.colId)) head.appendChild(el('span', 'nr-role', '已归档'));
+      if (retiredIds.has(h.colId)) head.appendChild(el('span', 'nr-role', '只读'));
       const body = el('div', 'nr-snippet');
       const mark = el('mark', null, h.match);
       body.append(h.before, mark, h.after);
@@ -1767,7 +1786,19 @@
       nav.results.appendChild(item);
     });
   }
+  // A hit from before a context clear opens in the 队长 column's read-only history.
+  function revealRetired(chatId, turnId, role) {
+    const col = host.columns().find((c) => c.isMain);
+    const v = col && views.get(col.id);
+    if (!v) return;
+    host.jumpToColumn(col);
+    if (modeOf(col) !== 'chat') setMode(col.id, 'chat');
+    v.showRetired = true;
+    v.retiredHit = { chatId, turnId, role };
+    renderChat(col.id, true);
+  }
   function reveal(colId, turnId, role) {
+    if (!columnById(colId) && chats.has(colId) && chats.get(colId).captainArchive) { revealRetired(colId, turnId, role); return; }
     if (!columnById(colId)) {
       // an archived conversation comes back first
       if (!host.archived().some((a) => a.id === colId) || !host.restoreArchived(colId, false)) return;
