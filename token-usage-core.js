@@ -507,6 +507,18 @@
     return rows.sort((a, b) => b.price - a.price || b.value.spent - a.value.spent || (a.key < b.key ? -1 : 1));
   }
 
+  // The Token view's 按席位目录: each group of seats that share one log directory, with its tokens over
+  // `days`, named by the account signed in there now (the seat's name when none is). By directory: a
+  // directory whose account changed keeps all of it (the page says so).
+  function seatTokenRows({ seatTokens, infos, days }) {
+    const byId = new Map((infos || []).filter((i) => i && i.id).map((i) => [i.id, i]));
+    return (seatTokens || []).map((g) => {
+      const seats = (g.seats || []).filter((id) => byId.has(id));
+      const names = [...new Set(seats.map((id) => accountOf(byId.get(id)) || byId.get(id).name || id))];
+      return { seats, names, total: (days || []).reduce((sum, d) => sum + (Number(g.days && g.days[d]) || 0), 0) };
+    }).filter((r) => r.seats.length).sort((a, b) => b.total - a.total || (a.seats[0] < b.seats[0] ? -1 : 1));
+  }
+
   // The Token 用量 view's saved settings: the range, Token or 金额, and the cycle
   // start the user set per 订阅值不值 row (a YYYY-MM-DD by row key).
   function viewPrefs(v) {
@@ -678,7 +690,7 @@
   return {
     BUCKETS, BUCKET_LABELS, SOURCES, PROVIDERS, SLOTS, OTHER, ANTIGRAVITY_MODELS, providerOf,
     dayKey, addDays, dayStart, dayRange, dayParts, dayTitle, axisLabel, axisTicks,
-    priceOf, recordCost, dailyCosts, pricedDay, unpricedKeys, formatUsd, formatTimes, cycleOf, subscriptionValue, valueRows, viewPrefs,
+    priceOf, recordCost, dailyCosts, pricedDay, unpricedKeys, formatUsd, formatTimes, cycleOf, subscriptionValue, valueRows, seatTokenRows, viewPrefs,
     claudeRecords, claudeMayCount, codexState, codexMayCount, codexLine, pbFields, antigravityStep, fillAntigravityModels, antigravityModel, cursorCsv, csvRow,
     mergeRecords, dailySums, seriesKey, modelLabel, sourceName,
     formatShort, formatFull, formatPct, niceScale, dayModels, dayTotal, dayBuckets, providerTotals, assignColors, stack, placeLabels,

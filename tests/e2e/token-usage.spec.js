@@ -36,7 +36,7 @@ async function resize(width, height) {
 // Dollars too: costs[day][key] at the official prices (null: no official price),
 // and each seat directory's dollars per day (the 订阅值不值 rows).
 function seed(home) {
-  const expected = {}, costs = {}, groups = { cn: {}, us2: {} };
+  const expected = {}, costs = {}, groups = { cn: {}, us2: {} }, tokens = { cn: {}, us2: {} };
   const add = (day, key, t) => { const d = expected[day] || (expected[day] = {}); d[key] = (d[key] || 0) + t; };
   const addCost = (day, key, r, group) => {
     const d = costs[day] || (costs[day] = {});
@@ -62,6 +62,7 @@ function seed(home) {
       file.push(JSON.stringify({ type: 'assistant', timestamp: at(h), message: { id, model, usage: u } }));
       if (!source) return;
       add(day, `${source}:${model}`, u.input_tokens + u.output_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens);
+      if (group) tokens[group][day] = (tokens[group][day] || 0) + u.input_tokens + u.output_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens;
       addCost(day, `${source}:${model}`, { ts: Date.parse(at(h)), model, input: u.input_tokens, output: u.output_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens }, group);
     };
     const big = 1 + 0.8 * Math.sin(back / 3) ** 2;
@@ -89,7 +90,7 @@ function seed(home) {
   write(path.join(home, '.claude-us2', 'projects', 'demo', 'b.jsonl'), claudeB);
   write(path.join(home, '.local', 'claude-deepseek', 'config', 'projects', 'demo', 'c.jsonl'), ds);
   codex.forEach((c, i) => write(path.join(home, '.codex', 'sessions', c.day.replace(/-/g, '/'), `rollout-${i}.jsonl`), c.lines));
-  return { today, expected, costs, groups };
+  return { today, expected, costs, groups, tokens };
 }
 // Two signed-in Claude accounts in the test profile's seats: a Pro one on CN and a
 // Max 20x one on US2, each with the day its subscription started.
@@ -240,6 +241,19 @@ test('7 days: totals, biggest model on top, totals on the caps, hover, day table
   expect((await refresh.innerText()).trim()).toBe('');
   await refresh.click();
   await expect(refresh).not.toHaveClass(/busy/, { timeout: 30000 });
+  // 按席位目录: each seat directory's Claude tokens over the range, the larger first, with what it does not tell
+  const seatCard = view.locator('.tu-seats');
+  await expect(seatCard).toBeVisible({ timeout: 30000 });
+  await expect(seatCard.locator('.tu-value-note')).toHaveText('按目录统计，目录换过号会算到当时的目录');
+  const seatRows = seatCard.locator('.tu-seat-row');
+  await expect(seatRows).toHaveCount(2);
+  // named by the account signed in there now (pro on CN, max on US2), as the sidebar names seats
+  const account = { cn: 'pro', us2: 'max' };
+  const bySeat = Object.entries(fixture.tokens).map(([g, days]) => [account[g], C.dayRange(fixture.today, 7).reduce((s, d) => s + (days[d] || 0), 0)]).sort((a, b) => b[1] - a[1]);
+  for (const [i, [name, total]] of bySeat.entries()) {
+    await expect(seatRows.nth(i).locator('.tu-value-name')).toHaveText(name);
+    await expect(seatRows.nth(i).locator('.tu-seat-num')).toHaveText(C.formatShort(total));
+  }
   await screenshot('after-dark-1440');
   await page.evaluate(() => applyTheme('light'));
   await page.waitForTimeout(400);
@@ -329,6 +343,7 @@ test('金额: dollars on every cap, in the tiles, the legend and the table; 无�
   await expect(view.locator('.tu-value')).toBeVisible({ timeout: 30000 });
   await usd.click();
   await expect(usd).toHaveAttribute('aria-pressed', 'true');
+  await expect(view.locator('.tu-seats')).toBeHidden();
   await expect(view.locator('.tu-hero-num')).toHaveText(C.formatUsd(rangeCost(7)));
   await expect(view.locator('.tu-hero-cap')).toHaveText('按官方 API 价折算');
   await expect.poll(() => page.evaluate(() => config.tokenUsageView && config.tokenUsageView.unit)).toBe('usd');

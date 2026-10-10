@@ -13,7 +13,8 @@
 //
 // Each day and model is also priced at its official API list price
 // (token-prices.json), and the Claude dollars are summed per seat directory for
-// the 订阅值不值 rows. The page gets seat ids, never a path.
+// the 订阅值不值 rows, the tokens per seat directory for the Token view's 按席位目录.
+// The page gets seat ids, never a path.
 const fs = require('fs');
 const path = require('path');
 const C = require('./token-usage-core');
@@ -293,6 +294,16 @@ async function scan({ home, cacheFile, now = Date.now(), extraClaude = [], seats
     d[day] = (d[day] || 0) + c[0] + c[1] + c[2] + c[3];
   }
   for (const g of seatCosts) for (const day of Object.keys(g.days)) g.days[day] = Math.round(g.days[day] * 1e6) / 1e6;
+  // The Token view's 按席位目录: each record's tokens go to the seat directory its log is in, whichever
+  // account was signed in there at the time.
+  const seatTokens = groups.map((g) => ({ seats: g.seats, days: {} }));
+  for (const r of merged) {
+    if (r.group == null) continue;
+    const day = C.dayKey(r.ts);
+    if (day < from || day > today) continue;
+    const d = seatTokens[r.group].days;
+    d[day] = (d[day] || 0) + r.input + r.output + r.cacheRead + r.cacheWrite;
+  }
   const plans = {};
   for (const [name, p] of Object.entries(PRICES.plans || {})) plans[name] = p.usd;
   try { saveCache(cacheFile, cache); } catch (_) {}
@@ -312,7 +323,7 @@ async function scan({ home, cacheFile, now = Date.now(), extraClaude = [], seats
   add('cursor', 'Cursor', { export: true, missing: report.cursor.missing });
   sources.push({ id: 'gemini-cli', name: 'Gemini CLI', state: geminiChats ? 'unsupported' : 'none', files: geminiChats, records: 0, errors: 0, lastDay: '' });
   sources.push({ id: 'chatgpt-web', name: 'ChatGPT 网页', state: 'none', files: 0, records: 0, errors: 0, lastDay: '', web: true });
-  return { version: CACHE_VERSION, today, from, generatedAt: now, tookMs: Date.now() - started, days, costs, seatCosts, plans, pricesChecked: PRICES.checked, sources };
+  return { version: CACHE_VERSION, today, from, generatedAt: now, tookMs: Date.now() - started, days, costs, seatCosts, seatTokens, plans, pricesChecked: PRICES.checked, sources };
 }
 
 module.exports = { scan, sourceDirs, readLines, KEEP_DAYS, CACHE_VERSION };

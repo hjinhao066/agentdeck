@@ -35,7 +35,7 @@
   const NO_PRICE = '无官方价';
   const SVG_NS = 'http://www.w3.org/2000/svg';
   let host = null;
-  let root, heroEl, heroCapEl, heroSubEl, providersEl, legendEl, wrapEl, svgEl, tipEl, tableEl, sourcesEl, statusEl, emptyEl, rangeEl, unitEl, valueEl, updatedEl, refreshBtn;
+  let root, heroEl, heroCapEl, heroSubEl, providersEl, legendEl, wrapEl, svgEl, tipEl, tableEl, sourcesEl, statusEl, emptyEl, rangeEl, unitEl, valueEl, seatsEl, updatedEl, refreshBtn;
   let open = false;
   let data = null;
   let error = '';
@@ -446,8 +446,29 @@
     window.deck.claudeSeats(false).then((list) => {
       if (!open || !Array.isArray(list)) return;
       seats = list;
-      if (data && model && !editing) renderValue(model);
+      if (data && model) { if (!editing) renderValue(model); renderSeats(model); }
     }).catch(() => {});
+  }
+
+  // ---- 按席位目录: the Claude tokens of each seat directory over the range (Token view) ----
+  function renderSeats(m) {
+    const rows = !m.money && seats && data.seatTokens ? C.seatTokenRows({ seatTokens: data.seatTokens, infos: seats, days: m.days }) : [];
+    seatsEl.hidden = !rows.length;
+    if (!rows.length) { seatsEl.replaceChildren(); return; }
+    const sum = rows.reduce((s, r) => s + r.total, 0);
+    const head = el('div', 'tu-value-head');
+    head.append(el('h2', 'tu-value-title', '按席位目录'), el('span', 'tu-value-note', '按目录统计，目录换过号会算到当时的目录'));
+    const list = el('div', 'tu-value-list');
+    for (const r of rows) {
+      const seatNames = r.seats.map((id) => { const s = seats.find((x) => x.id === id); return (s && s.name) || id; }).join('、');
+      const item = el('div', 'tu-seat-row');
+      item.title = `席位 ${seatNames}${r.seats.length > 1 ? '（这几个席位共用一个日志目录，分不开）' : ''}，现在登录的是 ${r.names.join(' / ')}：近 ${range} 天 ${C.formatFull(r.total)} tokens`;
+      const bar = el('i', 'tu-provider-bar tu-seat-bar');
+      bar.style.setProperty('--share', sum ? (r.total / sum).toFixed(4) : '0');
+      item.append(el('span', 'tu-value-name', r.names.join(' / ')), el('b', 'tu-seat-num', C.formatShort(r.total)), el('span', 'tu-seat-pct', C.formatPct(r.total, sum)), bar);
+      list.append(item);
+    }
+    seatsEl.replaceChildren(head, list);
   }
 
   const savePrefs = () => host.savePrefs({ days: range, unit, starts });
@@ -485,6 +506,7 @@
     emptyEl.hidden = model.total > 0 || model.unpriced.size > 0;
     renderHero(model);
     if (!editing) renderValue(model);   // a refresh never wipes a date being typed
+    renderSeats(model);
     renderLegend(model);
     renderChart(model);
     renderTable(model);
@@ -552,6 +574,7 @@
             <div class="tu-providers"></div>
           </section>
           <section class="tu-value" aria-label="订阅值不值" hidden></section>
+          <section class="tu-seats" aria-label="按席位目录" hidden></section>
           <section class="tu-chart-card" aria-label="每天各模型用量">
             <ul class="tu-legend" aria-label="图例"></ul>
             <div class="tu-chart" tabindex="0" role="group" aria-label="每天的用量柱状图：左右方向键换一天">
@@ -567,6 +590,7 @@
     heroEl = root.querySelector('.tu-hero-num');
     heroCapEl = root.querySelector('.tu-hero-cap');
     valueEl = root.querySelector('.tu-value');
+    seatsEl = root.querySelector('.tu-seats');
     unitEl = root.querySelector('.tu-unit');
     heroSubEl = root.querySelector('.tu-hero-sub');
     providersEl = root.querySelector('.tu-providers');
