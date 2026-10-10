@@ -54,6 +54,12 @@ class TodoBackendErrors {
       return result;
     } catch (error) { this.report(stage, error); }
   }
+  // The stage worked again (a stage main.js only reports, never runs): its next
+  // fault is a new event and gets its own receipt.
+  recovered(stage) {
+    if (!this.state.active[stage]) return;
+    delete this.state.active[stage]; this.persist();
+  }
   flush() {
     for (const command of Object.values(this.state.pending)) {
       try { this.deliver(command); }

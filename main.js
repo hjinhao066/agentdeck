@@ -129,7 +129,7 @@ function queueTodoReceipt(command) {
 function watchTodos() {
   if (todoWatch) return;
   // git removes this folder when a sync rebase is aborted; watchDir survives that (dir-watch.js).
-  todoWatch = watchDir(todoStore.dir, () => { clearTimeout(todoWatchTimer); todoWatchTimer = setTimeout(todosChanged, 300); },
+  todoWatch = watchDir(todoStore.dir, () => { todoErrors?.recovered('watch'); clearTimeout(todoWatchTimer); todoWatchTimer = setTimeout(todosChanged, 300); },
     { onError: (error) => todoErrors?.report('watch', error) });
 }
 handleMain('todos:request', (_event, payload) => {
@@ -655,7 +655,7 @@ function processBoardRequests() {
           if (request.op === 'list') result = Promise.resolve({ items: todoStore.list() });
           else if (request.op === 'status') result = todoAi.status(request.input || {});
           else throw new Error('Invalid Todo operation.');
-          result.then((value) => writeBoardResponse(request.id, { done: true, result: JSON.stringify(value) }),
+          result.then((value) => { if (request.op === 'status') todoErrors?.recovered('status'); writeBoardResponse(request.id, { done: true, result: JSON.stringify(value) }); },
             (error) => {
               if (error.code || error.file) todoErrors?.report('status', error);
               writeBoardResponse(request.id, { done: true, error: error.message });
@@ -1591,6 +1591,7 @@ app.whenReady().then(async () => {
     const pending = pendingBoardCommands.get(requestId);
     const action = pending?.command.action;
     if (action === 'main-todo-delivery' && done === true && !error) {
+      todoErrors?.recovered('delivery');
       todoErrors?.run('acknowledge', () => todoAi.acknowledge(pending.command.todoId, pending.command.taskId));
     }
     if (action === 'main-todo-error' && done === true && !error) todoErrors?.acknowledge(requestId);
@@ -2068,6 +2069,7 @@ function startFleet(configPath) {
       try {
         if (!todoFailures) throw new Error('Todo failure notification queue unavailable.');
         todoFailures.enqueue(command);
+        todoErrors.recovered('notification-queue-write');
       } catch (error) { todoErrors.report('notification-queue-write', error); throw error; }
     } });
   watchTodos();
