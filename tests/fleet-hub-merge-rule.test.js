@@ -221,6 +221,37 @@ test('only a written complete is authoritative: automatic completes, written fai
   assert.equal(second.body.card.conflicts.at(-1).fields.last_event.other, COMPLETE_A);
 });
 
+test('a card a person moved by hand is not taken back by a late completion', (t) => {
+  const h = hub(t);
+  running(h);
+  // The captain moves the card back to todo on Windows: no run event is written.
+  const moved = h.push('dev-win', 4, { status: 'todo', session_id: null, attempt_id: null, session_host: null, session_bound_at: null });
+  assert.equal(moved.status, 200);
+  const late = h.push('dev-mac', 4, macComplete(ATTEMPT_A));
+  assert.equal(late.status, 409);
+  assert.equal(late.body.card.status, 'todo', 'the decision of the person stays');
+  assert.equal(late.body.card.attempt_id, null);
+  assert.equal(late.body.card.conflicts.at(-1).fields.status.other, 'done');
+});
+
+test('a legacy done card keeps its completion revision after its first edit, so a later reopen from that base works', (t) => {
+  const h = hub(t);
+  running(h);
+  h.push('dev-mac', 4, macComplete(ATTEMPT_A));   // completed at revision 5
+  const data = JSON.parse(fs.readFileSync(h.file, 'utf8'));
+  delete data.cards[CARD].sealed;
+  delete data.cards[CARD].completeSeen;
+  fs.writeFileSync(h.file, JSON.stringify(data));
+  const old = h.reload();
+  const push = (device, base, set, opId) => old.pushTask({ opId, cardId: CARD, expectedRevision: base, deviceId: device, set });
+  const renamed = push('dev-mac', 5, { title: 'renamed after the completion' }, 'op-legacy-rename');
+  assert.equal(renamed.body.card.revision, 6);
+  // The user's machine saw revision 5 (the completion) and reopens the card.
+  const reopened = push('dev-win', 5, { status: 'doing', attempt_closed: false, last_event: null }, 'op-legacy-reopen');
+  assert.equal(reopened.body.card.status, 'doing', 'not refused as stale-after-complete');
+  assert.equal(reopened.body.card.conflicts.length, 0);
+});
+
 test('two machines over HTTP: the completion reaches Windows, which drops its claim', async (t) => {
   const root = tmp(t);
   const store = new SharedStore({ file: path.join(root, 'hub', 'store.json') });

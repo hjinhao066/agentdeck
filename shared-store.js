@@ -344,9 +344,9 @@ class SharedStore {
     for (const item of card.trail || []) if ((item.keys || []).includes('last_event')) at = Math.max(at === null ? 0 : at, item.revision);
     return at === null ? card.revision : at;
   }
-  _noteSeal(card) {
+  _noteSeal(card, at = card.revision) {
     if (!isCommandComplete(card.last_event) || (card.sealed && card.sealed.event === card.last_event)) return;
-    card.sealed = { revision: card.revision, event: card.last_event };
+    card.sealed = { revision: at, event: card.last_event };
     card.completeSeen = [...(card.completeSeen || []).filter((event) => event !== card.last_event), card.last_event].slice(-COMPLETE_SEEN_CAP);
   }
   pushTask({ opId, cardId, expectedRevision, deviceId, set }) {
@@ -381,8 +381,10 @@ class SharedStore {
     // The agent's own `complete` is the authoritative result. When it reaches the hub late,
     // after another machine has already written a guess over the same card (a fallback
     // for an exit with no receipt, an automatic failure, the next attempt's start), the
-    // completion wins field by field; the guess is kept in the conflict record.
-    const authoritative = isCommandComplete(incoming) && !same(card.last_event, incoming)
+    // completion wins field by field; the guess is kept in the conflict record. It needs the
+    // other machine to have written a run event since the writer's base: a card a person
+    // moved by hand (which writes no event) is not taken back by a late completion.
+    const authoritative = isCommandComplete(incoming) && changed.has('last_event') && !same(card.last_event, incoming)
       && !isCommandVerdict(card.last_event) && !(card.completeSeen || []).includes(incoming);
     // A writer based before the card was completed started its attempt without knowing
     // that: it cannot change what an attempt writes.
@@ -432,7 +434,7 @@ class SharedStore {
       card.updatedByDevice = deviceId;
       card.updated = new Date(this.now()).toISOString();
       card.trail = [...(card.trail || []), { revision: card.revision, keys: touched }].slice(-TRAIL_CAP);
-      this._noteSeal(card);
+      this._noteSeal(card, 'last_event' in applied || sealedAt === null ? card.revision : sealedAt);
     }
     const status = conflict ? 409 : 200;
     const saved = this._remember(opId, status, {
