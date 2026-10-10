@@ -2,7 +2,7 @@
 
 本层不创建界面。界面作者直接调用 `window.TaskBoard`，所有文件读写通过
 受主页面校验的 preload IPC 到主进程；页面不持有 Node、任意 IPC 或可选文件路径。
-默认 `dispatcher=gemini`，可改回 `captain`。自动流转和心跳均不调用模型；
+默认 `dispatcher=gemini`（设置名没变，背后的会话如上所述可能是 Claude Haiku），可改回 `captain`。自动流转和心跳均不调用模型；
 只有明确开始卡片时，Gemini 调度模式会开模型会话；带 `verify` 的卡片进入待验收后，
 心跳会让主界面自动开一个审查会话（见「自动验收」）。
 
@@ -220,10 +220,10 @@ CLI 没有 task update、settings 或 start 子命令；这些操作使用界面
 | review 卡片 new --task-id | 绑定审查会话；审查期间仍 review（verify 卡片通常由「自动验收」开，不必手动） |
 | 审查 complete | done，清除连续失败次数 |
 | 审查 complete --failed / 队长从 review move 回 doing | rework_count+1，doing + failed；自动验收的审查员不通过会自动返工，其余由队长用 new 或原会话 tell 返工 |
-| 自动验收：verify 卡进入 review | 心跳认领本轮，主界面开一个不同提供方的审查会话；选不出则停在 review 并写明原因 |
+| 自动验收：verify 卡进入 review | 心跳认领本轮，主界面另起一个新的 Claude 审查会话（Opus 5.5，简单的卡 Sonnet 5.5）；选不出则停在 review 并写明原因 |
 | 自动验收：审查员写「通过」 | done |
 | 自动验收：审查员不通过 | 原话发回原执行会话（已归档先恢复）返工；返工 complete 后进入下一轮审查 |
-| 自动验收：执行会话被补充指令后再交一次回执（审查还没开，或审查员正在审） | 旧一轮审查作废（旧审查员之后的结论被忽略），新回执成为下一轮：review_round 加一，重新选一个不同提供方的审查员；连续失败两次 held 的规则不变，held 的卡不再自动审 |
+| 自动验收：执行会话被补充指令后再交一次回执（审查还没开，或审查员正在审） | 旧一轮审查作废（旧审查员之后的结论被忽略），新回执成为下一轮：review_round 加一，重新选审查员；连续失败两次 held 的规则不变，held 的卡不再自动审 |
 | 连续失败达到两次 | doing + held，通知队长，不派活、不重试 |
 | held 后队长明确 move 到 todo/doing | 解挂，清零连续失败次数，保留累计 rework_count |
 | 队长 `tell` 卡片自己的执行会话（含自动返工） | tell 就是明确要继续干：卡回到执行，这个会话以新尝试绑定（`attempt_closed=false`）。done / 已归档 / held 的卡先挪回 doing，记 `last_auto_recovered_at` / `last_auto_recovered_from`（done、archived、held），held 不清零连续失败次数（再失败一次立刻又挂起）；待验收的卡回到 doing，不会把执行会话当成审查员；还绑着的审查会话（`review_session`）被结束并归档（与 `archive --id` 同一路径），卡片清掉 `review_session`，旧审查员之后的结论不再改卡。tell 给审查会话本身只是补充审查要求，不改卡片。挪回和绑定是同一次写入，绑不上时卡片原样不动；刚绑定、终端还没开出来的审查会话被取代后不再开；tell 给已归档的会话时，绑定成功后才恢复它，绑不上就不恢复；自动返工发出前卡片若已被用户或队长移动，这次返工悄悄不再发（不提示「自动返工暂未发出」，已归档的执行会话也不会被恢复出来）。`new --task-id` 等其他绑定照旧拒绝 done/archived/held 卡 |
@@ -243,17 +243,25 @@ CLI 没有 task update、settings 或 start 子命令；这些操作使用界面
    `review_block`、本机没有别的会话正在这张卡上干活。认领先原子写入 `review_claim`（带本机 hostname），再通知主界面；
    尚未送达的认领在重启后原样再送一次，不会重新认领。没带 `--verify` 的卡、手动移进 review 的卡、升级前就停在
    review 的旧卡（没有 `exec_receipt`）都不会被自动认领。
-2. **选审查者**：必须和执行会话**不同提供方/模型**。按「谁做的模型」分家族（Anthropic / OpenAI / Google / xAI；
-   看模型名，看不出再看 agent：Cursor 里跑的 Claude 算 Anthropic，agy 里跑的 GPT-OSS 算 OpenAI），
-   执行者的家族看不出来也不猜。候选按调度员分工表的顺序：Gemini 3.8 Flash（队长说明第 16 条的默认验收者，不耗
-   Claude 额度）、Codex GPT-6.1 Sol、Claude Opus 5.5（终审模型）、Antigravity 的 Opus 4.6 Thinking（审查模型）。
-   跳过同家族的，也跳过按 `commandQuota` 判断已用尽的（未知不算用尽）。选不出就写 `review_block`（原因里列出每个
-   候选为什么不行）、给队长一条通知、卡片留在 review，不会自己审自己，也不会直接算完成；额度之后恢复不会自动再试，
-   由队长手动 `new --task-id` 开审查会话（绑定后 `review_block` 清除）。
+2. **选审查者**（用户 2026-10-09 的规矩）：直接另起一个**新的 Claude 会话**，和执行会话分开就行，不要求换提供方，
+   不再为了「换提供方」去用 Gemini、agy、Codex。模型：重要的卡 Opus 5.5，简单的卡 Sonnet 5.5。**界面活一律 Opus 5.5**（用户的长期规矩：界面必须 Opus 终审），不管卡片多小、谁做的：
+   `AutoVerifyCore.isUiWork` 看回执列的文件（`*.css/.html/.svg`、图片截图、`*-ui.js`、`renderer.js`、`sidebar*.js`、`side-pane.js`、
+   `mobile-web/` 下的文件、`.jsx/.tsx/.vue`、名字带 style/theme 的脚本）和卡片标题、说明、回执里的界面词（界面、页面、样式、布局、
+   配色、主题、深色浅色、按钮、图标、弹窗、侧栏、手机端、截图、UI、CSS、sidebar、button、icon……）；宁可多派一次 Opus，也不让 Sonnet
+   审界面。其余的卡「简单」由 `AutoVerifyCore.reviewIsSimple` 判：不是界面活、没标高优先级、回执不超过 800 字、列出的文件不超过 3 个，
+   且执行会话不是 Opus；都不满足就按重要处理。席位：按 `new` 不带 `--seat` 时的顺序，当前默认席位排第一，其余已登录席位依次排后，
+   取第一个有额度的；不是默认席位时会话带上那个席位（和 `new --seat` 一样）。「有额度」用的读数和 `quota` 命令是同一个来源
+   （`QuotaCore.commandStance`，即 `commandQuota`/`summary`），席位带着 `ClaudeSeats.described` 那份登录与凭据信息（再叠上刚取到的 `seats:list`）：已用尽、席位未登录、登录或凭据损坏（`error`）的跳过，凭据坏的席位也不会成为兜底；没有任何已登录席位时直接写原因，不再退回默认席位；数据过期、
+   没有读数、只有「没看到报错」、额度查询连续失败的，**不当作有额度**。没有任何席位读得出有额度、又没有一个确认用尽时，才退回读数不明的
+   Claude 席位开会话（`unverified`，默认席位在前）；只要有一个席位读得出有额度，读不准的席位一律排在它后面。所有席位都用尽或出错就写
+   `review_block`（原因里列出每个席位为什么不行）、给队长一条通知、卡片留在 review，不会自己审自己，也不会直接算完成；
+   额度之后恢复不会自动再试，由队长手动 `new --task-id` 开审查会话（绑定后 `review_block` 清除）。
+   **额度低（5 小时剩 ≤20%）照常在 Claude 上开，用尽才排队，绝不换成 Cursor 等别家**：自动审查和队长自己用 `new --reviews … --command "claude …"` 派的 Claude 审查都不走同档换模型，也不套「点名命令额度低就排队」。
+   审查在代码副本里干活、而挑中的席位不是做副本的那个时，开会话前先对所选席位记一次「信任此文件夹」（`worktree:trust`，和 `worktree:prepare` 用同一个函数、同样的检查，只认 AgentDeck 副本根目录下的 git 副本），记不成就通知队长，不会停在弹窗里没人知道。
 3. **开会话**：走和 `new` 同一个入口（`placeSession`）：并发上限、内存吃紧暂停、额度用尽都进同一个排队，
-   不绕过。会话标题「审查：卡片标题」，`--reviews` 指向被审查会话，工作目录沿用执行会话。尝试 id 固定为
+   不绕过。会话标题「审查：卡片标题（实际跑的提供方和模型）」，例如「审查：修登录（Claude Opus 5.5）」；卡片标题里执行者自己写的括号标记（「（Opus 5.5 high·066us）」这类）先去掉，免得标题写一个、跑另一个。`--reviews` 指向被审查会话，工作目录沿用执行会话。尝试 id 固定为
    `auto-review-<卡片id>-r<轮次>`，所以重启、额度恢复、心跳重跑只会落到同一个尝试上。排队中的审查会话在真正开之前
-   会再确认这一轮仍是待验收，否则放弃。连续三次开不出来也转 `review_block` 交队长。
+   会再确认这一轮仍是待验收，否则放弃。连续三次开不出来也转 `review_block` 交队长。会话开出来后才起不来（额度用尽、进程退出、启动失败），或排队时被额度挡住，也不会悄悄停着：队长立刻收到一条通知，写明卡片、原因和一条可以直接执行的完整命令（`AutoVerifyCore.manualReviewCommand`：`new --task-id <卡片> --project … --title … --task … --reviews <执行会话> --command "claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high"`，模型按上面的规则选，简单的卡 `claude-sonnet-5-5`，可加 `--seat`；标题写实际模型，读不到卡片时按 Opus、标题用会话上记着的原卡标题）。命令按队长终端的 shell 转义：PowerShell 里整个值放进单引号（`'`、`‘ ’ ‚ ‛` 写两个），bash 里单引号（`'` 写成 `'\''`），`--project` 和标题一样处理，所以卡片标题里的弯引号、反引号、`;`、换行都只是文字，命令永远是一条语句。排队等额度的那条通知里的命令会**替换**那条自动审查的排队（同一个命令也行，不会报「已经在排队」）。**模型和档位只写在 `--command` 里**：`new` 没有 `--model` / `--effort` / `--verify`，写了会被拒绝或丢掉，通知里的命令也不会带它们。不用等旧会话。审查员自己写的「不通过」不算这种情况，仍按第 5 条返工。
 4. **审查任务**包含：卡片标题和说明、执行会话回执全文和它列的文件、被审查的会话 id 和执行者，以及固定验收要求：
    亲自核对文件存在、提交已推送、只跑相关测试（不跑全量 E2E）、截图落盘、有没有删用例或放宽断言；只审不改；
    结论的第一个词必须是「通过」或「不通过」，不通过要列具体问题。
@@ -333,8 +341,13 @@ CLI 没有 task update、settings 或 start 子命令；这些操作使用界面
 
 ## startCard、心跳与调度
 
-需要已存在的队长。`requestStart`（拖动或键盘移到进行中）与 `startCard` 共用派活入口、认领和配额排队逻辑。默认 Gemini 开后台 Antigravity
-`agy --dangerously-skip-permissions --model gemini-3.8-flash-high`，使用与队长相同的
+**排队等额度的请求（`new` 排的）出队前再看一眼卡**：排队时记下卡当时的样子（位置、标记、是否归档、标题、说明；优先级、回执、会话绑定不算）。额度回来、要开之前再读一次：卡已不在看板、已归档、已挂起或被挡住、记的内容变了（任何一台机器改的），或**排队时不在「需要你」、出队时在**，就不开：请求出队、任务标成已停止并写明原因、队长收到一条通知，要做再 `new` 一次。排队时就已经在「需要你」的卡（队长明确派的活）照开。出队时看板读不到：请求放回队首、下一轮再判，不盲开也不丢；排队那一刻看板读不到的（没有记录），出队时按「改过了」处理并通知队长。调度员的额度重试和开始时问的是同一个问题（`pickDispatcher` 在同一批读数上），不会每个心跳空转；Claude 各席位的登录都坏了时不开 Haiku，交队长。
+
+需要已存在的队长。`requestStart`（拖动或键盘移到进行中）与 `startCard` 共用派活入口、认领和配额排队逻辑。默认开一个便宜的调度会话：Gemini 有额度时用后台 Antigravity
+`agy --dangerously-skip-permissions --model gemini-3.8-flash-high`；「有额度」必须是新鲜的读数（和 `quota` 命令同一个来源）显示有余量，已用尽、正在报错、读数过期或没有读数都不算，这时改开 Claude Haiku 5.5
+（`claude --dangerously-skip-permissions --model claude-haiku-5-5 --effort medium`，席位按审查者同样的顺序挑有额度的；Claude 席位都读不准时仍用 Claude，都用尽就走现有的额度排队）。
+选 Haiku 是因为这是一轮很短、照规则办的活（用户 10-08 起简单的活交给 Haiku 5.5），它和 Sonnet 用同一个账号额度池，换 Sonnet 不会更容易有额度，只会更贵。
+会话标题「调度：卡片标题（实际跑的模型）」。使用与队长相同的
 模型分工表，把卡片整理成一件任务，执行 `new --task-id ... --project ...`。
 该会话没有队长 control token，只允许自己的 complete/ask/progress，以及为
 这一个卡片开一次执行会话；不能改其他卡、读取队长或控制其他终端。
@@ -409,6 +422,6 @@ npm audit
 task-board spec 覆盖依赖解锁、回执原文、两轮验收挂起、异常退出/额度失败、
 旧会话回执、Gemini 单卡权限和排队、外部原子写入、认领去重、设置持久化、
 同步冲突后流转重试；自动验收两条用例（用替身审查员，页面里临时替换候选表）：一轮不通过返工、
-二轮通过，以及选不出审查者后手动接手。该 spec 开头把 `autoVerify` 关掉，因为其余用例自己手动开审查会话。其 Gemini 可执行文件替换为 stand-in；它验证调度入口与
+二轮通过，以及选不出审查者后手动接手。该 spec 开头把 `autoVerify` 关掉，因为其余用例自己手动开审查会话。其 Gemini 可执行文件替换为 stand-in，Haiku 候选也换成 stand-in；测试实例（`--test-user-data`）里调度员和自动审查还有一道硬保护：只许开替身命令，要开真的 `claude`、`agy`、`antigravity`、`gemini`、`codex`、`cursor-agent`、`grok`（按程序名认，路径、引号、`.exe/.cmd` 都认）一律拒绝并写明原因（调度员：通知队长、这次开始收口；自动审查：`review_block`）。该 spec 把这些真命令的位置放进 PATH 最前面的陷阱脚本，证明没有真的被启动；（`window.testStance` 给 stand-in 命令一个额度读数），不会开真模型；它验证调度入口与
 权限，不代表已实测真实 Gemini 模型或两台机器同时同步。全量 E2E 留给合并
 main 时运行；本分支验证不包含打包运行、安装或物理 Windows 设备。

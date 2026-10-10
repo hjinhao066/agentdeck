@@ -192,9 +192,18 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   The zero-token watcher/poll heartbeat claims only new start edges, not content
   changes or worker activity; respect durable claims and held cards. Automatic
   verification (`docs/task-board-api.md`「自动验收」) is claimed once per review round
-  there too: never open a second reviewer for a round, never review with the
-  executor's own provider/model family, never mark a card done without a clear
-  reviewer verdict, and keep it inside the ordinary `new` queue and limits. Tests must
+  there too: never open a second reviewer for a round, never mark a card done
+  without a clear reviewer verdict, and keep it inside the ordinary `new` queue and
+  limits. The reviewer is a fresh Claude session of its own (Opus 5.5, Sonnet 5.5 for a
+  simple card), never Gemini/agy (the user's rule of 2026-10-09). Reviewer and dispatcher
+  providers are chosen by `QuotaCore.commandStance`, the reading `quota` shows: out,
+  erroring and stale/unread are never taken for "has quota" (Gemini is the dispatcher only
+  with a fresh reading that shows room, else Claude Haiku 5.5), and a session's title
+  names the provider and model that really run. A reviewer that cannot start tells the
+  Captain at once; nothing waits unseen. Interface work is always reviewed by Opus 5.5 (`AutoVerifyCore.isUiWork`),
+  whoever made it. The command the Captain is given to put another reviewer in carries the model in `--command`
+  (`new` has no `--model`/`--effort`/`--verify`). A test instance (`--test-user-data`, `host.testInstance`) lets the
+  dispatcher and the auto reviewer start stand-ins only, never a real `claude`/`agy`/`gemini`/`codex`. Tests must
   use the isolated profile task store and stand-in agents, never real shared data.
 - 马上派人做 / 排到最前 (`docs/task-board-api.md`): the card's `dispatch_now` request reaches 队长 only on the
   receipts channel (`boardNotice`), never typed into its box; it is marked delivered under the board lock before

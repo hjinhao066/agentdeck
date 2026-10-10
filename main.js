@@ -182,6 +182,15 @@ handleMain('worktree:prepare', async (_event, payload) => {
   }
   return prepared;
 });
+// The automatic reviewer may run on another Claude seat than the executor that made the copy: record the trust answer
+// for that seat too, with the same checks (a linked worktree under the copies root, nothing else).
+handleMain('worktree:trust', async (_event, payload) => {
+  if (!payload || typeof payload !== 'object' || typeof payload.seatId !== 'string' || typeof payload.configDir !== 'string' || !payload.configDir || typeof payload.path !== 'string') throw new Error('Invalid trust request.');
+  const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+  const trust = await trustClaudeWorktree({ id: payload.seatId, configDir: payload.configDir }, seatHome, payload.path, { root: Worktree.defaultRoot(HOME), platform: process.platform });
+  if (!trust.ok) nlog(`worktree trust not recorded: ${trust.reason}`);
+  return { ok: !!trust.ok, reason: trust.reason || '' };
+});
 handleMain('worktree:reclaim', (_event, payload) => {
   const record = payload && payload.record;
   if (!record || typeof record !== 'object') throw new Error('Invalid worktree record.');
@@ -1571,6 +1580,7 @@ app.whenReady().then(async () => {
   onMain('clipboard:read-sync', (e) => { e.returnValue = tudArg ? testClipboard : clipboard.readText(); });
   onMain('env-info-sync', (e) => { e.returnValue = {
     platform: process.platform, home: HOME, version: app.getVersion(),
+    testInstance: !!tudArg,   // --test-user-data: automatic openers (dispatcher, auto review) may only start stand-ins
     // test profiles only: the restart watch's limits, shortened
     testRestartWatchMs: tudArg && Number(process.env.AGENTDECK_TEST_RESTART_WATCH_MS) > 0 ? Number(process.env.AGENTDECK_TEST_RESTART_WATCH_MS) : 0,
     build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),

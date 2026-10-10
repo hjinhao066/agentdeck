@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const FAKE = `node "${path.join(__dirname, 'fixtures/fake-agent.js')}" --screen-only`;
-let app, page, profile, envDir, captainEnv;
+let app, page, profile, envDir, captainEnv, trapDir, trapFile;
 test.describe.configure({ mode: 'serial' });
 function cli(args, env = captainEnv) {
   return new Promise((resolve) => {
@@ -36,6 +36,18 @@ test.beforeAll(async () => {
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, columns: [{ id: 'task-idle-shell', title: 'Shell', cmd: '', cwd: profile, role: 'manual' }] }));
   const env = { ...process.env, AGENTDECK_TEST_RECEIPT_ENV_DIR: envDir }; delete env.ELECTRON_RUN_AS_NODE;
   if (process.platform !== 'win32') env.ZDOTDIR = profile;
+  // One signed-in seat with a stand-in credential (the automatic reviewer needs a signed-in Claude seat to pick): a test profile never uses it.
+  fs.mkdirSync(path.join(profile, 'seats-home', '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude', '.credentials.json'), require('./fixtures/stand-in-credential'));
+  // A trap in front of PATH for every real agent a test instance must never start on its own: if a real name were
+  // ever launched in this profile it would only write a line to trapFile, never reach a model.
+  trapDir = path.join(profile, 'trapbin'); trapFile = path.join(profile, 'trap.log'); fs.mkdirSync(trapDir);
+  for (const name of ['claude', 'agy', 'antigravity', 'gemini', 'codex', 'cursor-agent', 'grok']) {
+    if (process.platform === 'win32') fs.writeFileSync(path.join(trapDir, name + '.cmd'), `@echo off\r\necho TRAP ${name}>> "${trapFile}"\r\n`);
+    else { fs.writeFileSync(path.join(trapDir, name), `#!/bin/sh\necho TRAP ${name} >> "${trapFile}"\n`); fs.chmodSync(path.join(trapDir, name), 0o755); }
+  }
+  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+  env[pathKey] = trapDir + path.delimiter + (env[pathKey] || '');
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
@@ -58,7 +70,20 @@ test.beforeAll(async () => {
   captainEnv = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
   // The tests below open their own reviewers by hand; automatic verification has its own tests.
   await page.evaluate(() => TaskBoard.autoVerify(false));
+  await installStandIns();
 });
+// The dispatcher is chosen by quota reading (QuotaCore.commandStance): Gemini only with a fresh reading that shows room, else a Claude
+// Haiku session. A test profile has no readings, and nothing here may start a real model: the Haiku candidate is a stand-in, and a
+// test sets `window.testStance(cmd)` to give a stand-in command a reading ('ok', 'out', ...) or leaves it to the real reading.
+// A page reload drops all of this (the page's scripts load again), so it is installed again after every reload.
+async function installStandIns() {
+  await page.evaluate((fake) => {
+    const real = QuotaCore.commandStance;
+    window.testStance = (cmd) => (cmd === fake ? 'ok' : undefined);
+    QuotaCore.commandStance = (store, cmd, ...args) => window.testStance(cmd) || real(store, cmd, ...args);
+    AutoVerifyCore.DISPATCHERS.find((c) => c.id === 'claude-haiku').command = fake + ' --haiku-stand-in';
+  }, FAKE);
+}
 // (a profile still held by the closed Electron's helpers on Windows is reported, it does not fail the run)
 test.afterAll(async () => { if (app) await app.close(); if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); } });
 test.afterEach(async ({}, info) => {
@@ -253,6 +278,8 @@ test('external JSON start edges notify once, quiet edits do not dispatch, and se
   // Wait for a changed notification rather than an arbitrary sleep.
   await expect.poll(async () => (await card(c.id)).detail).toContain('Changed only');
   await page.reload();
+  await page.waitForFunction(() => typeof window.MainSession === 'object' && typeof window.TaskBoard === 'object' && typeof QuotaCore === 'object' && typeof AutoVerifyCore === 'object');
+  await installStandIns();
   await expect.poll(() => page.evaluate(() => TaskBoard.settings().dispatcher)).toBe('captain');
   expect(await notices()).toBe(1);
   expect(await page.evaluate((id) => TaskBoard.startCard(id), c.id)).toMatchObject({ ignored: true });
@@ -400,7 +427,8 @@ test('exhausted automatic dispatch waits without a PTY, resumes once, and yields
   const setup = async () => page.evaluate((fake) => {
     window.quotaTestCommand = BoardCore.commandForAgent; window.quotaTestGate = QuotaCore.commandQuota; window.quotaTestStore = config.quotas;
     BoardCore.commandForAgent = (agent, ...args) => agent === 'agy' ? fake : window.quotaTestCommand(agent, ...args);
-    QuotaCore.commandQuota = (store, cmd, ...args) => window.quotaTestGate(store, cmd === fake ? 'agy --model gemini-3.8-flash-high' : cmd, ...args);
+    // Gemini is out and so is the Claude Haiku dispatcher (its stand-in reads as the same exhausted pool): nothing is usable, so the start waits
+    QuotaCore.commandQuota = (store, cmd, ...args) => window.quotaTestGate(store, cmd === fake || cmd === fake + ' --haiku-stand-in' ? 'agy --model gemini-3.8-flash-high' : cmd, ...args);
     config.quotas = { Antigravity: { scope: 'gemini', blocked: { at: Date.now(), resetAt: Date.now() + 600000 } } };
     TaskBoard.settings('gemini');
   }, FAKE);
@@ -464,22 +492,20 @@ test('new selected Claude seat queues at quota and the queue opens after recover
   } finally { await page.evaluate(() => { QuotaCore.commandQuota = window.queueQuotaGate; config.quotas = window.queueQuotaStore; }); }
 });
 
-// Automatic verification with a stand-in reviewer: the candidate table and the family rules are swapped in the
-// page for the test, so nothing real is started. A "Custom agent" executor is given a family of its own.
-async function autoVerifyOn(reviewerFamily) {
-  await page.evaluate(([cmd, family]) => {
-    window.testAutoVerifyBackup = { candidates: AutoVerifyCore.CANDIDATES.slice(), rules: AutoVerifyCore.FAMILY_RULES.slice() };
-    AutoVerifyCore.CANDIDATES.splice(0, AutoVerifyCore.CANDIDATES.length, { id: 'stand-in', label: '替身审查员', family, command: cmd });
-    AutoVerifyCore.FAMILY_RULES.unshift({ agent: /^Custom agent$/, family: 'e2e-executor' });
+// Automatic verification with a stand-in reviewer: the candidate table is swapped in the page for the test (the real
+// ones are Claude sessions), so nothing real is started. A stand-in has no quota reading of its own: `testStance` gives it one.
+async function autoVerifyOn() {
+  await page.evaluate((cmd) => {
+    window.testAutoVerifyBackup = { candidates: AutoVerifyCore.CANDIDATES.slice() };
+    AutoVerifyCore.CANDIDATES.splice(0, AutoVerifyCore.CANDIDATES.length, { id: 'stand-in', label: '替身审查员', family: 'e2e-reviewer', command: cmd });
     TaskBoard.autoVerify(true);
-  }, [FAKE, reviewerFamily]);
+  }, FAKE);
 }
 async function autoVerifyOff() {
   await page.evaluate(() => {
     TaskBoard.autoVerify(false);
     const b = window.testAutoVerifyBackup; if (!b) return;
     AutoVerifyCore.CANDIDATES.splice(0, AutoVerifyCore.CANDIDATES.length, ...b.candidates);
-    AutoVerifyCore.FAMILY_RULES.splice(0, AutoVerifyCore.FAMILY_RULES.length, ...b.rules);
   });
 }
 const autoReviewers = (id) => page.evaluate((id) => columns.filter((c) => c.boardId === id && String(c.boardAttempt).startsWith('auto-review-')).map((c) => ({ id: c.id, attempt: c.boardAttempt })), id);
@@ -491,7 +517,7 @@ const sessionEnv = async (id) => {
 };
 
 test('a verify card is reviewed automatically: one reviewer per round, rejection returns to the original session, a pass completes', async () => {
-  await autoVerifyOn('e2e-reviewer');
+  await autoVerifyOn();
   try {
     const c = await add('Auto verify', true);
     const execution = await worker(c.id, 'Executor');
@@ -529,14 +555,15 @@ test('a verify card is reviewed automatically: one reviewer per round, rejection
 });
 
 test('with no acceptable reviewer the card waits in review with the reason for the Captain, and a manual reviewer can still take it', async () => {
-  await autoVerifyOn('e2e-executor');   // the only candidate is the executor's own family
+  await autoVerifyOn();   // the only candidate has no room: its reading says out
+  await page.evaluate(() => { window.testStance = (cmd) => (cmd.includes('fake-agent.js') ? 'out' : undefined); });
   try {
     const c = await add('No reviewer', true);
     const execution = await worker(c.id, 'Executor');
     await command(['complete', '--result', 'Implemented'], execution.env);
     await expect.poll(async () => (await card(c.id)).review_block?.round, { timeout: 40000 }).toBe(1);
     const blocked = await card(c.id);
-    expect(blocked.status).toBe('review'); expect(blocked.review_block.reason).toContain('同属');
+    expect(blocked.status).toBe('review'); expect(blocked.review_block.reason).toContain('替身审查员：额度用尽');
     expect(await autoReviewers(c.id)).toEqual([]);
     expect(await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板').map((p) => p.summary))).toEqual(expect.arrayContaining([expect.stringContaining('不能自动开审查会话')]));
     await page.waitForTimeout(1500);
@@ -545,7 +572,7 @@ test('with no acceptable reviewer the card waits in review with the reason for t
     expect((await card(c.id)).review_block ?? null).toBe(null);
     await command(['complete', '--result', 'Verified by hand'], manual.env);
     expect((await card(c.id)).status).toBe('done');
-  } finally { await autoVerifyOff(); }
+  } finally { await autoVerifyOff(); await page.evaluate(() => { window.testStance = (cmd) => (cmd.includes('fake-agent.js') ? 'ok' : undefined); }); }
 });
 
 test('a named --command queues when its quota is out and does not switch models', async () => {
@@ -569,14 +596,14 @@ test('a named --command queues when its quota is out and does not switch models'
   }
 });
 
-test('exhausted Gemini dispatch switches tier, marks the session and tells the captain', async () => {
+test('Gemini dispatch with little left switches tier, marks the session and tells the captain', async () => {
   await page.evaluate((fake) => {
     window.switchQuotaStore = config.quotas;
     window.switchFallback = QuotaCore.quotaFallback;
     window.switchGate = QuotaCore.commandQuota;
     const agy = BoardCore.commandForAgent('agy');
     QuotaCore.commandQuota = (store, cmd, ...args) => /gemini-[\d.]+-flash(?:-(?:low|medium|high))?(?:\s|$)/.test(cmd) || cmd === agy
-      ? { out: true, state: 'exhausted', stale: false, fiveHour: 0, weekly: 0 }
+      ? { out: false, state: 'danger', stale: false, fiveHour: 5, weekly: 40 }
       : window.switchGate(store, cmd, ...args);
     QuotaCore.quotaFallback = (store, cmd, ...args) => {
       const plan = window.switchFallback(store, cmd, ...args);
@@ -607,4 +634,81 @@ test('exhausted Gemini dispatch switches tier, marks the session and tells the c
       TaskBoard.settings('captain');
     });
   }
+});
+
+// The dispatcher is Gemini only while a fresh reading shows room; out or unread, a Claude Haiku 5.5 session whose title says so.
+// (the Haiku candidate is a stand-in here, installed in beforeAll: no real model starts)
+test('Gemini out or unread: the board dispatcher is a Haiku session, titled with the model that runs, and Gemini is never opened', async () => {
+  await page.evaluate(() => { TaskBoard.settings('gemini'); });
+  try {
+    for (const gemini of ['out', 'unknown']) {
+      await page.evaluate((reading) => { window.testStance = (cmd) => (/^agy/.test(cmd) ? reading : cmd.includes('--haiku-stand-in') || cmd.includes('fake-agent.js') ? 'ok' : undefined); }, gemini);
+      const c = await add(`Haiku dispatch ${gemini}（Opus 5.5 high·066us）`);
+      const started = await page.evaluate((id) => TaskBoard.startCard(id), c.id);
+      expect(started.dispatcher).toBe('gemini'); expect(started.session_id).toBeTruthy();
+      const col = await page.evaluate((id) => { const x = columns.find((c) => c.id === id); return { cmd: x.cmd, title: x.displayTitle || x.title }; }, started.session_id);
+      expect(col.cmd).toContain('--haiku-stand-in');
+      expect(col.title).toBe(`调度：Haiku dispatch ${gemini}（Claude Haiku 5.5）`);
+      expect(await page.evaluate(() => columns.filter((c) => /^agy\b/.test(c.cmd || '')).length)).toBe(0);
+      // the stand-in dispatcher is left to the profile's teardown: it takes no part in what is checked here
+    }
+  } finally { await page.evaluate(() => { window.testStance = (cmd) => (cmd.includes('fake-agent.js') ? 'ok' : undefined); TaskBoard.settings('captain'); }); }
+});
+
+// The hard guard: a test instance (--test-user-data) never lets the dispatcher or the auto reviewer start a real agent.
+// Here the stand-ins are taken away on purpose, so the real candidates are what get picked; they must be refused,
+// and the trap in front of PATH proves that nothing real was launched. Stand-ins keep working (every other test here).
+test('a test instance refuses a real claude/agy for the dispatcher and the auto reviewer, with the reason, and launches nothing', async () => {
+  const real = await page.evaluate(() => ({
+    haiku: AutoVerifyCore.DISPATCHERS.find((c) => c.id === 'claude-haiku').command,
+    flag: window.testStance ? 'stance' : '',
+  }));
+  expect(real.haiku).toContain('--haiku-stand-in');   // the stand-in is in place (beforeAll)
+  await page.evaluate(() => {
+    window.guardBackup = { dispatchers: AutoVerifyCore.DISPATCHERS.map((c) => ({ ...c })), candidates: AutoVerifyCore.CANDIDATES.map((c) => ({ ...c })), stance: window.testStance, settings: TaskBoard.settings().dispatcher };
+    // the real commands back, the way the app ships them
+    AutoVerifyCore.DISPATCHERS.find((c) => c.id === 'claude-haiku').command = 'claude --dangerously-skip-permissions --model claude-haiku-5-5 --effort medium';
+    window.testStance = (cmd) => (/^agy/.test(cmd) ? 'out' : /^claude/.test(cmd) ? 'ok' : undefined);
+    TaskBoard.settings('gemini');
+  });
+  try {
+    // the dispatcher: Gemini out, the real Haiku candidate would be picked
+    const before = await page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length);
+    const c = await add('Guarded dispatch');
+    const started = await page.evaluate((id) => TaskBoard.startCard(id), c.id);
+    expect(started.dispatcher).toBe('captain'); expect(started.refused).toMatch(/测试实例里调度员只许开替身命令，不开真的 claude/);
+    expect(await page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length)).toBe(before);
+    expect(await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板').map((p) => p.summary).join('\n'))).toContain('调度会话没有开：测试实例里调度员只许开替身命令');
+    // Gemini itself (agy) with a reading that says room is refused too
+    await page.evaluate(() => { window.testStance = (cmd) => (/^agy/.test(cmd) ? 'ok' : undefined); });
+    const c2 = await add('Guarded dispatch agy');
+    expect((await page.evaluate((id) => TaskBoard.startCard(id), c2.id)).refused).toMatch(/不开真的 agy/);
+    // the auto reviewer: the shipped candidates are real Claude sessions
+    await page.evaluate(() => { window.testStance = (cmd) => (/^claude/.test(cmd) ? 'ok' : undefined); TaskBoard.autoVerify(true); });
+    const v = await add('Guarded review', true);
+    const execution = await worker(v.id, 'Executor');
+    await command(['complete', '--result', 'Implemented'], execution.env);
+    await expect.poll(async () => (await card(v.id)).review_block?.round, { timeout: 40000 }).toBe(1);
+    expect((await card(v.id)).review_block.reason).toMatch(/测试实例里自动审查只许开替身命令，不开真的 claude/);
+    expect(await autoReviewers(v.id)).toEqual([]);
+    // nothing real was ever launched
+    expect(fs.existsSync(trapFile) ? fs.readFileSync(trapFile, 'utf8') : '').toBe('');
+  } finally {
+    await page.evaluate(() => {
+      const b = window.guardBackup; TaskBoard.autoVerify(false);
+      b.dispatchers.forEach((d) => { Object.assign(AutoVerifyCore.DISPATCHERS.find((x) => x.id === d.id), d); });
+      window.testStance = b.stance; TaskBoard.settings(b.settings);
+    });
+  }
+  // and a stand-in candidate, in the same instance, opens as usual
+  await autoVerifyOn();
+  try {
+    const v = await add('Stand-in review', true);
+    const execution = await worker(v.id, 'Executor');
+    await command(['complete', '--result', 'Implemented'], execution.env);
+    await expect.poll(async () => (await autoReviewers(v.id)).length, { timeout: 40000 }).toBe(1);
+    await command(['complete', '--result', '通过：替身'], await sessionEnv((await autoReviewers(v.id))[0].id));
+    expect((await card(v.id)).status).toBe('done');
+  } finally { await autoVerifyOff(); }
+  expect(fs.existsSync(trapFile) ? fs.readFileSync(trapFile, 'utf8') : '').toBe('');
 });

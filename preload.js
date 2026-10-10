@@ -158,6 +158,7 @@ contextBridge.exposeInMainWorld('deck', {
   onTodosChanged: (cb) => ipcRenderer.on('todos:changed', () => cb()),
   prepareWorktree: (input) => ipcRenderer.invoke('worktree:prepare', input || {}),
   reclaimWorktree: (record) => ipcRenderer.invoke('worktree:reclaim', { record }),
+  trustWorktree: (input) => ipcRenderer.invoke('worktree:trust', input || {}),
   fleetState: () => ipcRenderer.invoke('fleet:state'),
   fleetAckConflicts: () => ipcRenderer.invoke('fleet:ack-conflicts'),
   onTaskStart: (cb) => ipcRenderer.on('task-board:start', (_e, m) => cb(m)),

@@ -26,55 +26,80 @@ function fixture(t, sessions = () => []) {
   return { root, dir, store, add, bind, event, get, executed, reviewer };
 }
 
-// ---- who may review ----
-test('the reviewer is never from the executor\'s own provider/model family, and the table order decides among the rest', () => {
-  const commandOf = (c) => c.command || c.agent;
-  const cases = [
-    [{ agent: 'Claude', model: 'claude-sonnet-5-5' }, 'gemini-flash'],
-    [{ agent: 'Claude', model: 'default' }, 'gemini-flash'],
-    [{ agent: 'Antigravity', model: 'gemini-3.8-flash-high' }, 'codex-sol'],
-    [{ agent: 'Antigravity', model: 'default' }, 'codex-sol'],
-    [{ agent: 'Codex', model: 'gpt-6.1-sol' }, 'gemini-flash'],
-    [{ agent: 'Cursor', model: 'grok-4.7-high-fast' }, 'gemini-flash'],
-    // Cursor and agy run other makers' models: the model name decides, not the harness.
-    [{ agent: 'Cursor', model: 'claude-opus-5-5-high' }, 'gemini-flash'],
-    [{ agent: 'Antigravity', model: 'claude-opus-4-6-thinking' }, 'gemini-flash'],
-    [{ agent: 'Antigravity', model: 'gpt-oss-120b-medium' }, 'gemini-flash'],
-  ];
-  for (const [executor, expected] of cases) {
-    const picked = AV.pickReviewer({ executor, commandOf });
-    assert.equal(picked.candidate.id, expected, JSON.stringify(executor));
-    assert.notEqual(picked.family, AV.familyOf(executor));
-    assert.equal(picked.executorFamily, AV.familyOf(executor));
+// ---- who may review: a fresh Claude session, by the quota reading; never another provider ----
+// a seat is named by the account signed in behind it (the part of the e-mail before the @), never CN / US / US2
+const SEATS = [{ id: 'cn', label: 'hjinhao066' }, { id: 'us', label: 'jinhao.h.sub' }, { id: 'us2', label: 'hjinhao066us' }];
+// stanceOf over a table: { cn: 'out', ... } by seat id for Claude commands; anything else 'ok'.
+const bySeat = (table) => (cmd, seatId) => (/^claude/.test(cmd) ? table[seatId] || 'ok' : 'ok');
+test('a card that is not simple is reviewed by Opus 5.5, a simple one by Sonnet 5.5, in a new Claude session', () => {
+  const card = { id: 't', title: 'x' };
+  const receipt = (extra = {}) => ({ text: '做完了', files: ['/a'], assignee: { agent: 'Claude', model: 'claude-sonnet-5-5' }, ...extra });
+  const label = (c, r) => AV.pickReviewer({ card: c, receipt: r, seats: SEATS, stanceOf: bySeat({}) }).candidate.label;
+  assert.equal(label(card, receipt()), 'Claude Sonnet 5.5', 'short receipt, one file, not marked important: simple');
+  assert.equal(label({ ...card, important: true }, receipt()), 'Claude Opus 5.5', 'marked 高优先级');
+  assert.equal(label(card, receipt({ files: ['/a', '/b', '/c', '/d'] })), 'Claude Opus 5.5', 'many files');
+  assert.equal(label(card, receipt({ text: '长'.repeat(801) })), 'Claude Opus 5.5', 'long receipt');
+  assert.equal(label(card, receipt({ assignee: { agent: 'Claude', model: 'claude-opus-5-5' } })), 'Claude Opus 5.5', 'an Opus executor means it was judged important');
+  assert.equal(label(card, receipt({ assignee: { agent: 'Codex', model: 'gpt-6.1-sol' } })), 'Claude Sonnet 5.5', 'who made the executor does not matter');
+  assert.equal(label(card, undefined), 'Claude Sonnet 5.5');
+  // never another provider, whoever executed and whatever the quota table says
+  for (const executor of [null, {}, { agent: 'Antigravity', model: 'gemini-3.8-flash-high' }, { agent: 'Codex', model: 'default' }, { agent: 'Custom agent', model: 'default' }]) {
+    const picked = AV.pickReviewer({ card: { ...card, important: true }, receipt: receipt({ assignee: executor }), seats: SEATS, stanceOf: bySeat({}) });
+    assert.match(picked.cmd, /^claude --dangerously-skip-permissions --model claude-opus-5-5 /); assert.equal(picked.family, 'anthropic');
   }
+  assert.ok(AV.CANDIDATES.every((c) => /^claude /.test(c.command)), 'no Gemini, agy, Codex or Cursor candidate left');
 });
-test('exhausted providers are skipped; with nothing left there is no reviewer and the reasons say why', () => {
-  const commandOf = (c) => c.command || c.agent;
-  const out = new Set();
-  const quotaOut = (cmd) => out.has(cmd);
-  out.add('agy');
-  assert.equal(AV.pickReviewer({ executor: { agent: 'Claude', model: 'claude-opus-5-5' }, commandOf, quotaOut }).candidate.id, 'codex-sol');
-  out.add('codex');
-  const none = AV.pickReviewer({ executor: { agent: 'Claude', model: 'claude-opus-5-5' }, commandOf, quotaOut });
-  assert.equal(none.candidate, undefined); assert.equal(none.cmd, undefined);
-  assert.match(none.reason, /Gemini 3\.8 Flash（Antigravity）：额度用尽/); assert.match(none.reason, /Codex GPT-6\.1 Sol：额度用尽/);
-  assert.match(none.reason, /Claude Opus 5\.5：与执行会话同属 Anthropic/); assert.match(none.reason, /Opus 4\.6 Thinking（Antigravity）：与执行会话同属 Anthropic/);
-  // Codex executor with Gemini out falls to Opus; with Opus out too, nobody is left.
-  out.clear(); out.add('agy');
-  assert.equal(AV.pickReviewer({ executor: { agent: 'Codex', model: 'default' }, commandOf, quotaOut }).candidate.id, 'claude-opus');
-  out.add(AV.CANDIDATES.find((c) => c.id === 'claude-opus').command);
-  assert.equal(AV.pickReviewer({ executor: { agent: 'Codex', model: 'default' }, commandOf, quotaOut }).candidate.id, 'agy-opus-46');
-  out.add(AV.CANDIDATES.find((c) => c.id === 'agy-opus-46').command);
-  assert.match(AV.pickReviewer({ executor: { agent: 'Codex', model: 'default' }, commandOf, quotaOut }).reason, /^没有可用的审查者/);
+test('a Claude seat that is out is skipped, the first one with room is taken, and a seat the quota cannot judge is not taken for having room', () => {
+  const pick = (table, extra = {}) => AV.pickReviewer({ simple: false, seats: SEATS, stanceOf: bySeat(table), ...extra });
+  assert.equal(pick({}).seat.id, 'cn', 'the seat a new session defaults to leads');
+  assert.equal(pick({ cn: 'out' }).seat.id, 'us');
+  assert.equal(pick({ cn: 'out', us: 'error' }).seat.id, 'us2');
+  assert.equal(pick({ cn: 'low', us: 'ok' }).seat.id, 'us', 'a seat with plenty beats one at the threshold');
+  assert.equal(pick({ cn: 'low', us: 'out', us2: 'out' }).seat.id, 'cn', 'low is still usable when nothing better is left');
+  // unknown (stale, missing, failing query) is never "has quota": a seat that is ok wins over it, even when listed later
+  assert.equal(pick({ cn: 'unknown', us: 'ok' }).seat.id, 'us');
+  // with only unknown readings left the Claude session is still the last resort, flagged unverified
+  const weak = pick({ cn: 'unknown', us: 'out', us2: 'unknown' });
+  assert.equal(weak.seat.id, 'cn'); assert.equal(weak.unverified, true); assert.match(weak.cmd, /^claude /);
+  // every seat out or broken: nobody, with a reason that names each
+  const none = pick({ cn: 'out', us: 'out', us2: 'error' });
+  assert.equal(none.cmd, undefined); assert.match(none.reason, /^没有可用的审查者/);
+  assert.match(none.reason, /Claude Opus 5\.5（hjinhao066）：额度用尽/); assert.match(none.reason, /（hjinhao066us）：登录或额度查询出错/);
 });
-test('an executor whose model cannot be identified gets no reviewer instead of a guess', () => {
-  for (const executor of [null, undefined, {}, { agent: 'Custom agent', model: 'default' }, { agent: 'Shell', model: 'default' }, { agent: 'Cursor', model: 'default' }]) {
-    const picked = AV.pickReviewer({ executor, commandOf: (c) => c.agent || c.command });
-    assert.equal(picked.cmd, undefined); assert.match(picked.reason, /看不出执行会话/);
+test('Gemini, agy and Codex quota never matter to the reviewer, and a stand-in candidate table is judged by the same reading', () => {
+  // exhausted Gemini and stale Codex change nothing
+  const stance = (cmd) => (/^agy/.test(cmd) ? 'out' : /^codex/.test(cmd) ? 'unknown' : 'ok');
+  assert.match(AV.pickReviewer({ simple: false, seats: SEATS, stanceOf: stance }).cmd, /^claude /);
+  // a candidate table swapped in by a test: first usable in preference order, judged as written
+  const table = [{ id: 'stand-in', label: '替身审查员', family: 'x', command: 'node stand-in.js' }];
+  assert.equal(AV.pickReviewer({ candidates: table, seats: SEATS, stanceOf: () => 'unmetered' }).candidate.id, 'stand-in');
+  assert.match(AV.pickReviewer({ candidates: table, seats: SEATS, stanceOf: () => 'unknown' }).reason, /替身审查员：额度读数过期或没有/);
+});
+test('the dispatcher is Gemini Flash only while a fresh reading shows room; otherwise a Claude Haiku 5.5 session on a seat with room', () => {
+  const commandOf = (c) => c.command || (c.agent === 'agy' ? 'agy --model gemini-3.8-flash-high' : c.agent);
+  const dispatch = (gemini, claude = {}) => AV.pickDispatcher({ commandOf, seats: SEATS, stanceOf: (cmd, seatId) => (/^agy/.test(cmd) ? gemini : claude[seatId] || 'ok') });
+  assert.equal(dispatch('ok').candidate.id, 'gemini-flash');
+  assert.equal(dispatch('low').candidate.id, 'gemini-flash');
+  for (const gemini of ['out', 'unknown', 'error', 'unmetered']) {
+    const picked = dispatch(gemini);
+    assert.equal(picked.candidate.id, 'claude-haiku', `Gemini ${gemini}`); assert.equal(picked.seat.id, 'cn');
+    assert.match(picked.cmd, /--model claude-haiku-5-5 --effort medium/);
   }
-  // Even if every candidate were the same family as the executor, none is returned.
-  const same = AV.pickReviewer({ executor: { agent: 'Claude', model: 'x' }, candidates: [{ id: 'c', label: 'C', family: 'anthropic', agent: 'claude' }], commandOf: (c) => c.agent });
-  assert.equal(same.cmd, undefined);
+  assert.equal(dispatch('out', { cn: 'out' }).seat.id, 'us', 'a Claude seat that is out is skipped too');
+  const weak = dispatch('out', { cn: 'unknown', us: 'out', us2: 'out' });
+  assert.equal(weak.candidate.id, 'claude-haiku'); assert.equal(weak.unverified, true);
+  const none = dispatch('out', { cn: 'out', us: 'out', us2: 'out' });
+  assert.equal(none.cmd, undefined); assert.match(none.reason, /Gemini 3\.8 Flash（Antigravity）：额度用尽/);
+});
+test('a review title says what really runs: the executor\'s marks on the card title come out, the real provider and model go in', () => {
+  const t = (title, label = 'Claude Opus 5.5') => AV.reviewTitle(title, label);
+  assert.equal(t('修登录'), '审查：修登录（Claude Opus 5.5）');
+  assert.equal(t('画图：大一统全景图页面（放进 Hermes 网站，Opus 5.5）'), '审查：画图：大一统全景图页面（放进 Hermes 网站）（Claude Opus 5.5）');
+  assert.equal(t('2.0.5 集成（Opus 5.5 high·066us）', 'Claude Sonnet 5.5'), '审查：2.0.5 集成（Claude Sonnet 5.5）');
+  assert.equal(t('统一下载器(Gemini 3.8 Flash)'), '审查：统一下载器（Claude Opus 5.5）');
+  assert.equal(t('修（登录）页面（Opus·US2）'), '审查：修（登录）页面（Claude Opus 5.5）');
+  assert.ok(t('标题'.repeat(100)).length <= 80); assert.ok(t('标题'.repeat(100)).endsWith('（Claude Opus 5.5）'));
+  assert.equal(AV.reviewTitle('修登录（Opus）', 'Claude Haiku 5.5', 120, '调度：'), '调度：修登录（Claude Haiku 5.5）');
 });
 test('verdicts: only a leading 通过/不通过 counts; anything else is unclear and never a pass', () => {
   for (const text of ['通过：文件都在，测试跑过', '  **通过** 全部核对', '【通过】ok', '验收通过。', '通过', 'PASS: all good']) assert.equal(AV.verdict(text), 'pass', text);
@@ -284,9 +309,9 @@ test('a second receipt while the reviewer works: the review is void, the new rec
   assert.equal(event(card.id, 'failed', '不通过：旧结论', reviewer(card.id, 1), 'rev1').ignored, true);
   assert.equal(event(card.id, 'complete', '通过：旧结论', reviewer(card.id, 1), 'rev1').ignored, true);
   assert.equal(get(card.id).status, 'review'); assert.equal(get(card.id).review_round, 2); assert.ok(!get(card.id).review_reject);
-  // the new reviewer is picked from the executor's make (never the same provider)
-  const picked = AV.pickReviewer({ executor: get(card.id).exec_receipt.assignee, commandOf: (c) => c.id });
-  assert.notEqual(picked.family, 'anthropic');
+  // the new round's reviewer is a fresh Claude session again, picked from the new receipt
+  const picked = AV.pickReviewer({ card: get(card.id), receipt: get(card.id).exec_receipt, seats: SEATS, stanceOf: bySeat({}) });
+  assert.match(picked.cmd, /^claude /);
 });
 test('only a different written receipt from the original executor voids a running review', (t) => {
   const { store, add, bind, event, get, executed, reviewer } = fixture(t);
@@ -398,8 +423,181 @@ test('the Captain briefing describes the automatic loop, stays static, and leave
   const M = require('../main-core');
   const text = require('./fixtures/captain-rulebook').rulebook('darwin');
   assert.equal(M.instructions('darwin'), M.instructions('darwin'));
-  assert.match(text, /程序自动开一个和执行会话不同提供方的审查会话/); assert.match(text, /审查员的原话自动发回原执行会话返工/);
-  assert.match(text, /连续失败两次 held，先由队长决定，不再自动重试/); assert.match(text, /选不出审查者（同一提供方或额度用尽）时卡片停在 review 并写明原因/);
-  assert.match(text, /16\. 重要的活完成后，派 Gemini 3\.8 Flash/);
+  assert.match(text, /程序自动另起一个新的 Claude 审查会话（重要的用 Opus 5.5，简单的用 Sonnet 5.5/); assert.doesNotMatch(text, /不同提供方的审查会话/); assert.match(text, /审查员的原话自动发回原执行会话返工/);
+  assert.match(text, /连续失败两次 held，先由队长决定，不再自动重试/); assert.match(text, /选不出审查者（Claude 各席位额度都用尽或出错）时卡片停在 review 并写明原因/);
+  assert.match(text, /16\. 重要的活完成后，派 Opus 5\.5 新开会话验收（简单的核对派 Sonnet 5\.5；界面活一律 Opus 5\.5），不派 Gemini 等别家模型：/);
+  assert.doesNotMatch(text, /派 Gemini 3\.8 Flash 验收/);
+  assert.match(text, /验收通过再汇报。/);
   assert.doesNotMatch(text, /auto-review-|review_round/);
+});
+
+// ---- interface work is always Opus ----
+test('interface work is recognised from the files, the card and the receipt, and is never a simple card', () => {
+  const card = (extra = {}) => ({ id: 't', title: '修校验', detail: '改后端', ...extra });
+  const receipt = (files = ['/repo/a.js'], text = '改完', model = 'claude-sonnet-5-5') => ({ text, files, assignee: { agent: 'Claude', model } });
+  const ui = (c, r) => AV.isUiWork({ card: c, receipt: r });
+  for (const file of ['/r/task-board-ui.js', 'C:\\r\\sidebar-core.js', '/r/style.css', '/r/index.html', '/r/shot.png', '/r/a.SVG', '/r/chat-ui.js', '/r/renderer.js', '/r/mobile-web/hub/core.js', '/r/preview-themes.css', '/r/App.vue', '/r/shot.jpeg']) {
+    assert.equal(ui(card(), receipt([file])), true, file);
+  }
+  for (const file of ['/r/main.js', '/r/task-board.js', '/r/tests/a.test.js', '/r/README.md', '/r/auto-verify-core.js']) assert.equal(ui(card(), receipt([file])), false, file);
+  for (const [title, detail, text] of [['手机端布局小改', '', ''], ['x', '加一个按钮', ''], ['x', '', '侧栏对齐了'], ['x', '', '深色主题下的对比度'], ['Fix the sidebar', '', ''], ['x', '', 'added a CSS rule'], ['x', '', '截图在 /tmp'], ['x', '', '弹窗不再抢焦点']]) {
+    assert.equal(ui(card({ title, detail }), receipt(['/repo/a.js'], text)), true, title + detail + text);
+  }
+  for (const [title, detail, text] of [['修校验', '改后端', '改完，测试过'], ['quota reading', 'the passive source', 'tests pass'], ['同步冲突', '', '合并规则']]) {
+    assert.equal(ui(card({ title, detail }), receipt(['/repo/a.js'], text)), false, title);
+  }
+  // a small change made by Sonnet that touches a screen is not simple; the same size without one is
+  assert.equal(AV.reviewIsSimple({ card: card(), receipt: receipt() }), true);
+  assert.equal(AV.reviewIsSimple({ card: card(), receipt: receipt(['/repo/side-pane.js']) }), false);
+  assert.equal(AV.reviewIsSimple({ card: card(), receipt: receipt(['/repo/a.js', '/tmp/shot.png']) }), false);
+  const pick = (c, r, extra = {}) => AV.pickReviewer({ card: c, receipt: r, seats: [{ id: 'cn' }], stanceOf: () => 'ok', ...extra });
+  assert.equal(pick(card(), receipt()).candidate.label, 'Claude Sonnet 5.5');
+  assert.equal(pick(card(), receipt(['/repo/style.css'])).candidate.label, 'Claude Opus 5.5');
+  assert.equal(pick(card({ title: '界面小改' }), receipt()).candidate.label, 'Claude Opus 5.5');
+  assert.equal(pick(card(), receipt(['/repo/style.css']), { simple: true }).candidate.label, 'Claude Opus 5.5', 'even when told the card is simple');
+  // with Opus out the interface review still never falls to Sonnet by itself: the pick keeps its order and says what it took
+  assert.equal(pick(card(), receipt(['/repo/style.css'])).simple, false);
+});
+
+// ---- a test instance only opens stand-ins ----
+test('the program a launch line runs is told by name; a stand-in is anything else, and a test instance refuses the real ones', () => {
+  for (const [command, name] of [['claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high', 'claude'], ['command claude', 'claude'], ['FOO=1 agy --model gemini-3.8-flash-high', 'agy'],
+    ['antigravity --x', 'antigravity'], ['codex --no-daemon', 'codex'], ['gemini', 'gemini'], ['cursor-agent --force', 'cursor-agent'], ['"C:\\Users\\x\\AppData\\claude.cmd" --x', 'claude'],
+    ['"D:\\npm\\codex.exe" a', 'codex'], ['/usr/local/bin/claude --x', 'claude'], ['& "C:\\a\\agy.ps1" --x', 'agy'], ['claude-ds --x', 'claude-ds']]) {
+    assert.equal(AV.realAgentProgram(command), name, command);
+    assert.match(AV.testInstanceRefusal(command, '自动审查'), /测试实例里自动审查只许开替身命令，不开真的 /, command);
+  }
+  for (const command of ['node "C:/r/tests/e2e/fixtures/fake-agent.js" --screen-only', '"C:\\Program Files\\nodejs\\node.exe" fake-agent.js', 'node fake-claude.js --provider=codex', 'python stand-in.py', '', 'bash -c "echo claude"', 'claude-like.sh']) {
+    assert.equal(AV.realAgentProgram(command), '', command); assert.equal(AV.testInstanceRefusal(command, '调度员'), '', command);
+  }
+});
+// ---- the command put in the Captain's hands: ONE statement, every value one argument, on either shell ----
+const { splitPosix, splitPowerShell, flagsOfNew } = require('./fixtures/shell-words');
+const NASTY_TITLES = [
+  '修登录', '修"新功能"上线', '带反引号 `whoami` 的标题', '价格 $env:USERNAME 和 $(whoami)', '路径 C:\\Users\\x\\a.js 和 \\n',
+  '分号; 管道| 与& 井号# 大于> 小于<', '换行\n第二行\r\n第三行', '--command "claude --model x" --verify', "it's a 'quoted' title",
+  '中文弯引号“新功能”上线', '弯单引号‘新功能’上线 ‚低 ‛高', 'x” ; Write-Output PWNED ; #', "x' ; Write-Output PWNED ; '", '（Opus 5.5 high·066us）括号',
+];
+function split(command, platform) { return platform === 'win32' ? splitPowerShell(command) : splitPosix(command); }
+test('the manual review command is one statement and every value one argument, titles of any kind, PowerShell and POSIX', () => {
+  for (const platform of ['win32', 'darwin']) {
+    for (const rawTitle of NASTY_TITLES) {
+      const card = { id: 't-1234-abcd', project: rawTitle, title: rawTitle };
+      const receipt = { text: '短', files: ['/a.js'], assignee: { model: 'claude-sonnet-5-5' } };
+      const command = AV.manualReviewCommand({ card, receipt, platform, executorId: 'c-board-x', seat: rawTitle.includes("'") ? 'us' : '' });
+      const { words, unquoted } = split(command, platform);
+      assert.deepEqual(unquoted.filter((c) => !/[$]/.test(c)), [], `nothing is left unquoted that a shell would act on (${platform}): ${rawTitle}`);
+      assert.ok(!/[\r\n]/.test(command), 'one line');
+      const { before, flags } = flagsOfNew(words);
+      assert.equal(before.length, 2); assert.equal(before[0], 'node');
+      assert.deepEqual(Object.keys(flags).sort(), ['command', 'project', 'reviews', 'task', 'task-id', 'title'].concat(rawTitle.includes("'") ? ['seat'] : []).sort());
+      assert.equal(flags['task-id'], 't-1234-abcd'); assert.equal(flags.reviews, 'c-board-x');
+      assert.equal(flags.project, rawTitle.replace(/[\r\n]+/g, ' '), 'the project is one argument, as it is');
+      assert.equal(flags.title, AV.reviewTitle(rawTitle.replace(/[\r\n]+/g, ' '), 'Claude Sonnet 5.5'), 'the title is one argument and names the model that runs');
+      assert.equal(flags.command, 'claude --dangerously-skip-permissions --model claude-sonnet-5-5 --effort high');
+    }
+  }
+});
+test('the quoting of the manual review command is the quoting PowerShell itself reads (the real parser, nothing run)', { skip: process.platform !== 'win32' }, () => {
+  const { spawnSync } = require('child_process');
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-ps-parse-'));
+  try {
+    const items = NASTY_TITLES.map((title) => ({ title, project: title, command: AV.manualReviewCommand({ card: { id: 't-1234-abcd', project: title, title }, receipt: { text: '短', files: ['/a.js'], assignee: { model: 'claude-sonnet-5-5' } }, platform: 'win32', executorId: 'c-board-x' }) }));
+    fs.writeFileSync(path.join(dir, 'in.json'), JSON.stringify(items));
+    const script = [
+      "$items = Get-Content -Raw -Encoding UTF8 -LiteralPath '" + path.join(dir, 'in.json').replace(/'/g, "''") + "' | ConvertFrom-Json",
+      '$out = @()',
+      'foreach ($i in $items) {',
+      '  $tokens = $null; $errors = $null',
+      '  $ast = [System.Management.Automation.Language.Parser]::ParseInput($i.command, [ref]$tokens, [ref]$errors)',
+      '  $statements = @($ast.EndBlock.Statements)',
+      '  $elements = @(); if ($statements.Count -ge 1) { $elements = @($statements[0].PipelineElements[0].CommandElements | ForEach-Object { if ($_ -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $_.Value } else { "<" + $_.GetType().Name + ">" } }) }',
+      '  $out += [pscustomobject]@{ statements = $statements.Count; errors = @($errors).Count; elements = $elements }',
+      '}',
+      "$out | ConvertTo-Json -Depth 5 -Compress | Set-Content -Encoding UTF8 -LiteralPath '" + path.join(dir, 'out.json').replace(/'/g, "''") + "'",
+    ].join('\n');
+    fs.writeFileSync(path.join(dir, 'parse.ps1'), '\ufeff' + script);
+    const run = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(dir, 'parse.ps1')], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'out.json'), 'utf8').replace(/^\ufeff/, ''));
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    assert.equal(list.length, items.length);
+    list.forEach((r, n) => {
+      const title = items[n].title;
+      assert.equal(r.statements, 1, 'one statement: ' + title); assert.equal(r.errors, 0, 'no parse errors: ' + title);
+      const elements = [].concat(r.elements);
+      const at = elements.indexOf('--title');
+      assert.ok(at > 0, 'a --title argument: ' + title);
+      assert.equal(elements[at + 1], AV.reviewTitle(title.replace(/[\r\n]+/g, ' '), 'Claude Sonnet 5.5'), 'the title is exactly one argument: ' + title);
+      assert.equal(elements[elements.indexOf('--project') + 1], title.replace(/[\r\n]+/g, ' '), 'and so is the project: ' + title);
+      assert.equal(elements.length, 15, 'the argument count does not depend on the title: ' + title);
+    });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+test('the command carries the model in --command and nothing new does not know; an unreadable card is reviewed by Opus', () => {
+  const card = { id: 't-1', project: '项目 A', title: '修登录（Opus 5.5）' };
+  for (const [receipt, model] of [[{ text: '短', files: ['/a.js'], assignee: { model: 'claude-sonnet-5-5' } }, 'claude-sonnet-5-5'], [{ text: '短', files: ['/style.css'], assignee: { model: 'claude-sonnet-5-5' } }, 'claude-opus-5-5'], [undefined, 'claude-sonnet-5-5']]) {
+    const command = AV.manualReviewCommand({ card, receipt, executorId: 'c-board-x' });
+    const { flags } = flagsOfNew(splitPosix(command).words);
+    assert.equal(flags.command, 'claude --dangerously-skip-permissions --model ' + model + ' --effort high', command);
+    assert.deepEqual(Object.keys(flags).filter((k) => !['task-id', 'project', 'title', 'task', 'reviews', 'command', 'seat'].includes(k)), [], 'only flags new knows: no --model / --effort / --verify');
+    assert.equal(flags.title, '审查：修登录（Claude ' + (model.includes('opus') ? 'Opus' : 'Sonnet') + ' 5.5）', 'the title says what runs, the executor\'s mark is gone');
+  }
+  assert.match(AV.manualReviewCommand({ card: { ...card, important: true }, receipt: undefined, platform: 'win32' }), /--model claude-opus-5-5/);
+  assert.ok(AV.manualReviewCommand({ card, platform: 'win32' }).startsWith('node "$env:AGENTDECK_BOARD_CLI" new '));
+});
+
+// ---- interface work the first round missed: three real cards (names and paths kept short), and the words they use ----
+test('the cards the review found judged as simple are interface work: the history page, the usage chart, the clipboard buttons', () => {
+  const exec = (files, model = 'claude-sonnet-5-5', text = '做完了。报告和截图都在文件里，已核对。'.repeat(8)) => ({ text, files, assignee: { agent: 'Claude', model } });
+  const cards = [
+    // t-97959a27: a page "made like the Mac's", the receipt lists a report and a screenshots folder, a Sonnet made it
+    [{ id: 't-97959a27', title: 'Type4Me Windows：历史页按 Mac 的设计做成一样（统计卡片 + 每日图表）', detail: '用户 10-05：Windows 的历史那块按 Mac 当前这页设计，一模一样，并同步每日图表。' },
+      exec(['C:\\Users\\x\\reports\\type4me-windows-history\\report.md', 'C:\\Users\\x\\reports\\type4me-windows-history\\screenshots'])],
+    // t-f6c52c02: the usage chart with a Mac | Windows switch; only reports are listed
+    [{ id: 't-f6c52c02', title: '任务看板用量图：Mac / Windows 切换，一端能看两端用量（Opus 5.5）', detail: '第二个大柱状图右上角加一个小巧的 Mac | Windows 分段切换' },
+      exec(['C:\\Users\\x\\results\\agentdeck-usage-two-machines.md', 'C:\\Users\\x\\results\\usage-two-machines'], 'claude-opus-5-5')],
+    // t-b0f19fd5: the clipboard follow-up whose last words are about a button, listed files are one report
+    [{ id: 't-b0f19fd5', title: '剪贴板收尾二：Ctrl+V 失败后别吞用户自己的粘贴，复制的勾打到重画后的新按钮上', detail: '来源：审查报告第四节第 2 条' },
+      exec(['C:\\Users\\x\\results\\agentdeck-clipboard-polish.md'])],
+  ];
+  for (const [card, receipt] of cards) {
+    assert.equal(AV.isUiWork({ card, receipt }), true, card.id);
+    assert.equal(AV.reviewIsSimple({ card, receipt }), false, card.id);
+    const picked = AV.pickReviewer({ card, receipt, seats: [{ id: 'cn' }], stanceOf: () => 'ok' });
+    assert.equal(picked.candidate.label, 'Claude Opus 5.5', card.id);
+  }
+});
+test('the words the first round missed (a page, a menu, a font, a window, a chart, tooltip, plurals) and the interface files it missed', () => {
+  const receipt = { text: '改完', files: ['/repo/a.js'], assignee: { model: 'claude-sonnet-5-5' } };
+  for (const title of ['设置页加一个开关', '右键菜单加「复制路径」', '用量图改成柱状图', '字体太小，调大一号', '窗口最小化后恢复位置不对', 'tooltip 文案修正', '修复 Icons 显示', '修理 Buttons', '星图状态标签小修', '架构图配色', 'Fix the themes', 'Menus overlap', '按 Mac 的设计做一页', '图表标注']) {
+    assert.equal(AV.isUiWork({ card: { title }, receipt }), true, title);
+  }
+  for (const file of ['/repo/mobile-web.js', '/repo/crew-map.js', '/repo/crew-map-core.js', '/repo/preview-themes.js', '/repo/preview-reader.js', '/repo/pages.js', '/tmp/screenshots', '/tmp/Screenshots/1.txt', 'C:\\r\\截图\\a.txt', '/r/mockups/a.txt']) {
+    assert.equal(AV.isUiWork({ card: { title: '小修' }, receipt: { ...receipt, files: [file] } }), true, file);
+  }
+  // still not interface work
+  for (const title of ['同步冲突合并规则', 'quota reading from the passive source', 'queue of waiting requests', '修 Windows 路径']) {
+    assert.equal(AV.isUiWork({ card: { title }, receipt }), false, title);
+  }
+  for (const file of ['/repo/main-session.js', '/repo/quota-core.js', '/repo/docs/task-board-api.md', '/repo/tests/a.test.js', '/repo/board-core.js']) assert.equal(AV.isUiWork({ card: { title: '小修' }, receipt: { ...receipt, files: [file] } }), false, file);
+});
+test('nobody is picked from an empty seat list, and the dispatcher leaves a damaged login to the Captain', () => {
+  const stance = () => 'ok';
+  assert.match(AV.pickReviewer({ simple: false, seats: [], stanceOf: stance }).reason, /没有已登录的 Claude 席位/);
+  assert.equal(AV.pickReviewer({ simple: false, seats: [], stanceOf: stance }).cmd, undefined);
+  const commandOf = (c) => c.command || 'agy --model gemini-3.8-flash-high';
+  assert.match(AV.pickDispatcher({ commandOf, seats: [], stanceOf: (cmd) => (/^agy/.test(cmd) ? 'unknown' : 'ok') }).reason, /没有已登录的 Claude 席位/);
+  // Gemini unread and every Claude seat has a damaged login: allError, so no Haiku is started on it
+  const seats = [{ id: 'cn' }, { id: 'us' }];
+  const broken = AV.pickDispatcher({ commandOf, seats, stanceOf: (cmd) => (/^agy/.test(cmd) ? 'unknown' : 'error') });
+  assert.equal(broken.cmd, undefined); assert.equal(broken.allError, true);
+  // one seat out and one damaged is not "all damaged": the ordinary queue takes it
+  const mixed = AV.pickDispatcher({ commandOf, seats, stanceOf: (cmd, seat) => (/^agy/.test(cmd) ? 'unknown' : seat === 'cn' ? 'out' : 'error') });
+  assert.equal(mixed.allError, false);
+  // an error seat is never the unverified fallback, an unknown one is
+  const weak = AV.pickReviewer({ simple: false, seats, stanceOf: (cmd, seat) => (seat === 'cn' ? 'error' : 'unknown') });
+  assert.equal(weak.seat.id, 'us'); assert.equal(weak.unverified, true);
+  assert.equal(AV.pickReviewer({ simple: false, seats, stanceOf: () => 'error' }).cmd, undefined);
 });

@@ -30,7 +30,11 @@ function runtime(t) {
       onTaskStart() {}, onTaskReview() {}, onTaskRework() {},
       memoryPressure: async () => ({ level: h.pressure }),
       saveLongPrompt: async () => { if (h.failLong) throw new Error('disk full'); return '/tmp/queue-unit-long.txt'; },
-      taskBoard: async (op, input) => { if (op === 'bind' && h.failBind) throw new Error('bind failed'); return store[op](input); },
+      taskBoard: async (op, input) => {
+        if (op === 'bind' && h.failBind) throw new Error('bind failed');
+        if (op === 'list') { h.lists = (h.lists || 0) + 1; if (h.listDown || h.listFailsAt === h.lists) throw new Error('board busy: list'); }
+        return store[op](input);
+      },
     },
   };
   const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] } });
@@ -147,4 +151,111 @@ test('explicit named command queue reason clarifies 5-hour quota is below thresh
   assert.equal(result.done, true);
   assert.match(result.result, /已用 --command 点名模型，不自动更换。5 小时额度低于阈值，稍后自动开新会话/);
   assert.match((await h.queue())[0].reason, /5 小时额度低于阈值/);
+});
+
+// ---- what waited for quota must not start by itself once the card is no longer the Captain's order ----
+const tickAndWait = async (h) => { h.window.ChatUI.readFooter ??= () => []; h.window.MainSession.onTick(h.captain.id, { alive: true, state: 'plain' }); for (let i = 0; i < 8; i++) await new Promise((resolve) => setImmediate(resolve)); };
+const notices = (h) => h.state.pending.filter((p) => p.title === '任务看板').map((p) => p.summary);
+
+test('a card left unchanged while it waited for quota opens when quota returns; a priority mark or a receipt does not hold it back', async (t) => {
+  const h = runtime(t), card = h.add();
+  await h.assign(card);
+  assert.equal(h.state.waitlist.length, 1); assert.ok(h.state.waitlist[0].cardGist);
+  const current = h.store.list().find((c) => c.id === card.id);
+  h.store.update({ id: card.id, updated: current.updated, patch: { important: true } });
+  h.out.clear();
+  await tickAndWait(h);
+  assert.equal(h.state.waitlist.length, 0); assert.equal(h.columns.length, 2, 'the session opened');
+  assert.equal(notices(h).filter((n) => n.includes('没有自动')).length, 0);
+});
+
+test('the user put the card on 需要你, back with a new note, or archived it while it waited: quota returning opens nothing and the Captain is told', async (t) => {
+  const changes = {
+    '需要你': (h, card) => h.store.move({ id: card.id, status: 'needs_user' }),
+    '改了说明（暂缓）': (h, card) => h.store.update({ id: card.id, updated: h.store.list().find((c) => c.id === card.id).updated, patch: { detail: '用户要先讨论设计，暂不派' } }),
+    '归档': (h, card) => { h.store.move({ id: card.id, status: 'done' }); h.store.archive({ done: true, project: 'test' }); },
+  };
+  for (const [name, change] of Object.entries(changes)) {
+    const h = runtime(t), card = h.add();
+    await h.assign(card);
+    assert.equal(h.state.waitlist.length, 1, name);
+    change(h, card);   // written straight to the board, as the other machine or the UI of another process would
+    h.out.clear();
+    await tickAndWait(h);
+    assert.equal(h.columns.length, 1, name + ': no session');
+    assert.equal(h.state.waitlist.length, 0, name);
+    assert.equal(h.state.tasks[0].status, 'stopped', name); assert.match(h.state.tasks[0].receipt.summary, /没有自动派/);
+    assert.equal(notices(h).filter((n) => n.includes('额度回来后没有自动开')).length, 1, name);
+    if (name === '需要你') assert.equal(storeStatus(h, card), 'needs_user', 'the card stays where the user put it');
+  }
+});
+
+test('moving a queued card to 需要你 on this machine cancels its request at once', async (t) => {
+  const h = runtime(t), card = h.add();
+  await h.assign(card);
+  await h.window.TaskBoard.move(card.id, 'needs_user');
+  assert.equal(h.state.waitlist.length, 0);
+  assert.equal(storeStatus(h, card), 'needs_user');
+});
+
+test('a card the Captain queued while it was already on 需要你 opens when quota returns: only a card put there while it waited is stopped', async (t) => {
+  const h = runtime(t), card = h.add();
+  h.store.move({ id: card.id, status: 'needs_user' });   // e.g. a dispatcher's finish put it there; the Captain then orders the work
+  await h.assign(card);
+  assert.equal(h.state.waitlist.length, 1); assert.equal(JSON.parse(h.state.waitlist[0].cardGist)[0], 'needs_user');
+  h.out.clear();
+  await tickAndWait(h);
+  assert.equal(h.columns.length, 2, 'the session opened'); assert.equal(h.state.waitlist.length, 0);
+  assert.equal(notices(h).filter((n) => n.includes('没有自动开')).length, 0);
+  // and the one moved there while it waited is stopped, as before
+  const h2 = runtime(t), card2 = h2.add();
+  await h2.assign(card2);
+  h2.store.move({ id: card2.id, status: 'needs_user' });
+  h2.out.clear();
+  await tickAndWait(h2);
+  assert.equal(h2.columns.length, 1); assert.match(notices(h2).join('\n'), /在排队期间被放到了「需要你」/);
+});
+
+test('a board that cannot be read when the request is due puts it back and judges it on the next turn; it neither opens blind nor drops', async (t) => {
+  // read later: the card went to 需要你 while it waited -> nothing opens
+  const h = runtime(t), card = h.add();
+  await h.assign(card);
+  h.store.move({ id: card.id, status: 'needs_user' });
+  h.out.clear(); h.listDown = true;
+  await tickAndWait(h);
+  assert.equal(h.columns.length, 1, 'no session while the board is unreadable'); assert.equal(h.state.waitlist.length, 1, 'the request is still in the queue');
+  assert.equal(h.state.tasks[0].status, 'waiting');
+  const before = h.lists;
+  await tickAndWait(h); await tickAndWait(h);
+  assert.equal(h.columns.length, 1); assert.equal(h.state.waitlist.length, 1);
+  assert.ok(h.lists >= before, 'it is tried again on every turn');
+  h.listDown = false;
+  await tickAndWait(h);
+  assert.equal(h.columns.length, 1); assert.equal(h.state.waitlist.length, 0);
+  assert.equal(h.state.tasks[0].status, 'stopped'); assert.match(notices(h).join('\n'), /在排队期间被放到了「需要你」/);
+  // read later: nothing changed -> it opens, once
+  const h2 = runtime(t), card2 = h2.add();
+  await h2.assign(card2);
+  h2.out.clear(); h2.listDown = true;
+  await tickAndWait(h2);
+  assert.equal(h2.columns.length, 1); assert.equal(h2.state.waitlist.length, 1);
+  h2.listDown = false;
+  await tickAndWait(h2);
+  assert.equal(h2.columns.length, 2, 'it opened'); assert.equal(h2.state.waitlist.length, 0);
+});
+
+test('a request queued while the board could not be read has no record of the card: when it is due the Captain decides, nothing opens by itself', async (t) => {
+  const h = runtime(t), card = h.add();
+  // count the board reads of one assign, then make exactly the read the queue takes fail
+  const probe = runtime(t), probeCard = probe.add();
+  const base = probe.lists || 0;
+  await probe.assign(probeCard);
+  const used = probe.lists - base;
+  h.listFailsAt = (h.lists || 0) + used;   // the last read of the assign is the queue's own
+  await h.assign(card);
+  assert.equal(h.state.waitlist.length, 1); assert.equal(h.state.waitlist[0].gistUnread, true); assert.equal(h.state.waitlist[0].cardGist, undefined);
+  h.out.clear();
+  await tickAndWait(h);
+  assert.equal(h.columns.length, 1); assert.equal(h.state.waitlist.length, 0);
+  assert.match(notices(h).join('\n'), /排队那一刻看板读不到/);
 });
