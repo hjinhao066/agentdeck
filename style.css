@@ -4318,6 +4318,7 @@ dialog .todo-quick-input, dialog .todo-quick-input:focus { height: 100%; padding
 .tu-range button:hover { color: var(--tbv-ink); }
 .tu-range button.active { background: var(--tbv-glass); color: var(--tbv-ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--tbv-rim), 0 4px 10px -6px rgba(0, 0, 0, .7); }
 :root[data-theme="light"] .tu-range button.active { background: #fff; box-shadow: inset 0 0 0 1px var(--tbv-rim), 0 4px 10px -6px rgba(50, 60, 140, .45); }
+.tu-switches { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .tu-tools { display: flex; align-items: center; gap: 4px; }
 .tu-updated { font-size: 12px; color: var(--tbv-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tu-refresh.busy svg { animation: tbv-spin .8s linear infinite; }
@@ -4341,6 +4342,7 @@ dialog .todo-quick-input, dialog .todo-quick-input:focus { height: 100%; padding
   text-shadow: 0 0 26px color-mix(in srgb, var(--tbv-wire-hi) calc(var(--tbv-glow) * .45), transparent);
 }
 :root[data-theme="light"] .tu-hero-num { background-image: linear-gradient(96deg, #141a2e 8%, #2b3190 70%, #5b3fc4); }
+.tu-view.money .tu-hero-num { font-size: 36px; }
 .tu-hero-sub { font-size: 12px; color: var(--tbv-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .tu-provider { position: relative; display: grid; grid-template-columns: 1fr auto; align-content: center; gap: 6px 8px; min-width: 0; padding: 14px 16px 16px; overflow: hidden; }
 .tu-provider-name { grid-column: 1 / -1; font-size: 12px; color: var(--tbv-ink-3); white-space: nowrap; }
@@ -4353,6 +4355,42 @@ dialog .todo-quick-input, dialog .todo-quick-input:focus { height: 100%; padding
 }
 :root[data-theme="light"] .tu-provider-bar::after { background: var(--tbv-wire); }
 .tu-provider.none .tu-provider-num { color: var(--tbv-ink-3); }
+
+/* 金额 only: 订阅值不值, one row per Claude account. The multiple is the row's
+   one bright number (the hero's starlight gradient); dollars and the cycle stay quiet. */
+.tu-value { min-width: 0; padding: 12px 16px 4px; border-radius: 14px; background: var(--tu-card); box-shadow: inset 0 0 0 1px var(--tbv-rim-lo), var(--tbv-shadow); }
+.tu-value[hidden] { display: none; }
+.tu-value-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tu-value-title { margin: 0; font-size: 13.5px; font-weight: 650; color: var(--tbv-ink); }
+.tu-value-note { font-size: 12px; color: var(--tbv-ink-3); white-space: nowrap; }
+.tu-value-row {
+  display: grid; grid-template-columns: minmax(150px, 1fr) minmax(104px, auto) minmax(260px, 2.4fr) auto; align-items: center; gap: 6px 22px;
+  padding: 12px 0; border-top: 1px solid var(--tbv-line);
+}
+.tu-value-list .tu-value-row:first-child { border-top: 0; }
+.tu-value-who { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tu-value-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; color: var(--tbv-ink); }
+.tu-value-plan {
+  flex: none; padding: 2px 8px; border-radius: 10px; background: var(--tbv-chip); box-shadow: inset 0 0 0 1px var(--tbv-rim-lo);
+  font-size: 11.5px; color: var(--tbv-ink-2); white-space: nowrap;
+}
+.tu-value-times {
+  font-size: 28px; font-weight: 650; line-height: 1.1; letter-spacing: -.02em; white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: linear-gradient(96deg, #fff 8%, #cfd7ff 58%, #bda9ff); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+:root[data-theme="light"] .tu-value-times { background-image: linear-gradient(96deg, #141a2e 8%, #2b3190 70%, #5b3fc4); }
+.tu-value-nums { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 12.5px; color: var(--tbv-ink-2); font-variant-numeric: tabular-nums; }
+.tu-value-spent b { font-weight: 650; color: var(--tbv-ink); }
+.tu-value-pace { color: var(--tbv-ink-3); }
+.tu-value-cycle { display: flex; align-items: center; justify-content: flex-end; gap: 2px; font-size: 12px; color: var(--tbv-ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tu-value-edit { flex-basis: 28px; width: 28px; height: 28px; }
+.tu-value-edit svg { width: 15px; height: 15px; }
+.tu-value-date {
+  height: 28px; padding: 0 8px; border: 0; border-radius: 8px; background: var(--tbv-chip); box-shadow: inset 0 0 0 1px var(--tbv-rim);
+  font: inherit; font-size: 12.5px; color: var(--tbv-ink); color-scheme: dark;
+}
+:root[data-theme="light"] .tu-value-date { color-scheme: light; }
+.tu-value-date:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* the chart card: legend over the columns */
 .tu-chart-card { padding: 14px 14px 10px; min-width: 0; }
@@ -4419,6 +4457,7 @@ dialog .todo-quick-input, dialog .todo-quick-input:focus { height: 100%; padding
 .tu-td-model { color: var(--tbv-ink); }
 .tu-td-model > span { display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; }
 .tu-td-src { color: var(--tbv-ink-3); }
+.tu-table td.dim { color: var(--tbv-ink-3); }
 
 /* where the numbers come from */
 .tu-sources { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
@@ -4447,9 +4486,13 @@ dialog .todo-quick-input, dialog .todo-quick-input:focus { height: 100%; padding
 @container tu (max-width: 900px) {
   .tu-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .tu-hero { grid-column: 1 / -1; }
+  .tu-value-row { grid-template-columns: minmax(0, 1fr) auto; }
 }
 @container tu (max-width: 520px) {
   .tu-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .tu-hero-num { font-size: 38px; }
+  .tu-hero-num, .tu-view.money .tu-hero-num { font-size: 32px; }
+  .tu-provider-num { font-size: 18px; }
+  .tu-value-row { grid-template-columns: minmax(0, 1fr); }
+  .tu-value-cycle { justify-content: flex-start; }
   .tu-chart { height: 260px; }
 }

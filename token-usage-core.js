@@ -93,8 +93,18 @@
     if (!u || typeof u !== 'object' || !m.id || m.model === '<synthetic>') return [];
     const ts = Date.parse(obj.timestamp);
     if (!Number.isFinite(ts)) return [];
-    const one = (key, model, v) => ({ key, ts, model: String(model || 'unknown'),
-      input: num(v.input_tokens), output: num(v.output_tokens), cacheRead: num(v.cache_read_input_tokens), cacheWrite: num(v.cache_creation_input_tokens) });
+    // For the money view: the part of the cache write kept for an hour (priced
+    // apart from the 5-minute part), fast mode and US-only inference. Each is set
+    // only when the log says so.
+    const one = (key, model, v) => {
+      const r = { key, ts, model: String(model || 'unknown'),
+        input: num(v.input_tokens), output: num(v.output_tokens), cacheRead: num(v.cache_read_input_tokens), cacheWrite: num(v.cache_creation_input_tokens) };
+      const hour = Math.min(num(v.cache_creation && v.cache_creation.ephemeral_1h_input_tokens), r.cacheWrite);
+      if (hour) r.cacheWrite1h = hour;
+      if (v.speed === 'fast' || u.speed === 'fast') r.fast = true;
+      if (u.inference_geo === 'us') r.geoUs = true;
+      return r;
+    };
     const out = [one(String(m.id), m.model, u)];
     if (Array.isArray(u.iterations)) {
       u.iterations.forEach((it, i) => {
@@ -346,6 +356,168 @@
     return days;
   }
 
+  // ---- money: official API list prices (token-prices.json) ----
+  const own = (o, k) => !!o && Object.prototype.hasOwnProperty.call(o, k);
+  // A model's price: its own name, an alias, or the name without a date
+  // (claude-haiku-4-5-20251001) or a trailing effort / thinking level
+  // (claude-opus-5-5-high in Cursor, gemini-3.8-flash-medium in Antigravity).
+  // null: no official price, shown as 无官方价 and never as $0.
+  const EFFORT = /-(?:minimal|low|medium|high|xhigh|max)$/;
+  function priceOf(model, table) {
+    if (!model || !table || !table.models) return null;
+    const find = (m) => (own(table.models, m) ? table.models[m] : own(table.aliases, m) && own(table.models, table.aliases[m]) ? table.models[table.aliases[m]] : null);
+    const m = String(model).trim().toLowerCase(), undated = m.replace(/-\d{8}$/, '');
+    return find(m) || find(undated) || find(undated.replace(EFFORT, '')) || null;
+  }
+  // DeepSeek's peak hours: weekdays, the listed UTC hours.
+  function peakAt(ts, hours) {
+    const d = new Date(ts), wd = d.getUTCDay(), h = d.getUTCHours();
+    return wd >= 1 && wd <= 5 && (hours || []).some(([a, b]) => h >= a && h < b);
+  }
+  // One call's cost in dollars: [input, output, cacheRead, cacheWrite]. A prompt
+  // (input + cache read + cache write) over the model's long-context threshold
+  // moves the whole call to that price; fast mode, off-peak hours and US-only
+  // inference apply the vendor's own rule. A cache read or write the vendor does
+  // not price on its own costs the input price.
+  function recordCost(r, price) {
+    if (!price) return null;
+    let p = price;
+    if (p.over && r.input + r.cacheRead + r.cacheWrite > p.over.prompt) p = { ...p, ...p.over };
+    if (r.fast && p.fast) p = { ...p, ...p.fast };
+    if (p.offPeak && !peakAt(r.ts, p.offPeak.peakUtc)) p = { ...p, ...p.offPeak };
+    const geo = r.geoUs && p.usGeo ? p.usGeo : 1;
+    const read = p.cacheRead != null ? p.cacheRead : p.input;
+    const write = p.cacheWrite != null ? p.cacheWrite : p.input;
+    const hour = Math.min(r.cacheWrite1h || 0, r.cacheWrite);
+    const usd = (n) => n / 1e6 * geo;
+    return [usd(r.input * p.input), usd(r.output * p.output), usd(r.cacheRead * read),
+      usd((r.cacheWrite - hour) * write + hour * (p.cacheWrite1h != null ? p.cacheWrite1h : write))];
+  }
+  const cents6 = (v) => Math.round(v * 1e6) / 1e6;
+  // Daily costs beside dailySums: { day: { key: [input, output, cacheRead, cacheWrite] in dollars } },
+  // null for a model without an official price.
+  function dailyCosts(records, from, to, table) {
+    const days = {};
+    const prices = new Map();
+    for (const r of records) {
+      const day = dayKey(r.ts);
+      if (day < from || day > to) continue;
+      const k = seriesKey(r.source, r.model);
+      const d = days[day] || (days[day] = {});
+      if (!prices.has(r.model)) prices.set(r.model, priceOf(r.model, table));
+      const price = prices.get(r.model);
+      if (!price) { d[k] = null; continue; }
+      const c = recordCost(r, price);
+      const v = d[k] || (d[k] = [0, 0, 0, 0]);
+      for (let i = 0; i < 4; i++) v[i] += c[i];
+    }
+    for (const d of Object.values(days)) for (const k of Object.keys(d)) if (d[k]) d[k] = d[k].map(cents6);
+    return days;
+  }
+  // A day of costs read like a day of tokens (every chart helper takes it), and the models it could not price.
+  function pricedDay(costDay) {
+    const out = {};
+    for (const [k, v] of Object.entries(costDay || {})) if (v) out[k] = v;
+    return out;
+  }
+  function unpricedKeys(costDay) { return Object.entries(costDay || {}).filter(([, v]) => !v).map(([k]) => k); }
+  // $1,234.56
+  function formatUsd(n) {
+    return '$' + Math.max(0, Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  // 10.8 倍, 217 倍, 0.42 倍
+  function formatTimes(x) {
+    x = Math.max(0, Number(x) || 0);
+    const s = x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2);
+    return (s.includes('.') ? s.replace(/\.?0+$/, '') : s) + ' 倍';
+  }
+
+  // ---- 订阅值不值: what each Claude subscription's logs are worth at API prices ----
+  // The cycle holding today, monthly from the anchor's day of the month (a day the
+  // month lacks becomes its last day, as a monthly bill does). null for no anchor.
+  function monthStart(y, m, d) {
+    const yy = y + Math.floor(m / 12), mm = ((m % 12) + 12) % 12;
+    return `${yy}-${pad2(mm + 1)}-${pad2(Math.min(d, new Date(Date.UTC(yy, mm + 1, 0)).getUTCDate()))}`;
+  }
+  function cycleOf(anchor, today) {
+    const a = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(anchor || ''));
+    if (!a || !today || a[0] > today) return null;
+    const [ty, tm] = String(today).split('-').map(Number);
+    let k = (ty - a[1]) * 12 + (tm - a[2]);
+    let start = monthStart(+a[1], a[2] - 1 + k, +a[3]);
+    if (start > today) start = monthStart(+a[1], a[2] - 1 + --k, +a[3]);
+    const end = monthStart(+a[1], a[2] - 1 + k + 1, +a[3]);
+    return { start, end, days: Math.round((dayStart(end) - dayStart(start)) / 86400000) };
+  }
+  // Spent from the cycle's first day to now; per day over the days gone (at least
+  // one, so a cycle's first hours are not stretched into a day); the whole cycle
+  // at that pace; both as times the subscription price (null without a price).
+  function subscriptionValue({ days, cycle, now, price }) {
+    let spent = 0;
+    for (const [d, v] of Object.entries(days || {})) if (d >= cycle.start && d < cycle.end) spent += Number(v) || 0;
+    const elapsed = Math.max(1, Math.min(cycle.days, (now - dayStart(cycle.start)) / 86400000));
+    const perDay = spent / elapsed, projected = perDay * cycle.days;
+    return { spent, elapsed, perDay, projected, times: price > 0 ? spent / price : null, projectedTimes: price > 0 ? projected / price : null };
+  }
+  const accountOf = (info) => {
+    const e = String((info && info.accountEmail) || '').trim();
+    return e.includes('@') ? e.slice(0, e.lastIndexOf('@')) : e;
+  };
+  // One row per subscription. seatCosts: the scanner's dollars per day per log
+  // directory ({ seats: [ids], days }); seats that share a directory (~/.claude-us
+  // links to ~/.claude/projects) cannot be told apart and share a row, and two
+  // directories signed in to one account are one row. infos: seats:list rows.
+  // starts: a cycle start the user set, by row key; otherwise monthly from the
+  // first account's subscription day, else the calendar month.
+  function valueRows({ seatCosts, infos, plans, starts, today, now }) {
+    const byId = new Map((infos || []).filter((i) => i && i.id).map((i) => [i.id, i]));
+    const usdOf = (p) => (typeof p === 'number' ? p : p && p.usd) || 0;
+    const groups = [];
+    for (const g of seatCosts || []) {
+      const seats = (g.seats || []).filter((id) => byId.has(id));
+      if (!seats.length) continue;
+      const accounts = new Map();
+      for (const id of seats) { const name = accountOf(byId.get(id)); if (name && !accounts.has(name)) accounts.set(name, byId.get(id)); }
+      let row = { seats, accounts, days: { ...(g.days || {}) } };
+      for (let i = groups.length - 1; i >= 0; i--) {
+        const other = groups[i];
+        if (![...accounts.keys()].some((n) => other.accounts.has(n))) continue;
+        groups.splice(i, 1);
+        for (const [n, info] of other.accounts) if (!row.accounts.has(n)) row.accounts.set(n, info);
+        for (const [d, v] of Object.entries(other.days)) row.days[d] = (row.days[d] || 0) + v;
+        row = { ...row, seats: [...other.seats, ...row.seats] };
+      }
+      groups.push(row);
+    }
+    const rows = groups.map((g) => {
+      const names = [...g.accounts.keys()].sort();
+      const key = names.join('+') || g.seats.join('+');
+      const plansOf = names.map((n) => g.accounts.get(n).plan || '');
+      const price = plansOf.length && plansOf.every((p) => usdOf(plans && own(plans, p) ? plans[p] : 0) > 0)
+        ? plansOf.reduce((s, p) => s + usdOf(plans[p]), 0) : 0;
+      const set = starts && own(starts, key) && /^\d{4}-\d{2}-\d{2}$/.test(starts[key]) ? starts[key] : '';
+      const first = names.length ? g.accounts.get(names[0]) : null;
+      const anchor = set || String((first && first.subscribedAt) || '').slice(0, 10);
+      const cycle = cycleOf(anchor, today) || cycleOf(String(today).slice(0, 8) + '01', today);
+      return { key, names, seats: g.seats, plan: [...new Set(plansOf.filter(Boolean))].join(' + '), price, cycle, custom: !!set,
+        value: subscriptionValue({ days: g.days, cycle, now, price }) };
+    });
+    return rows.sort((a, b) => b.value.spent - a.value.spent || (a.key < b.key ? -1 : 1));
+  }
+
+  // The Token 用量 view's saved settings: the range, Token or 金额, and the cycle
+  // start the user set per 订阅值不值 row (a YYYY-MM-DD by row key).
+  function viewPrefs(v) {
+    v = v && typeof v === 'object' ? v : {};
+    const starts = {};
+    if (v.starts && typeof v.starts === 'object' && !Array.isArray(v.starts)) {
+      for (const [k, d] of Object.entries(v.starts).slice(0, 50)) {
+        if (k && k.length <= 200 && k !== '__proto__' && typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) starts[k] = d;
+      }
+    }
+    return { days: v.days === 30 ? 30 : 7, unit: v.unit === 'usd' ? 'usd' : 'tokens', starts };
+  }
+
   // ---- names ----
   const cap = (w) => (w ? w[0].toUpperCase() + w.slice(1) : w);
   // claude-opus-5-5 -> Opus 5.5, gpt-6.1-sol -> GPT-6.1 Sol,
@@ -469,7 +641,8 @@
   // Each column's label starts just above its own bar; when it would touch a
   // label already placed or another column's bar, it moves up just above that.
   // Every label stays horizontal and whole. cols: [{ x (centre), top (bar top
-  // y; the baseline is larger), w (label width) }]. Returns the label boxes'
+  // y; the baseline is larger), w (label width), lx (the label's own centre when
+  // it is pulled in to stay inside the chart; x otherwise) }]. Returns the label boxes'
   // bottom y and the most rows any label rose above its own bar.
   function placeLabels(cols, { barWidth, base, lineHeight = 13, pad = 3, gap = 2 }) {
     const placed = [];
@@ -478,7 +651,8 @@
     for (let i = 0; i < cols.length; i++) {
       const c = cols[i];
       if (!c || !(c.w > 0)) { bottoms.push(null); continue; }
-      const left = c.x - c.w / 2 - gap, right = c.x + c.w / 2 + gap;
+      const cx = c.lx != null ? c.lx : c.x;
+      const left = cx - c.w / 2 - gap, right = cx + c.w / 2 + gap;
       let bottom = c.top - pad;
       for (let guard = 0; guard < 200; guard++) {
         const top = bottom - lineHeight;
@@ -501,7 +675,8 @@
 
   return {
     BUCKETS, BUCKET_LABELS, SOURCES, PROVIDERS, SLOTS, OTHER, ANTIGRAVITY_MODELS, providerOf,
-    dayKey, addDays, dayStart, dayRange, dayTitle, axisLabel, axisTicks,
+    dayKey, addDays, dayStart, dayRange, dayParts, dayTitle, axisLabel, axisTicks,
+    priceOf, recordCost, dailyCosts, pricedDay, unpricedKeys, formatUsd, formatTimes, cycleOf, subscriptionValue, valueRows, viewPrefs,
     claudeRecords, claudeMayCount, codexState, codexMayCount, codexLine, pbFields, antigravityStep, fillAntigravityModels, antigravityModel, cursorCsv, csvRow,
     mergeRecords, dailySums, seriesKey, modelLabel, sourceName,
     formatShort, formatFull, formatPct, niceScale, dayModels, dayTotal, dayBuckets, providerTotals, assignColors, stack, placeLabels,

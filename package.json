@@ -130,6 +130,7 @@
       "token-usage-worker.js",
       "token-usage-main.js",
       "token-usage-ui.js",
+      "token-prices.json",
       "release-notes.json",
       "release-notes-ui.js",
       "version-progress-core.js",

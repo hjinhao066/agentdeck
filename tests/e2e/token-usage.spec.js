@@ -4,6 +4,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const C = require('../../token-usage-core');
+const PRICES = require('../../token-prices.json');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 
 // Token 用量: the 任务看板 page's fourth tab. Real renderer and a real scan in
 // the utility process, over made-up CLI logs in <profile>/usage-home (a test
@@ -31,9 +33,20 @@ async function resize(width, height) {
 // replayed into a second file), Codex rollouts, claude-ds on DeepSeek, and a
 // day with nothing at all (3 days ago). Returns the expected sums per day and
 // model, built the way the scanner must count them.
+// Dollars too: costs[day][key] at the official prices (null: no official price),
+// and each seat directory's dollars per day (the 订阅值不值 rows).
 function seed(home) {
-  const expected = {};
+  const expected = {}, costs = {}, groups = { cn: {}, us2: {} };
   const add = (day, key, t) => { const d = expected[day] || (expected[day] = {}); d[key] = (d[key] || 0) + t; };
+  const addCost = (day, key, r, group) => {
+    const d = costs[day] || (costs[day] = {});
+    const price = C.priceOf(r.model, PRICES);
+    if (!price) { d[key] = null; return; }
+    const c = C.recordCost(r, price);
+    const v = d[key] || (d[key] = [0, 0, 0, 0]);
+    for (let i = 0; i < 4; i++) v[i] += c[i];
+    if (group) groups[group][day] = (groups[group][day] || 0) + c[0] + c[1] + c[2] + c[3];
+  };
   let rnd = 7;
   const r = () => { rnd = (rnd * 16807) % 2147483647; return rnd / 2147483647; };
   const today = C.dayKey(Date.now());
@@ -43,20 +56,23 @@ function seed(home) {
     if (back === 3) continue;
     const day = C.addDays(today, -back);
     const at = (h) => new Date(C.dayStart(day) + h * 3600_000).toISOString();
-    const claude = (file, id, model, h, size) => {
+    // a counted message: its tokens and its dollars (group: the seat directory it was written in)
+    const claude = (file, id, model, h, size, source, group) => {
       const u = { input_tokens: Math.round(size * 0.002), output_tokens: Math.round(size * 0.01), cache_read_input_tokens: Math.round(size * 0.9), cache_creation_input_tokens: Math.round(size * 0.088) };
       file.push(JSON.stringify({ type: 'assistant', timestamp: at(h), message: { id, model, usage: u } }));
-      return u.input_tokens + u.output_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens;
+      if (!source) return;
+      add(day, `${source}:${model}`, u.input_tokens + u.output_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens);
+      addCost(day, `${source}:${model}`, { ts: Date.parse(at(h)), model, input: u.input_tokens, output: u.output_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens }, group);
     };
     const big = 1 + 0.8 * Math.sin(back / 3) ** 2;
-    add(day, 'claude:claude-opus-5-5', claude(claudeA, `msg_o_${back}`, 'claude-opus-5-5', 9, 320e6 * big * (0.6 + r())));
+    claude(claudeA, `msg_o_${back}`, 'claude-opus-5-5', 9, 320e6 * big * (0.6 + r()), 'claude', 'cn');
     // the same message streamed twice and replayed into a resumed session: counted once
     claude(claudeA, `msg_o_${back}`, 'claude-opus-5-5', 9, 1000);
     claude(claudeB, `msg_o_${back}`, 'claude-opus-5-5', 10, 1000);
-    add(day, 'claude:claude-sonnet-5-5', claude(claudeB, `msg_s_${back}`, 'claude-sonnet-5-5', 11, 70e6 * (0.5 + r())));
-    if (back % 2 === 0) add(day, 'claude:claude-haiku-5-5', claude(claudeB, `msg_h_${back}`, 'claude-haiku-5-5', 12, 9e6 * (0.5 + r())));
-    if (back % 5 === 1) add(day, 'claude:claude-fable-5-1', claude(claudeA, `msg_f_${back}`, 'claude-fable-5-1', 13, 4e6 * (0.5 + r())));
-    if (back % 3 !== 2) add(day, 'deepseek:deepseek-v4-pro', claude(ds, `msg_d_${back}`, 'deepseek-v4-pro', 14, 22e6 * (0.5 + r())));
+    claude(claudeB, `msg_s_${back}`, 'claude-sonnet-5-5', 11, 70e6 * (0.5 + r()), 'claude', 'us2');
+    if (back % 2 === 0) claude(claudeB, `msg_h_${back}`, 'claude-haiku-5-5', 12, 9e6 * (0.5 + r()), 'claude', 'us2');
+    if (back % 5 === 1) claude(claudeA, `msg_f_${back}`, 'claude-fable-5-1', 13, 4e6 * (0.5 + r()), 'claude', 'cn');
+    if (back % 3 !== 2) claude(ds, `msg_d_${back}`, 'deepseek-v4-pro', 14, 22e6 * (0.5 + r()), 'deepseek');
     for (const [model, size, h] of [['gpt-5.5', 160e6 * (0.4 + r()), 15], ['gpt-5.5-mini', back % 4 === 0 ? 6e6 * (0.5 + r()) : 0, 16]]) {
       if (!size) continue;
       const cached = Math.round(size * 0.93), input = Math.round(size * 0.985), output = Math.round(size - input);
@@ -65,6 +81,7 @@ function seed(home) {
         JSON.stringify({ type: 'token_usage_record', timestamp: at(h), payload: { response_id: `resp_${model}_${back}`, usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output } } }),
       ] });
       add(day, 'codex:' + model, input + output);
+      addCost(day, 'codex:' + model, { ts: Date.parse(at(h)), model, input: input - cached, output, cacheRead: cached, cacheWrite: 0 });
     }
   }
   const write = (file, lines) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, lines.join('\n') + '\n'); };
@@ -72,13 +89,25 @@ function seed(home) {
   write(path.join(home, '.claude-us2', 'projects', 'demo', 'b.jsonl'), claudeB);
   write(path.join(home, '.local', 'claude-deepseek', 'config', 'projects', 'demo', 'c.jsonl'), ds);
   codex.forEach((c, i) => write(path.join(home, '.codex', 'sessions', c.day.replace(/-/g, '/'), `rollout-${i}.jsonl`), c.lines));
-  return { today, expected };
+  return { today, expected, costs, groups };
+}
+// Two signed-in Claude accounts in the test profile's seats: a Pro one on CN and a
+// Max 20x one on US2, each with the day its subscription started.
+function seedSeats(home, today) {
+  const seat = (dir, metaFile, account) => {
+    fs.mkdirSync(path.join(home, dir), { recursive: true });
+    fs.writeFileSync(path.join(home, dir, '.credentials.json'), STAND_IN_CREDENTIAL);
+    fs.writeFileSync(path.join(home, metaFile), JSON.stringify({ oauthAccount: account, hasCompletedOnboarding: true }));
+  };
+  seat('.claude', '.claude.json', { emailAddress: 'pro@example.test', organizationType: 'claude_pro', organizationRateLimitTier: 'default_claude_ai', subscriptionCreatedAt: C.addDays(today, -20) + 'T12:00:00Z' });
+  seat('.claude-us2', path.join('.claude-us2', '.claude.json'), { emailAddress: 'max@example.test', organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x', subscriptionCreatedAt: C.addDays(today, -10) + 'T12:00:00Z' });
 }
 
 let fixture;
 async function launch(config = {}) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-token-usage-'));
   fixture = seed(path.join(profile, 'usage-home'));
+  seedSeats(path.join(profile, 'seats-home'), fixture.today);
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', columns: [], ...config }));
   const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
@@ -91,9 +120,12 @@ async function launch(config = {}) {
   // a busy machine (twenty agent sessions) can take well over 5 s to load the page
   await expect.poll(() => page.evaluate(() => typeof TaskBoardUI !== 'undefined' && typeof TokenUsageUI !== 'undefined'), { timeout: 30000 }).toBe(true);
 }
+// TaskBoardUI exists before the renderer has run its init; on a busy machine the first
+// call can land in between, so it is retried until the board opens on Token 用量.
+const openTokensTab = () => expect.poll(() => page.evaluate(() => { try { TaskBoardUI.open('tokens'); return TaskBoardUI.mode(); } catch (_) { return ''; } }), { timeout: 30000 }).toBe('tokens');
 // Token 用量 open with its numbers drawn.
 async function openTokens(days) {
-  await page.evaluate(() => TaskBoardUI.open('tokens'));
+  await openTokensTab();
   const view = page.locator('#taskBoardView');
   await expect(view.locator('.tu-hero-num')).toHaveText(C.formatShort(rangeTotal(days)), { timeout: 30000 });
   return view;
@@ -105,6 +137,10 @@ test.afterEach(async () => {
 });
 
 const dayTotal = (day) => Object.values(fixture.expected[day] || {}).reduce((a, b) => a + b, 0);
+const usdOf = (v) => (v ? v.reduce((a, b) => a + b, 0) : 0);
+const dayCost = (day) => Object.values(fixture.costs[day] || {}).reduce((a, v) => a + usdOf(v), 0);
+const rangeCost = (n) => C.dayRange(fixture.today, n).reduce((s, d) => s + dayCost(d), 0);
+const groupSince = (group, start) => Object.entries(fixture.groups[group]).filter(([d]) => d >= start).reduce((a, [, v]) => a + v, 0);
 const rangeTotal = (n) => C.dayRange(fixture.today, n).reduce((s, d) => s + dayTotal(d), 0);
 // Every total label's box and every column's box, in page pixels.
 const geometry = () => page.evaluate(() => [...document.querySelectorAll('.tu-col')].map((g) => {
@@ -282,11 +318,119 @@ test('tabs: 任务看板 and Token 用量 switch in place, the sidebar entry bri
   expect(errors).toEqual([]);
 });
 
+test('金额: dollars on every cap, in the tiles, the legend and the table; 无官方价 never counted as $0; 订阅值不值 per account, its cycle set with the pencil', async () => {
+  await launch();
+  await resize(1440, 900);
+  const view = await openTokens(7);
+  const usd = view.locator('.tu-unit button[data-unit="usd"]');
+  await expect(usd).toHaveText('金额');
+  await expect(view.locator('.tu-unit button[data-unit="tokens"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(view.locator('.tu-value')).toBeHidden();
+  await usd.click();
+  await expect(usd).toHaveAttribute('aria-pressed', 'true');
+  await expect(view.locator('.tu-hero-num')).toHaveText(C.formatUsd(rangeCost(7)));
+  await expect(view.locator('.tu-hero-cap')).toHaveText('按官方 API 价折算');
+  await expect.poll(() => page.evaluate(() => config.tokenUsageView && config.tokenUsageView.unit)).toBe('usd');
+  const providers = { anthropic: 0, openai: 0, google: 0, other: 0 };
+  for (const d of C.dayRange(fixture.today, 7)) for (const [k, v] of Object.entries(fixture.costs[d] || {})) providers[C.providerOf(k.split(':')[0])] += usdOf(v);
+  for (const p of C.PROVIDERS) await expect(view.locator(`.tu-provider[data-provider="${p.key}"] .tu-provider-num`)).toHaveText(C.formatUsd(providers[p.key]));
+
+  // every cap carries its day's dollars; the biggest model by dollars on top; nothing turned or overlapping
+  const cols = await geometry();
+  for (const c of cols) {
+    if (!dayCost(c.day)) { expect(c.label).toBeNull(); continue; }
+    expect(c.label.text, c.day).toBe(C.formatUsd(dayCost(c.day)));
+    const order = Object.entries(fixture.costs[c.day]).filter(([, v]) => v).sort((a, b) => usdOf(b[1]) - usdOf(a[1])).map(([k]) => k);
+    expect(c.segs[c.segs.length - 1].key, c.day).toBe(order[0]);
+  }
+  expect(labelProblems(cols, 1440)).toEqual([]);
+  // a model without an official price: 无官方价 in the legend, the tooltip and the table, never $0
+  const mini = view.locator('.tu-legend-item', { hasText: 'GPT-5.5 Mini' });
+  await expect(mini.locator('.tu-legend-num')).toHaveText('无官方价');
+  const miniDay = C.dayRange(fixture.today, 7).reverse().find((d) => fixture.costs[d] && fixture.costs[d]['codex:gpt-5.5-mini'] === null);
+  const col = view.locator(`.tu-col[data-day="${miniDay}"] .tu-hit`);
+  await col.hover({ position: { x: 4, y: 12 } });
+  const tip = view.locator('.tu-tip');
+  await expect(tip.locator('.tu-tip-total')).toHaveText(C.formatUsd(dayCost(miniDay)));
+  await expect(tip.locator('.tu-tip-list li', { hasText: 'GPT-5.5 Mini' }).locator('.tu-tip-num')).toHaveText('无官方价');
+  await expect(tip.locator('.tu-tip-foot')).toContainText('缓存读 $');
+  await col.click({ position: { x: 4, y: 12 } });
+  await expect(view.locator('.tu-table-total')).toHaveText('合计 ' + C.formatUsd(dayCost(miniDay)));
+  await expect(view.locator('.tu-table tbody tr', { hasText: 'GPT-5.5 Mini' }).locator('td.strong')).toHaveText('无官方价');
+  const opusRow = view.locator('.tu-table tbody tr', { hasText: 'Opus 5.5' });
+  await expect(opusRow.locator('td.strong')).toHaveText(C.formatUsd(usdOf(fixture.costs[miniDay]['claude:claude-opus-5-5'])));
+  await page.mouse.move(5, 5);
+
+  // 订阅值不值: one row per account, the biggest value first, against its plan's price, this billing cycle
+  const card = view.locator('.tu-value');
+  await expect(card).toBeVisible();
+  const rows = card.locator('.tu-value-row');
+  await expect(rows).toHaveCount(2, { timeout: 30000 });
+  const pro = rows.nth(0), max = rows.nth(1);
+  await expect(pro.locator('.tu-value-name')).toHaveText('pro');
+  await expect(pro.locator('.tu-value-plan')).toHaveText('Pro');
+  const proSpent = groupSince('cn', C.addDays(fixture.today, -20));
+  await expect(pro.locator('.tu-value-spent')).toContainText(C.formatUsd(proSpent));
+  await expect(pro.locator('.tu-value-times')).toHaveText(C.formatTimes(proSpent / 20));
+  await expect(max.locator('.tu-value-name')).toHaveText('max');
+  await expect(max.locator('.tu-value-plan')).toHaveText('Max 20x');
+  await expect(max.locator('.tu-value-spent')).toContainText(C.formatUsd(groupSince('us2', C.addDays(fixture.today, -10))));
+  await expect(card).toContainText('只算本机日志');
+  await screenshot('usd-dark-1440');
+  // the pencil sets where this account's cycle starts; it is remembered
+  const edit = max.locator('.tu-value-edit');
+  await expect(edit).toHaveAttribute('aria-label', '改周期起点');
+  await expect(edit).toHaveAttribute('title', '改周期起点');
+  expect((await edit.innerText()).trim()).toBe('');
+  await edit.click();
+  const start = C.addDays(fixture.today, -2);
+  const input = max.locator('input[type="date"]');
+  await expect(input).toBeFocused();
+  await input.fill(start);
+  await input.press('Enter');
+  const spent = groupSince('us2', start);
+  await expect(max.locator('.tu-value-spent')).toContainText(C.formatUsd(spent));
+  await expect(max.locator('.tu-value-times')).toHaveText(C.formatTimes(spent / 200));
+  await expect.poll(() => page.evaluate(() => config.tokenUsageView.starts)).toEqual({ max: start });
+  // Esc leaves it as it was
+  await edit.click();
+  await max.locator('input[type="date"]').fill(C.addDays(fixture.today, -5));
+  await max.locator('input[type="date"]').press('Escape');
+  await expect(max.locator('input[type="date"]')).toHaveCount(0);
+  await expect(max.locator('.tu-value-spent')).toContainText(C.formatUsd(spent));
+  expect(await page.evaluate(() => config.tokenUsageView.starts)).toEqual({ max: start });
+  await page.evaluate(() => applyTheme('light'));
+  await page.waitForTimeout(400);
+  await screenshot('usd-light-1440');
+  // 30 days: every dollar label horizontal and whole, none over another
+  await view.locator('.tu-range button[data-days="30"]').click();
+  await expect(view.locator('.tu-hero-num')).toHaveText(C.formatUsd(rangeCost(30)));
+  for (const [w, h] of [[1440, 900], [1024, 760]]) {
+    await resize(w, h);
+    await expect.poll(() => view.locator('.tu-chart').evaluate((n) => Math.abs(Number(n.querySelector('svg').getAttribute('width')) - Math.max(n.clientWidth, 22 * 30 + 12)) <= 2)).toBe(true);
+    const cols = await geometry();
+    expect(labelProblems(cols, w)).toEqual([]);
+    // a wide dollar label over the first or last day stays inside the chart, never cut at its edge
+    const svgBox = await view.locator('.tu-svg').boundingBox();
+    const outside = cols.filter((c) => c.label && (c.label.l < svgBox.x - 0.5 || c.label.r > svgBox.x + svgBox.width + 0.5)).map((c) => c.day);
+    expect(outside, `${w}px`).toEqual([]);
+    const cut = await page.evaluate(() => [...document.querySelectorAll('.tu-hero-num, .tu-provider-num, .tu-value-row *, .tu-unit button, .tu-range button')]
+      .filter((n) => n.getClientRects().length && n.children.length === 0 && n.scrollWidth > n.clientWidth + 0.5).map((n) => n.className + ' ' + n.textContent));
+    expect(cut, `${w}px`).toEqual([]);
+    await screenshot(`usd-light-${w}-30d`);
+  }
+  // back to Token: tokens again, no dollars card
+  await view.locator('.tu-unit button[data-unit="tokens"]').click();
+  await expect(view.locator('.tu-hero-num')).toHaveText(C.formatShort(rangeTotal(30)));
+  await expect(view.locator('.tu-value')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
 test('Token 用量 with no logs at all: zero, stubs for every day, every source says 无数据', async () => {
   await launch();
   fs.rmSync(path.join(profile, 'usage-home'), { recursive: true, force: true });
   await resize(1280, 820);
-  await page.evaluate(() => TaskBoardUI.open('tokens'));
+  await openTokensTab();
   const view = page.locator('#taskBoardView');
   await expect(view.locator('.tu-hero-num')).toHaveText('0', { timeout: 30000 });
   await expect(view.locator('.tu-col')).toHaveCount(await page.evaluate(() => (config.tokenUsageView && config.tokenUsageView.days) || 7));
