@@ -113,10 +113,10 @@ silence): 「粘贴失败」 when nothing could be read (held by another program
 when the clipboard holds something that is neither text nor a screenshot (copied files).
 Chromium's paste is asked only while the terminal still has the focus, and a paste event of
 its that arrives after the 300 ms wait is dropped for 1.5 s, so pressing again as the hint says
-pastes once. The drop ends the moment the column gets input of the user's own (a key that is not a
-lone modifier or a plain Ctrl+V, or a mouse press): Chromium's late paste has no input in front of
-it, a paste the user makes (right click, Shift+Insert, Ctrl+Shift+V, a voice tool's simulated
-Shift+Insert such as Type4Me's) always has.
+pastes once. The drop goes on whatever else is pressed (a left click, an ordinary key), but a paste
+chord lets exactly one paste through without ending it: Shift+Insert (also a voice tool's simulated
+one, such as Type4Me's), Ctrl+Shift+V and Cmd+V for half a second, a right-button press until the
+drop ends. The late paste that comes after is still dropped.
 A second Ctrl+V meanwhile adds nothing, and keys typed meanwhile follow the paste in order.
 Ctrl+Shift+V, right-click paste, dropped files and bracketed paste are unchanged.
 

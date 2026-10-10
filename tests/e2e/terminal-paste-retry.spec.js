@@ -228,7 +228,9 @@ test('a paste that throws leaves no unhandled rejection and the typed key still 
 });
 
 // ---- the failure hint's 1.5 seconds: Chromium's late paste is swallowed, the user's own is not ----
-// The user's paste always has input in front of it (a key, a click); Chromium's late one has none.
+// A paste the user asks for (Shift+Insert, Ctrl+Shift+V, right click) goes through once and the guard
+// stays up, so Chromium's late paste after it is still dropped; a left click or an ordinary key does
+// not lift the guard, so pressing Ctrl+V again as the hint says never doubles.
 // Keys are dispatched as page events, never as real Shift+Insert: a real one would make Chromium
 // read the machine's clipboard, which a test never touches. The mouse press is a real one.
 const USER = 'USER-OWN-PASTE-5531';
@@ -270,19 +272,31 @@ for (const way of [
     await way.input();
     await pasteEventInPage(USER);
     await expect.poll(() => count(USER), { timeout: 5000 }).toBe(1);
+    await pasteEventInPage('LATE-CHROMIUM-PASTE'); // Chromium's late one comes after it: still dropped
     await page.waitForTimeout(600);
     expect(count(USER)).toBe(1);
+    expect(count('LATE-CHROMIUM-PASTE')).toBe(0);
   });
 }
 
-test('without any input in front of it, a paste right after the failure hint is Chromium\'s late one and is dropped', async () => {
-  await failCtrlV();
-  fs.writeFileSync(keyLog, '');
-  await keyInPage({ key: 'Shift', code: 'ShiftLeft', shiftKey: true }); // a lone modifier is not input
-  await pasteEventInPage(USER);
-  await page.waitForTimeout(600);
-  expect(count(USER)).toBe(0);
-});
+const leftClickTerminal = async () => {
+  const at = await page.evaluate((id) => { const r = terms.get(id).el.querySelector('.xterm-screen').getBoundingClientRect(); return { x: r.x + 20, y: r.y + 20 }; }, ID);
+  await page.mouse.click(at.x, at.y);
+};
+for (const way of [
+  { name: 'a left click', input: leftClickTerminal },
+  { name: 'an ordinary key', input: () => keyInPage({ key: 'x', code: 'KeyX' }) },
+  { name: 'a lone Shift', input: () => keyInPage({ key: 'Shift', code: 'ShiftLeft', shiftKey: true }) },
+]) {
+  test(`${way.name} after the failure hint does not lift the guard: Chromium's late paste is dropped`, async () => {
+    await failCtrlV();
+    fs.writeFileSync(keyLog, '');
+    await way.input();
+    await pasteEventInPage(USER); // the late Chromium paste
+    await page.waitForTimeout(600);
+    expect(count(USER)).toBe(0);
+  });
+}
 
 test('Chromium pastes late and the user presses Ctrl+V again at the same time: one paste, not two', async () => {
   await installStandIns();
@@ -294,6 +308,8 @@ test('Chromium pastes late and the user presses Ctrl+V again at the same time: o
   await expect.poll(hintVisible, { timeout: 5000 }).toContain('粘贴失败');
   await nativeWorks(false);
   await busyFor(0);
+  await leftClickTerminal(); // the user clicks in the terminal and types something first
+  await keyInPage({ key: 'x', code: 'KeyX' });
   await page.keyboard.press('Control+V'); // as the hint says; the clipboard is free this time
   await expect.poll(() => count(TEXT), { timeout: 5000 }).toBe(1);
   await page.waitForTimeout(1500); // the late event arrives meanwhile

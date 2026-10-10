@@ -2441,8 +2441,9 @@ function buildColumn(col, isFresh) {
       // else (another column, a chat box) is not pulled back here: nothing is asked of Chromium.
       request: () => (termEl.contains(document.activeElement) ? window.deck.clipboardNativePaste() : Promise.resolve(false)),
     });
-    // Input in this column ends the swallowing of a late paste (see the core): a paste the user
-    // makes comes after a key or a click, Chromium's late one does not. Simulated keys count.
+    // A paste chord in this column (Shift+Insert, Ctrl+Shift+V, Cmd+V, right button; a voice tool's
+    // simulated keys count) lets one paste through while a late Chromium paste is being dropped.
+    // A left click or an ordinary key does not: the late paste would then double a repeated Ctrl+V.
     for (const type of ['keydown', 'mousedown']) termEl.addEventListener(type, nativePasteWhenFocused.userInput, true);
     const ctrlV = PasteRetryCore.create({
       readText: () => window.deck.clipboardReadText(),
