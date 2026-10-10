@@ -40,6 +40,10 @@ async function start(config) {
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_') && key !== 'AGENTDECK_TEST_EXECUTABLE') delete env[key];
   delete env.ELECTRON_RUN_AS_NODE;
   if (process.platform !== 'win32') env.ZDOTDIR = profile;
+  // On a Mac the app puts /opt/homebrew/bin, /usr/local/bin and ~/.local/bin (where claude lives) in front of the PATH it is
+  // given (main.js buildEnv), and a login shell's path_helper reorders it again: the shell's own .zshrc, read last by an
+  // interactive zsh, puts the trap back in front.
+  if (process.platform !== 'win32') fs.writeFileSync(path.join(profile, '.zshrc'), `export PATH=${JSON.stringify(trapDir)}:"$PATH"\n`);
   const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
   env[pathKey] = trapDir + path.delimiter + (env[pathKey] || '');
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,

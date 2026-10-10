@@ -48,6 +48,9 @@ test.beforeAll(async () => {
   }
   const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
   env[pathKey] = trapDir + path.delimiter + (env[pathKey] || '');
+  // On a Mac the app puts /opt/homebrew/bin and friends (where claude lives) in front of that PATH (main.js buildEnv):
+  // the shell's own .zshrc, read last, puts the trap back in front (test-instance-columns.spec.js checks it does).
+  if (process.platform !== 'win32') fs.writeFileSync(path.join(profile, '.zshrc'), `export PATH=${JSON.stringify(trapDir)}:"$PATH"\n`);
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
@@ -643,17 +646,21 @@ test('a named --command queues when its quota is out and does not switch models'
     window.explicitQuotaStore = config.quotas;
     config.quotas = { [QuotaCore.seatKey(seat.id)]: { scope: 'claude', configDir: seat.configDir, blocked: { at: Date.now(), resetAt: Date.now() + 600000 } } };
   });
+  let c = null;
   try {
     const named = 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high';
     const plan = await page.evaluate((cmd) => QuotaCore.quotaFallback(config.quotas, cmd, config.claudeSeats, config.activeClaudeSeatId, Date.now(), { explicit: true }), named);
     expect(plan.action).toBe('queue');
-    const c = await add('Named model waits');
+    c = await add('Named model waits');
     const result = await command(['new', '--task-id', c.id, '--title', 'Named Opus', '--task', 'test', '--command', named]);
     expect(result).toContain('不自动更换');
     expect(result).toContain('额度用尽，稍后自动开');
     expect(result).not.toContain('因额度换成');
     expect((await card(c.id)).session_id).toBeFalsy();
   } finally {
+    // The queued request names the real claude: left in the queue, it opens as soon as a later test says Claude has room
+    // (a real Opus session in the home folder). It goes before the quota comes back.
+    if (c) expect(await command(['queue', 'cancel', '--task-id', c.id])).toContain('已取消 1 条');
     await page.evaluate(() => { config.quotas = window.explicitQuotaStore; });
   }
 });
