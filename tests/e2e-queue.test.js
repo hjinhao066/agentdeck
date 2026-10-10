@@ -14,8 +14,15 @@ const tempDir = (t) => {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 };
+// The environment a child process gets: ours minus every AGENTDECK_* variable (a terminal inside
+// AgentDeck exports them, and they would change the run) and ELECTRON_RUN_AS_NODE. `extra` is added last.
+const cleanEnv = (extra = {}) => {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (/^AGENTDECK_[A-Za-z0-9_]*$/.test(key) || key === 'ELECTRON_RUN_AS_NODE') delete env[key];
+  return { ...env, ...extra };
+};
 // A pid that really is gone: a child that already exited.
-const deadPid = () => Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']).stdout);
+const deadPid = () => Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { env: cleanEnv() }).stdout);
 // Several "sessions" in one test process: each gets its own fake pid, alive unless listed in `dead`.
 function sessions(dir, dead = new Set(), extra = {}) {
   const logs = [];
@@ -155,7 +162,7 @@ test('arguments: queue options are separate from Playwright arguments', () => {
 // ---- the real command-line entry, with real processes ----
 function cli(dir, args, env = {}) {
   const child = spawn(process.execPath, [CLI, ...args], {
-    env: { ...process.env, AGENTDECK_E2E_QUEUE_DIR: dir, AGENTDECK_E2E_POLL_MS: '40', AGENTDECK_E2E_QUEUE_HELD: '', ...env },
+    env: cleanEnv({ AGENTDECK_E2E_QUEUE_DIR: dir, AGENTDECK_E2E_POLL_MS: '40', AGENTDECK_E2E_QUEUE_HELD: '', ...env }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let out = '';
@@ -233,6 +240,33 @@ test('cli: --queue-status lists who is running and who is waiting', async (t) =>
   const result = await status.done;
   assert.match(result.out(), /正在跑 1 组，排队 0 组/);
   await a.done;
+});
+
+// What one queued pair of runs looks like from outside: exit codes, and whether the second had to wait.
+async function queuePair(t) {
+  const dir = tempDir(t);
+  const first = cli(dir, ['--', process.execPath, '-e', 'setTimeout(()=>{},700)']);
+  await waitFor(() => /轮到了/.test(first.out()));
+  const second = cli(dir, ['--', process.execPath, '-e', 'process.exit(3)']);
+  const [a, b] = await Promise.all([first.done, second.done]);
+  return { first: a.code, second: b.code, queued: /排队中/.test(second.out()) };
+}
+
+test('cli: AGENTDECK_* variables set around the test process do not change how runs behave', async (t) => {
+  const clean = await queuePair(t);
+  assert.deepEqual(clean, { first: 0, second: 3, queued: true });
+  // An outer shell can export these (this AgentDeck terminal exports SLOTS=3): 7 slots would let
+  // the second run skip the line, and a 0.0005-minute run limit would kill the first one.
+  const outer = { AGENTDECK_E2E_SLOTS: '7', AGENTDECK_E2E_RUN_MINUTES: '0.0005' };
+  const before = Object.fromEntries(Object.keys(outer).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, outer);
+  try {
+    assert.deepEqual(await queuePair(t), clean);
+  } finally {
+    for (const [key, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
 });
 
 // ---- the slot is released only after the whole process tree is gone ----
