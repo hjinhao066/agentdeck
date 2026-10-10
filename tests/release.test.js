@@ -1,6 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// the machine queue's own markers (release.js keeps them for a release run inside the queue)
+const QUEUE_MARKERS = ['AGENTDECK_E2E_QUEUE_HELD', 'AGENTDECK_E2E_RUN_TAG'];
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -330,7 +332,7 @@ test('prepared release runs packaging gates while preserving checkout, commit an
   const packed = path.join(root, 'fixture.asar'), calls = [];
   const runner = async (command, args, cwd, log, env) => {
     assert.equal(cwd, fs.realpathSync.native(repo));
-    assert.equal(Object.keys(env || {}).some((key) => key.startsWith('AGENTDECK_')), false);
+    assert.equal(Object.keys(env || {}).some((key) => key.startsWith('AGENTDECK_') && !QUEUE_MARKERS.includes(key)), false);
     calls.push([command, ...args]);
     if (args[0] === 'scripts/mobile-release.js') mobileReceipt(args, cwd);
     if (args[0] === 'ci') {

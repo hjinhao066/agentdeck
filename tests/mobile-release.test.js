@@ -1,6 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// the machine queue's own markers (release.js keeps them for a release run inside the queue)
+const QUEUE_MARKERS = ['AGENTDECK_E2E_QUEUE_HELD', 'AGENTDECK_E2E_RUN_TAG'];
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -213,7 +215,7 @@ test('release gate rejects skipped deployment, stale receipts and every online s
   await assert.rejects(deployMobileGate(plan, commit, async () => writeJSON(file, { ...receipt, status: 'failed' })), /does not match/);
   assert.deepEqual(await deployMobileGate(plan, commit, async (cmd, args, cwd, log, env) => {
     assert.ok(args.includes('deploy')); assert.ok(args.includes('--version')); assert.ok(args.includes(commit));
-    assert.equal(cwd, repo); assert.equal(Object.keys(env).some((key) => key.startsWith('AGENTDECK_')), false);
+    assert.equal(cwd, repo); assert.equal(Object.keys(env).some((key) => key.startsWith('AGENTDECK_') && !QUEUE_MARKERS.includes(key)), false);
     writeJSON(file, receipt);
   }), receipt);
 });
