@@ -4343,7 +4343,8 @@ dialog .todo-quick-input, dialog .todo-quick-input:focus { height: 100%; padding
 }
 :root[data-theme="light"] .tu-hero-num { background-image: linear-gradient(96deg, #141a2e 8%, #2b3190 70%, #5b3fc4); }
 .tu-view.money .tu-hero-num { font-size: 36px; }
-.tu-hero-sub { font-size: 12px; color: var(--tbv-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.tu-hero-sub { font-size: 12px; color: var(--tbv-ink-2); font-variant-numeric: tabular-nums; }
+.tu-hero-sub span { white-space: nowrap; }
 .tu-provider { position: relative; display: grid; grid-template-columns: 1fr auto; align-content: center; gap: 6px 8px; min-width: 0; padding: 14px 16px 16px; overflow: hidden; }
 .tu-provider-name { grid-column: 1 / -1; font-size: 12px; color: var(--tbv-ink-3); white-space: nowrap; }
 .tu-provider-num { font-size: 22px; font-weight: 650; line-height: 1; color: var(--tbv-ink); letter-spacing: -.02em; white-space: nowrap; }

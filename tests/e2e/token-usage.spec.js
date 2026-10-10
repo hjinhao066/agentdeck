@@ -423,6 +423,9 @@ test('金额: dollars on every cap, in the tiles, the legend and the table; 无�
     const cut = await page.evaluate(() => [...document.querySelectorAll('.tu-hero-num, .tu-provider-num, .tu-value-row *, .tu-unit button, .tu-range button')]
       .filter((n) => n.getClientRects().length && n.children.length === 0 && n.scrollWidth > n.clientWidth + 0.5).map((n) => n.className + ' ' + n.textContent));
     expect(cut, `${w}px`).toEqual([]);
+    // the line under the total (range, per day, today) wraps between its parts, never cut
+    expect(await view.locator('.tu-hero-sub').evaluate((n) => n.scrollWidth <= n.clientWidth + 0.5), `${w}px`).toBe(true);
+    await expect(view.locator('.tu-hero-sub')).toContainText('今天 ' + C.formatUsd(dayCost(fixture.today)));
     await screenshot(`usd-light-${w}-30d`);
   }
   // back to Token: tokens again; the 订阅值不值 card stays

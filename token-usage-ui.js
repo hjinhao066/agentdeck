@@ -115,7 +115,9 @@
     heroEl.textContent = short(m, m.total);
     heroEl.title = full(m, m.total) + (m.money ? `\n各家官方 API 标准价（查价 ${data.pricesChecked || ''}）${m.unpriced.size ? `；${m.unpriced.size} 个模型无官方价，没算进来` : ''}` : '');
     const todayTotal = C.dayTotal(m.byDay[m.today]);
-    heroSubEl.textContent = `近 ${range} 天 · 日均 ${short(m, m.active ? m.total / m.active : 0)} · 今天 ${short(m, todayTotal)}`;
+    // three parts that wrap between each other, never inside one
+    const parts = [`近 ${range} 天`, `日均 ${short(m, m.active ? m.total / m.active : 0)}`, `今天 ${short(m, todayTotal)}`];
+    heroSubEl.replaceChildren(...parts.flatMap((t, i) => (i ? [' · ', el('span', null, t)] : [el('span', null, t)])));
     providersEl.replaceChildren(...C.PROVIDERS.map((p) => {
       const v = m.providers[p.key];
       const tile = el('div', 'tu-provider' + (v ? '' : ' none'));
