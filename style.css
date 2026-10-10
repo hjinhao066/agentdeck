@@ -3421,7 +3421,6 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   height: 20px; box-sizing: border-box; padding: 0 5px 0 4px; gap: 3px; align-items: center;
   border-radius: 999px; background: rgba(5, 7, 18, .42); border: 0; box-shadow: inset 0 0 0 1px rgba(214, 222, 255, .12);
 }
-:root:not([data-theme="light"]) #crewMap .cm-agent .agent-provider-icon[data-icon-provider] { color: #e8936f; }
 :root:not([data-theme="light"]) #crewMap .cm-agent .cn-badge .agent-model-label { color: var(--cm-text); font-weight: 600; }
 /* 队长: starlight silver; a white crest that glows, the live tally as lit pills */
 :root:not([data-theme="light"]) #crewMap .cm-node.kind-captain {
