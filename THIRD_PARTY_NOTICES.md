@@ -15,8 +15,8 @@ AgentDeck 仓库里直接带着几处第三方图标和代码（不是通过 `np
 - 项目：Lucide，https://lucide.dev ，源码 https://github.com/lucide-icons/lucide
 - 版权行与许可全文来源：https://raw.githubusercontent.com/lucide-icons/lucide/main/LICENSE （2026-10-10 取得），下方逐字抄录。
 - 用在哪：
-  - `renderer.js` 的 `ICONS`：chevron-left、chevron-right、chevron-up、chevron-down、pen-line（编辑）、x（关闭）、plus、send、arrow-up、help-circle、list-todo、folder、folder-open、settings（齿轮）、more-horizontal、archive、undo（还原）、panel-left、panel-right、gauge、check、terminal、file、eraser、eye、code、list-tree（大纲）
-  - `index.html`：chevrons-down-up、chevrons-up-down（展开/收起全部分组）、refresh-ccw（刷新）、minus（缩小）
+  - `renderer.js` 的 `ICONS`：chevron-left、chevron-right、chevron-up、chevron-down、pen-line（编辑）、x（关闭）、plus、send、arrow-up、help-circle、list-todo、folder、folder-open、settings（齿轮）、more-horizontal、archive、undo（还原）、panel-left、panel-right、gauge、check、terminal、file、eraser、eye、code、list-tree（大纲）、trash（垃圾桶）
+  - `index.html`：chevrons-down-up、chevrons-up-down（展开/收起全部分组）、refresh-ccw（刷新）、minus（缩小）、layout-grid（一键整理）
   - `token-usage-ui.js`、`version-progress.js`：refresh-ccw（刷新）
   - `crew-map.js`、`task-board-ui.js`：chevron-down；`task-board-ui.js` 另有 terminal
   - `mobile-web/hub/app.js`：undo、minus
@@ -25,7 +25,7 @@ AgentDeck 仓库里直接带着几处第三方图标和代码（不是通过 `np
   - `Copyright (c) 2026 Lucide Icons and Contributors`
   - Feather 派生部分：`Copyright (c) 2013-present Cole Bemis`
   - 图标路径取自的历史版本（lucide-static 0.100.0 至 0.500.0 包内的 LICENSE，三者相同）的版权行：`Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.`
-- Feather 派生图标（LICENSE 列表里的，适用其中的 MIT 条款）：chevron-left、chevron-right、chevron-up、chevron-down、x、plus、minus、check、help-circle、more-horizontal、sidebar（即 panel-left）、arrow-up、terminal、code。
+- Feather 派生图标（LICENSE 列表里的，适用其中的 MIT 条款）：chevron-left、chevron-right、chevron-up、chevron-down、x、plus、minus、check、help-circle、more-horizontal、sidebar（即 panel-left）、arrow-up、terminal、code、trash。
 - 路径核对：上面列出的图标（unlink 除外）与 lucide-static 历史版本中的同名图标逐字一致，核对范围为 lucide-static 的 14 个版本，从 0.100.0 到 1.55.0。齿轮 `settings` 的路径只与 0.500.0 及更早版本一致，新版已改画。
 
 许可全文（Lucide 官方仓库 LICENSE，逐字）：
