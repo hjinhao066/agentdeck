@@ -1,0 +1,247 @@
+{
+ "note": "Windows ConPTY screen of a working Claude Code 2.x column, 34 columns. Row flags w = xterm isWrapped. Content rows are redacted (letters x, digits 0, Chinese 汉); spinner, prompt rules and footer chrome are verbatim.",
+ "cols": 34,
+ "rows": 60,
+ "screen": [
+  {
+   "w": false,
+   "t": "  $xxx:xxxxxxxxx_xxxxx_xxx汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  xxxxx汉汉汉汉汉汉 xxxxxxxxx_"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  xxxxx-xxx.xx汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉xxxx 汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  0汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  xxxxxxxxx 汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  xxxxx-xxx汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  --xxxxxx汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉/"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  ⎿  xxxxxxxxxxxxxxxx xxxx xxxxx"
+  },
+  {
+   "w": true,
+   "t": "  ⎿  xxxx xxxx xxxxxx xxxxxxxxxx"
+  },
+  {
+   "w": true,
+   "t": "     xxxxxx — xxxxxxxxxxxxxxxxxx"
+  },
+  {
+   "w": true,
+   "t": "     xx xxxxxxx xxxxxxxx xxxxx"
+  },
+  {
+   "w": true,
+   "t": "     \"xxxxxxxxxxxxx\""
+  },
+  {
+   "w": true,
+   "t": ""
+  },
+  {
+   "w": true,
+   "t": "  xxxx 0 xxxxxxxxxx xxxxx +00,"
+  },
+  {
+   "w": true,
+   "t": "  xxxxxxxx xxx 0 xxxxxxx, xxxx 0"
+  },
+  {
+   "w": true,
+   "t": "  xxxxx, xxx 0 xxxxx xxxxxxxx"
+  },
+  {
+   "w": true,
+   "t": ""
+  },
+  {
+   "w": true,
+   "t": "● 汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": ""
+  },
+  {
+   "w": true,
+   "t": "  xxxxxxx 0 xxxxx xxxxxxxx…"
+  },
+  {
+   "w": true,
+   "t": "  ⎿  $ xx \"$xxxx/xxxxxx/x--xxxxx-x"
+  },
+  {
+   "w": true,
+   "t": "     xxxx/0xx000xx-000x-00x0-x0xx-"
+  },
+  {
+   "w": false,
+   "t": "     x000000x0000/xxxxxxxxxx\" &&"
+  },
+  {
+   "w": false,
+   "t": "     x:/xxxxxx000/xxxxxx.xxx -x"
+  },
+  {
+   "w": false,
+   "t": "     x.xx \"0,000|0,000|0,000|0,000"
+  },
+  {
+   "w": false,
+   "t": "     @000-000~000\""
+  },
+  {
+   "w": false,
+   "t": "     \"xxxxxxx@00-00~000\""
+  },
+  {
+   "w": false,
+   "t": "     \"xxxxxxx|xxxx@000-000~000\""
+  },
+  {
+   "w": true,
+   "t": "     \"xxxxxxxxx@00-00~000\""
+  },
+  {
+   "w": false,
+   "t": "     \"xxxxxxxxxxx@00-00\" \"xxxx"
+  },
+  {
+   "w": false,
+   "t": "     xxxxxxxxxxxxx|xxxx@0-0~000\""
+  },
+  {
+   "w": true,
+   "t": "     \"xxxxxx|xxxxxxxx@000…"
+  },
+  {
+   "w": true,
+   "t": ""
+  },
+  {
+   "w": true,
+   "t": "✽ Crunching… (3m 5s · thinking)"
+  },
+  {
+   "w": true,
+   "t": "  ⎿  Tip: Use /btw to ask a quick"
+  },
+  {
+   "w": true,
+   "t": "     xxxx xxxxxxxx xxxxxxx"
+  },
+  {
+   "w": true,
+   "t": "     xxxxxxxxxxxx xxxxxx'x xxxxxxx"
+  },
+  {
+   "w": true,
+   "t": "     xxxx"
+  },
+  {
+   "w": false,
+   "t": ""
+  },
+  {
+   "w": false,
+   "t": "──────────────────────────────────"
+  },
+  {
+   "w": true,
+   "t": "❯"
+  },
+  {
+   "w": true,
+   "t": "──────────────────────────────────"
+  },
+  {
+   "w": true,
+   "t": "  Context: [███░░░░░░░░░░░░░] 1…"
+  },
+  {
+   "w": false,
+   "t": "  Model: Opus 5.5 | Thinking: h…"
+  },
+  {
+   "w": false,
+   "t": "  ⏵⏵ bypass permissions on  · ←…"
+  }
+ ]
+}
