@@ -13,7 +13,9 @@
 //   2. text empty: ask for an image on the clipboard (screenshot -> file path);
 //   3. both empty: wait INTERVAL_MS and look again, until WINDOW_MS have passed;
 //   4. still nothing: let Chromium's own paste deliver the text;
-//   5. that delivers nothing either: tell the user (onFail), so it is never silent.
+//   5. that delivers nothing either: tell the user (onFail), so it is never silent. The hint
+//      says what is on the clipboard when it is not text (files, rich content): that is not
+//      "held by another program" and retrying will not help.
 // While a press is running, a second Ctrl+V does nothing (no double paste) and
 // every other key the terminal produces is held in order and sent right after the
 // outcome, so a key typed meanwhile never lands in front of the paste.
@@ -26,10 +28,79 @@
 
   const INTERVAL_MS = 50;
   const WINDOW_MS = 500;
+  // Chromium's paste is asked for, and its paste event may still come after we gave up
+  // waiting for it; that late one is swallowed for this long so a failure hint and a late
+  // paste never both happen (the user pressing again would paste twice).
+  const NATIVE_WAIT_MS = 300;
+  const NATIVE_GRACE_MS = 1500;
+
+  // Plain Ctrl+V: not Cmd (a Mac pastes with Cmd+V natively, untouched) and not Shift/Alt
+  // (Ctrl+Shift+V and other bindings keep their behavior). Windows, Linux and a Mac's Ctrl+V
+  // all take the same path.
+  function isCtrlV(e) {
+    return !!e && e.type === 'keydown' && !!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
+      (e.key === 'v' || e.key === 'V' || e.code === 'KeyV');
+  }
+
+  // The hint under a failed Ctrl+V. `kind` is what the clipboard holds: 'other' (files or
+  // anything that is not text or a picture) or 'none' / unknown.
+  function failureHint(kind) {
+    return kind === 'other'
+      ? '粘贴不了：剪贴板里不是文字也不是截图（可能是复制的文件），终端只能粘贴文字和截图'
+      : '粘贴失败：剪贴板里没读到文字（可能被别的程序占用，也可能复制的不是文字），请再按一次 Ctrl+V';
+  }
+
+  // Chromium's own paste, asked of the main process, arrives as a paste event with the text.
+  // options: listen(fn) -> stop; subscribes to paste events seen in the capture phase that carry
+  // text, fn(text) returns true when it took the event (the page then stops it, so xterm does
+  // not paste it a second time); request() -> Promise<boolean> (true: Chromium ran);
+  // setTimer / clearTimer. The result is the text it delivered, '' for none.
+  function createNativePaste(options) {
+    const o = options || {};
+    const setTimer = o.setTimer || ((fn, ms) => setTimeout(fn, ms));
+    const clearTimer = o.clearTimer || ((t) => clearTimeout(t));
+    const waitMs = o.waitMs > 0 ? o.waitMs : NATIVE_WAIT_MS;
+    const graceMs = o.graceMs >= 0 ? o.graceMs : NATIVE_GRACE_MS;
+    const guards = new Set(); // late-paste guards still up
+    return function nativePaste() {
+      // A new request takes over from the guards of the one before: its own paste event must
+      // reach it, not be swallowed as that earlier one's late arrival.
+      for (const g of [...guards]) g.stop();
+      return new Promise((resolve) => {
+        let done = false;
+        let timer = null;
+        let stop = () => {};
+        const finish = (text, late) => {
+          if (done) return;
+          done = true;
+          clearTimer(timer);
+          stop();
+          // Gave up waiting but Chromium may still deliver: take that paste and drop it.
+          if (late && graceMs > 0) {
+            const stopListening = o.listen(() => true);
+            const guard = { timer: null, stop() { guards.delete(guard); clearTimer(guard.timer); try { stopListening(); } catch (_) {} } };
+            guard.timer = setTimer(() => guard.stop(), graceMs);
+            guards.add(guard);
+          }
+          resolve(text);
+        };
+        stop = o.listen((text) => {
+          if (done || !text) return false;
+          finish(text, false);
+          return true;
+        });
+        timer = setTimer(() => finish('', true), waitMs);
+        let asked;
+        try { asked = Promise.resolve(o.request()); } catch (_) { asked = Promise.reject(); }
+        asked.then((ran) => { if (!ran) finish('', false); }, () => finish('', false));
+      });
+    };
+  }
 
   // readText() -> string | Promise<string>; readImage() -> Promise<boolean> (true: a path was
   // typed); pasteNative() -> Promise<string> (the text Chromium's own paste delivered, '' for none);
-  // pasteText(text); onFail(); sendHeld(data) sends one key that waited; passes(data) -> true
+  // pasteText(text); readKind() -> Promise<'image' | 'other' | 'none'> (what a failed paste found on
+  // the clipboard); onFail(kind); sendHeld(data) sends one key that waited; passes(data) -> true
   // for data that never waits (terminal replies, wheel, focus), as in the input hold.
   function create(options) {
     const o = options || {};
@@ -43,6 +114,7 @@
     const readImage = o.readImage || (async () => false);
     const pasteText = o.pasteText || noop;
     const pasteNative = o.pasteNative || (async () => '');
+    const readKind = o.readKind || (async () => 'none');
     const onFail = o.onFail || noop;
     const sendHeld = o.sendHeld || noop;
     const passes = o.passes || (() => false);
@@ -65,9 +137,10 @@
     const finish = (outcome, run) => {
       // Clear the state first: the paste itself emits input, which must not be held.
       pending = false;
-      try { run(); } finally {
+      try { run(); } catch (_) { outcome = 'failed'; } finally {
+        // A throwing paste or hint never loses a key: each waits no longer than this.
         const keys = waiting; waiting = [];
-        for (const d of keys) sendHeld(d);
+        for (const d of keys) { try { sendHeld(d); } catch (_) {} }
       }
       return outcome;
     };
@@ -92,17 +165,24 @@
       const native = await attemptOf(pasteNative);
       if (gen !== generation) return 'cancelled';
       if (typeof native === 'string' && native) return finish('native', () => pasteText(native));
-      return finish('failed', onFail);
+      const found = await attemptOf(readKind);
+      if (gen !== generation) return 'cancelled';
+      return finish('failed', () => onFail(found === 'other' ? 'other' : 'none'));
     }
 
     return {
       // The Ctrl+V key. Resolves with how it ended: 'text', 'image' (a screenshot's path was
       // typed), 'native' (Chromium's paste delivered it), 'failed' (nothing could be pasted; the
       // user was told), 'ignored' (a press was already running) or 'cancelled'.
+      // It never rejects: anything that goes wrong ends as 'failed' with the held keys released.
       press() {
         if (pending) return Promise.resolve('ignored');
         pending = true;
-        return run(++generation);
+        const gen = ++generation;
+        return run(gen).catch(() => {
+          if (gen !== generation || !pending) return 'failed';
+          return finish('failed', noop);
+        });
       },
       // Terminal input. true: it was kept to follow the paste, do not send it now.
       hold(data) {
@@ -122,5 +202,5 @@
     };
   }
 
-  return { create, INTERVAL_MS, WINDOW_MS };
+  return { create, createNativePaste, isCtrlV, failureHint, INTERVAL_MS, WINDOW_MS, NATIVE_WAIT_MS, NATIVE_GRACE_MS };
 });

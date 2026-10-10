@@ -11,8 +11,8 @@ const path = require('path');
 // with '' until a deadline. The key must read again for about half a second, then ask
 // Chromium to paste, then say so. Chromium's paste is a stand-in that delivers TEXT as a paste
 // event (the real one reads the user's clipboard, which a test never touches).
+// The same ladder runs on a Mac (Ctrl+V there; Cmd+V is native and untouched).
 // The program in the column writes down every byte it receives.
-test.skip(process.platform === 'darwin', 'a Mac keeps the single clipboard read');
 test.describe.configure({ mode: 'serial' });
 
 const ROOT = path.resolve(__dirname, '../..');
@@ -32,22 +32,28 @@ const installStandIns = () => app.evaluate(({ ipcMain }, text) => {
   globalThis.__clip = '';
   globalThis.__nativeCalls = 0;
   globalThis.__nativeWorks = false;
-  ipcMain.on('clipboard:write-sync', (e, t) => { if (typeof t === 'string') globalThis.__clip = t; });
+  ipcMain.removeHandler('clipboard:write');
+  ipcMain.handle('clipboard:write', (e, t) => { if (typeof t !== 'string') return false; globalThis.__clip = t; return true; });
+  globalThis.__nativeDelay = 0;
   ipcMain.removeHandler('clipboard:read');
   ipcMain.handle('clipboard:read', () => (Date.now() < globalThis.__clipBusyUntil ? '' : globalThis.__clip));
   ipcMain.removeHandler('clipboard:native-paste');
   ipcMain.handle('clipboard:native-paste', (e) => {
     globalThis.__nativeCalls++;
     if (!globalThis.__nativeWorks) return true; // Chromium ran, but the clipboard gave it nothing
-    e.sender.executeJavaScript(`(() => {
+    // The paste event can come late: __nativeDelay is how long after the request.
+    e.sender.executeJavaScript(`setTimeout(() => {
       const data = new DataTransfer(); data.setData('text/plain', ${JSON.stringify(text)});
       document.querySelector('.xterm-helper-textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
-    })()`);
+    }, ${Number(globalThis.__nativeDelay) || 0})`);
     return true;
   });
 }, TEXT);
 const busyFor = (ms) => app.evaluate((_, n) => { globalThis.__clipBusyUntil = Date.now() + n; }, ms);
 const nativeWorks = (on) => app.evaluate((_, v) => { globalThis.__nativeWorks = v; globalThis.__nativeCalls = 0; }, on);
+const nativeDelay = (ms) => app.evaluate((_, n) => { globalThis.__nativeDelay = n; }, ms);
+// What the test profile's clipboard reports when it has no text ('other': files and the like).
+const clipboardHolds = (kind) => app.evaluate(({ app: electronApp }, k) => { electronApp.testClipboardOther = k === 'other'; }, kind);
 const nativeCalls = () => app.evaluate(() => globalThis.__nativeCalls);
 const hintVisible = () => page.evaluate((id) => { const h = terms.get(id).el.querySelector('.paste-hint'); return !!h && !h.hidden && h.textContent; }, ID);
 const ctrlVInPage = () => page.evaluate((id) => {
@@ -80,7 +86,7 @@ test.afterAll(async () => {
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 test.beforeEach(async () => {
-  if (await app.evaluate(() => !!globalThis.__standIns)) { await busyFor(0); await nativeWorks(false); }
+  if (await app.evaluate(() => !!globalThis.__standIns)) { await busyFor(0); await nativeWorks(false); await nativeDelay(0); await clipboardHolds('none'); }
   await page.evaluate((id) => { const hint = terms.get(id).el.querySelector('.paste-hint'); if (hint) hint.hidden = true; terms.get(id).term.focus(); }, ID);
   fs.writeFileSync(keyLog, '');
 });
@@ -152,4 +158,71 @@ test('an empty clipboard that stays empty ends in the same hint and no stray inp
   await expect.poll(hintVisible, { timeout: 5000 }).toContain('粘贴失败');
   await page.waitForTimeout(300);
   expect(received()).toBe('');
+});
+
+test('Chromium pastes too late (after the wait gave up): the late paste is dropped, so pressing again pastes once', async () => {
+  await installStandIns();
+  await setClipboard(TEXT);
+  await nativeWorks(true);
+  await nativeDelay(700); // after the 300 ms the page waits for it
+  await busyFor(60000);
+  await page.keyboard.press('Control+V');
+  await expect.poll(hintVisible, { timeout: 5000 }).toContain('粘贴失败');
+  await page.waitForTimeout(1000); // the late event arrives meanwhile
+  expect(count(TEXT)).toBe(0);
+  // the user presses again as the hint says; the clipboard is free this time
+  await nativeWorks(false);
+  await busyFor(0);
+  await page.keyboard.press('Control+V');
+  await expect.poll(() => count(TEXT), { timeout: 5000 }).toBe(1);
+  await page.waitForTimeout(800);
+  expect(count(TEXT)).toBe(1);
+});
+
+test('the user clicked somewhere else while it waited: Chromium is not asked and the focus stays where it is', async () => {
+  await installStandIns();
+  await setClipboard(TEXT);
+  await busyFor(60000);
+  await page.evaluate(() => {
+    const other = document.createElement('input');
+    other.id = 'elsewhere'; document.body.appendChild(other);
+  });
+  await page.keyboard.press('Control+V');
+  await page.evaluate(() => document.getElementById('elsewhere').focus()); // the click lands outside the terminal
+  await expect.poll(hintVisible, { timeout: 5000 }).toContain('粘贴失败');
+  expect(await nativeCalls()).toBe(0);
+  expect(await page.evaluate(() => document.activeElement && document.activeElement.id)).toBe('elsewhere');
+  expect(received()).toBe('');
+  await page.evaluate(() => document.getElementById('elsewhere').remove());
+});
+
+test('files on the clipboard: the hint says it is not text, not that the clipboard is busy', async () => {
+  await installStandIns();
+  await setClipboard('');
+  await clipboardHolds('other');
+  await page.keyboard.press('Control+V');
+  await expect.poll(hintVisible, { timeout: 5000 }).toContain('粘贴不了');
+  expect(await hintVisible()).not.toContain('占用');
+  expect(received()).toBe('');
+});
+
+test('a paste that throws leaves no unhandled rejection and the typed key still arrives', async () => {
+  await installStandIns();
+  await setClipboard(TEXT);
+  await page.evaluate((id) => {
+    window.__rejections = [];
+    window.addEventListener('unhandledrejection', (ev) => window.__rejections.push(String(ev.reason)));
+    const { term } = terms.get(id);
+    window.__realPaste = term.paste.bind(term);
+    term.paste = () => { term.paste = window.__realPaste; throw new Error('paste failed'); };
+  }, ID);
+  await page.keyboard.press('Control+V');
+  await page.keyboard.type('w');
+  await expect.poll(received, { timeout: 5000 }).toBe('w');
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.__rejections)).toEqual([]);
+  // and the next Ctrl+V works
+  fs.writeFileSync(keyLog, '');
+  await page.keyboard.press('Control+V');
+  await expect.poll(() => count(TEXT), { timeout: 5000 }).toBe(1);
 });

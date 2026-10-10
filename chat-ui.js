@@ -29,12 +29,15 @@
     b.setAttribute('aria-label', title);
     return b;
   }
-  // Copy buttons turn into a check for a moment once the text is on the clipboard.
+  // Copy buttons turn into a check for a moment once the text is on the clipboard; a copy
+  // that could not be written says so and shows no check.
+  async function copyText(text) {
+    try { await host.clipboardWrite(text); return true; } catch (_) { host.showToast('没能复制到剪贴板，请再试一次'); return false; }
+  }
   function copyButton(title, text, cls) {
     const b = svgButton(cls || 'msg-tool', 'copy', title);
-    b.addEventListener('click', () => {
-      host.clipboardWrite(typeof text === 'function' ? text() : text);
-      flashCheck(b, 'copy');
+    b.addEventListener('click', async () => {
+      if (await copyText(typeof text === 'function' ? text() : text)) flashCheck(b, 'copy');
     });
     return b;
   }
@@ -219,8 +222,13 @@
     ta.addEventListener('paste', (e) => {
       const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
       if (!items.some((it) => it.kind === 'file' && /^image\//.test(it.type))) return;
+      // A clipboard with text next to the picture (a page selection, a spreadsheet cell) pastes
+      // the text and not the picture: one paste is one thing.
+      if (e.clipboardData.getData('text/plain')) return;
       e.preventDefault();
-      window.deck.pasteImageSave().then((p) => { if (p) addAttachment(v, p); }).catch(() => {});
+      window.deck.pasteImageSave().then((p) => {
+        if (p) addAttachment(v, p); else host.showToast('剪贴板里的截图没读出来，请再粘贴一次');
+      }).catch(() => host.showToast('剪贴板里的截图没读出来，请再粘贴一次'));
     });
     chat.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
     chat.addEventListener('drop', (e) => {
@@ -513,7 +521,7 @@
     pick.addEventListener('click', (e) => { e.stopPropagation(); openMenu(pick, [
       ['侧栏打开', 'side', () => window.SidePane.openLink({ kind: 'url', text: url }, null, v.id)],
       ['系统浏览器打开', 'globe', () => window.deck.openExternal(url)],
-      ['复制链接', 'copy', () => host.clipboardWrite(url)],
+      ['复制链接', 'copy', () => copyText(url)],
     ]); });
     card.append(main, pick);
     return card;
@@ -681,9 +689,8 @@
     const tools = el('div', 'msg-tools');
     const copy = copyButton('复制回复', () => text);
     const share = svgButton('msg-tool', 'share', '分享：把这一轮的问与答复制成 Markdown');
-    share.addEventListener('click', () => {
-      host.clipboardWrite(`**我：**\n\n${turn.user || ''}\n\n**回复：**\n\n${text}\n`);
-      flashCheck(share, 'share');
+    share.addEventListener('click', async () => {
+      if (await copyText(`**我：**\n\n${turn.user || ''}\n\n**回复：**\n\n${text}\n`)) flashCheck(share, 'share');
     });
     const term = svgButton('msg-tool', 'terminal', '在终端里查看');
     term.addEventListener('click', () => openTerminal(v.id));

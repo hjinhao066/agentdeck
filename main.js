@@ -1530,20 +1530,41 @@ app.whenReady().then(async () => {
   });
   // The deck page has no clipboard module of its own. Test profiles get a
   // private clipboard: a test run never reads or replaces what the user copied.
+  // A test run may also hold an image (app.testClipboardImage, a PNG Buffer), and can make
+  // the next copies fail (app.testClipboardWriteFails) to see what the page does then.
   let testClipboard = '';
-  onMain('clipboard:write-sync', (e, text) => {
-    if (typeof text !== 'string') { e.returnValue = null; return; }
-    if (tudArg) testClipboard = text; else clipboard.writeText(text);
-    e.returnValue = true;
+  // Electron 44's clipboard is asynchronous (writeText() and readText() return Promises).
+  // A copy answers true only once the text really is on the clipboard, false when the write
+  // failed (another program holding the clipboard open can make it fail): the page then says
+  // so instead of showing a check.
+  handleMain('clipboard:write', async (_e, text) => {
+    if (typeof text !== 'string') return false;
+    if (tudArg) {
+      if (app.testClipboardWriteFails) return false;
+      testClipboard = text;
+      return true;
+    }
+    try { await clipboard.writeText(text); return true; } catch (error) { nlog(`clipboard write failed: ${error && error.message}`); return false; }
   });
-  // Electron 44's clipboard reads are asynchronous (readText() returns a Promise), so a
-  // synchronous reply cannot carry the text: only a test profile has an answer here. The
-  // deck reads through 'clipboard:read' below. An unreadable clipboard answers '' (a
-  // read can fail while another program holds the clipboard open), never an error.
+  // A synchronous reply cannot carry the text of an asynchronous read: only a test profile has
+  // an answer here. The deck reads through 'clipboard:read' below. An unreadable clipboard
+  // answers '' (a read can fail while another program holds the clipboard open), never an error.
   onMain('clipboard:read-sync', (e) => { e.returnValue = tudArg ? testClipboard : ''; });
   handleMain('clipboard:read', async () => {
     if (tudArg) return testClipboard;
     try { const text = await clipboard.readText(); return typeof text === 'string' ? text : ''; } catch (_) { return ''; }
+  });
+  // What kind of thing the clipboard holds when Ctrl+V found no text: 'image', 'other' (files,
+  // rich content, anything but text or a picture) or 'none' (nothing, or it cannot be read now).
+  // Only types are looked at, never content.
+  handleMain('clipboard:kind', async () => {
+    if (tudArg) return app.testClipboardOther ? 'other' : testClipboard ? 'text' : app.testClipboardImage ? 'image' : 'none'; // app.testClipboardOther: a test says the clipboard holds files
+    try {
+      const types = (await clipboard.read()).flatMap((item) => item.types || []);
+      if (types.includes('text/plain')) return 'text';
+      if (types.includes('image/png')) return 'image';
+      return types.length ? 'other' : 'none';
+    } catch (_) { return 'none'; }
   });
   // Ctrl+V found nothing to read: let Chromium paste into the focused field itself, which
   // reaches the page as an ordinary paste event. A test profile reads no real clipboard.
@@ -1907,13 +1928,28 @@ app.whenReady().then(async () => {
       if (Date.now() - fs.statSync(p).mtimeMs > 24 * 60 * 60 * 1000) fs.unlinkSync(p);
     }
   } catch (_) {}
-  handleMain('paste-image:save', () => {
+  // Electron 44 has no clipboard.readImage(): the picture comes from clipboard.read() as
+  // image/png. Text wins: a clipboard that holds both (a cell copied from a spreadsheet, a
+  // page selection) pastes its text and never the picture, so one paste is one thing. The
+  // answer is the saved file's path, or null (no picture, or text is there too).
+  handleMain('paste-image:save', async () => {
     try {
-      const img = clipboard.readImage();
-      if (img.isEmpty()) return null;
+      let png = null;
+      if (tudArg) {
+        if (!testClipboard && Buffer.isBuffer(app.testClipboardImage)) png = app.testClipboardImage;
+      } else {
+        let text = '';
+        for (const item of await clipboard.read()) {
+          const types = item.types || [];
+          if (types.includes('text/plain')) text += await (await item.getType('text/plain')).text();
+          if (!png && types.includes('image/png')) png = Buffer.from(await (await item.getType('image/png')).arrayBuffer());
+        }
+        if (text) png = null;
+      }
+      if (!png || !png.length) return null;
       fs.mkdirSync(PASTE_DIR, { recursive: true });
       const f = path.join(PASTE_DIR, 'paste-' + Date.now() + '.png');
-      fs.writeFileSync(f, img.toPNG());
+      fs.writeFileSync(f, png);
       return f;
     } catch (_) { return null; }
   });

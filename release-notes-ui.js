@@ -64,8 +64,8 @@
     }).catch(() => { st.progress = { state: 'error', days: [] }; }).finally(() => draw());
   }
 
-  function copy(text, button, label) {
-    try { host.clipboardWrite(text); } catch (_) { host.showToast('没能复制，请再试一次'); return; }
+  async function copy(text, button, label) {
+    try { await host.clipboardWrite(text); } catch (_) { host.showToast('没能复制，请再试一次'); return; }
     button.innerHTML = host.ICONS.check; button.classList.add('done');
     button.title = '已复制'; button.setAttribute('aria-label', '已复制');
     clearTimeout(button.copyTimer);

@@ -247,8 +247,8 @@
         const open = el('button', 'todo-ai-open', name);
         open.type = 'button'; open.title = p; open.dataset.focusKey = `aifile:${t.id}:${i}`;
         open.addEventListener('click', (e) => window.SidePane.openLink({ kind: 'file', text: p }, e));
-        const copy = iconButton('copy', '复制路径', () => {
-          try { host.clipboardWrite(p); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
+        const copy = iconButton('copy', '复制路径', async () => {
+          try { await host.clipboardWrite(p); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
           const mark = (icon, label) => { copy.innerHTML = svg(icon); copy.title = label; copy.setAttribute('aria-label', label); };
           mark('check', '已复制'); copy.classList.add('done');
           clearTimeout(copy.checkTimer);

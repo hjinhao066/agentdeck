@@ -188,10 +188,11 @@ test('reply actions are icon buttons with labels, focus rings and room to click;
     try {
       const bs = document.querySelectorAll(`.column[data-col-id="${i}"] .turn:nth-child(2) .msg.assistant > .msg-tools .msg-tool`);
       bs[0].click(); bs[1].click();
-      return { got, check: bs[0].querySelector('polyline')?.getAttribute('points') === '20 6 9 17 4 12' && bs[0].classList.contains('done') };
+      return { got };
     } finally { deckHost.clipboardWrite = original; }
   }, ID);
-  expect(result.check).toBe(true);
+  // the check shows once the write is confirmed (an asynchronous copy), not at the click
+  await expect.poll(() => tools.first().evaluate((b) => b.querySelector('polyline')?.getAttribute('points') === '20 6 9 17 4 12' && b.classList.contains('done')), { timeout: 3000 }).toBe(true);
   expect(result.got[0]).toContain('设计包已传到 Windows');
   expect(result.got[1]).toMatch(/^\*\*我：\*\*\n\n按这个方向/);
   await expect.poll(() => tools.first().evaluate((b) => b.classList.contains('done')), { timeout: 3000 }).toBe(false);

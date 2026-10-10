@@ -37,7 +37,8 @@ test('keys held back by a waiting Ctrl+V still wait for AgentDeck\'s own typing,
   // the clipboard reads empty for 300 ms (another program has it open), then gives the text
   await app.evaluate(({ ipcMain }) => {
     globalThis.__busyUntil = 0; globalThis.__clip = '';
-    ipcMain.on('clipboard:write-sync', (e, t) => { if (typeof t === 'string') globalThis.__clip = t; });
+    ipcMain.removeHandler('clipboard:write');
+    ipcMain.handle('clipboard:write', (e, t) => { if (typeof t !== 'string') return false; globalThis.__clip = t; return true; });
     ipcMain.removeHandler('clipboard:read');
     ipcMain.handle('clipboard:read', () => (Date.now() < globalThis.__busyUntil ? '' : globalThis.__clip));
   });

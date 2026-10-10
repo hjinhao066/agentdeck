@@ -62,7 +62,7 @@ test('the copy key copies a terminal selection and never reaches the program as 
     expect(await selectLine()).toBe('COPY-ME-4721');
     await page.keyboard.press('Control+C');
     await expect.poll(clipboard).toBe('COPY-ME-4721');
-    expect(await page.evaluate((id) => terms.get(id).term.hasSelection(), ID)).toBe(false);
+    await expect.poll(() => page.evaluate((id) => terms.get(id).term.hasSelection(), ID)).toBe(false);
   }
   await page.waitForTimeout(500);
   expect(keys().slice(before.length)).not.toContain('03');

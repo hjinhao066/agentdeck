@@ -763,8 +763,8 @@
   }
   function copyButton(text, label) {
     const b = iconButton('tbv-copy', ICON.copy, label);
-    b.onclick = () => {
-      host.copy(text);
+    b.onclick = async () => {
+      try { await host.copy(text); } catch (_) { host.showToast('没能复制到剪贴板，请再试一次'); return; }
       b.innerHTML = ICON.check; b.classList.add('ok');
       setTimeout(() => { b.innerHTML = ICON.copy; b.classList.remove('ok'); }, 1200);
     };

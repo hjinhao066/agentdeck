@@ -33,12 +33,16 @@ contextBridge.exposeInMainWorld('deck', {
   seatAuthFailure: (payload) => ipcRenderer.invoke('seat-auth:failure', payload),
   barkStatus: () => ipcRenderer.invoke('bark:status'),
   refreshBarkCalendar: () => ipcRenderer.invoke('bark:refresh'),
-  // Electron gives a preload no `clipboard` module, so main reads and writes
-  // it. A failed write throws: a copy button must not report success for it.
-  clipboardWrite: (t) => { if (ipcRenderer.sendSync('clipboard:write-sync', t) !== true) throw new Error('Clipboard write failed.'); },
+  // Electron gives a preload no `clipboard` module, so main reads and writes it, and its
+  // clipboard is asynchronous. A copy resolves once the text really is on the clipboard and
+  // rejects when it could not be written: a copy button must not report success for that.
+  clipboardWrite: async (t) => { if ((await ipcRenderer.invoke('clipboard:write', t)) !== true) throw new Error('Clipboard write failed.'); },
+  // Synchronous read: only a test profile (private in-memory clipboard) has an answer, a real one is ''.
   clipboardRead: () => ipcRenderer.sendSync('clipboard:read-sync') || '',
   // The real read (Electron's clipboard is asynchronous): the text, or '' when it cannot be read.
   clipboardReadText: async () => { const text = await ipcRenderer.invoke('clipboard:read'); return typeof text === 'string' ? text : ''; },
+  // What the clipboard holds when there is no text: 'image', 'other' or 'none' (types only).
+  clipboardKind: async () => { const kind = await ipcRenderer.invoke('clipboard:kind'); return typeof kind === 'string' ? kind : 'none'; },
   // Chromium's own paste into the focused field (it arrives as a paste event); true if it ran.
   clipboardNativePaste: async () => (await ipcRenderer.invoke('clipboard:native-paste')) === true,
   // Resolve a dropped File's real filesystem path (File.path is deprecated).

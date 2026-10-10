@@ -212,8 +212,8 @@
     pvHead.appendChild(title);
     const actions = el('div', 'pv-actions');
     if (r.kind === 'markdown') actions.appendChild(button(mdSource ? '渲染' : '源码', '切换 Markdown 渲染和源码', () => { mdSource = !mdSource; renderPreview(); }));
-    const copy = button('', '复制路径', () => {
-      try { host.clipboardWrite(r.path); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
+    const copy = button('', '复制路径', async () => {
+      try { await host.clipboardWrite(r.path); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
       copy.innerHTML = host.ICONS.check; copy.classList.add('done');
       clearTimeout(copy.checkTimer);
       copy.checkTimer = setTimeout(() => { copy.innerHTML = host.ICONS.copy; copy.classList.remove('done'); }, 1200);
