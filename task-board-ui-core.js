@@ -94,24 +94,13 @@
     return '等' + (names.length > 2 ? names.slice(0, 2).join('、') + ` 等 ${names.length} 项` : names.join('、')) + '完成';
   }
 
-  // What the user is being asked, as one sentence, or '' when a card sits in
-  // 需要你 without a real question (a session that ended without a receipt, a
-  // dispatcher that gave up, a card moved there by hand with only an old
-  // result on it). The board then says so instead of showing internal wording.
-  const NOT_A_QUESTION = [/^已结束，未提交回执/, /^调度已结束/];
-  function userQuestion(card) {
-    if (!card || card.status !== 'needs_user') return '';
-    if (typeof card.user_question === 'string' && card.user_question.trim()) return card.user_question.trim();
-    const text = String(card.latest_receipt || '').trim();
-    if (!text || NOT_A_QUESTION.some((re) => re.test(text))) return '';
-    if (/:(?:complete|failed|fallback):/.test(card.last_event || '')) return '';
-    return text;
-  }
   // The latest receipt in the user's words (internal wording translated) and a flag's tag are
   // the phone hub's rules (mobile-web/hub/core.js): one set of words for both boards. Looked
   // up when called, so the load order of the two files does not matter.
   const hub = () => (typeof module === 'object' && module.exports ? require('./mobile-web/hub/core.js') : globalThis.HubCore);
   const receiptText = (card) => hub().cardReceipt(card);
+  // What a 需要你 card asks the user, whole, or '' (the board then says so).
+  const userQuestion = (card) => hub().cardQuestion(card);
   const flagText = (card) => hub().cardFlag(card);
 
   // Absolute / home-relative file paths mentioned in a text, in first-seen order.

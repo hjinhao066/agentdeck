@@ -202,6 +202,18 @@
     if (card.flag === 'quota') return { auth: '登录', rate_limit: '限流' }[card.resource_failure] || '额度';
     return FLAG_NAMES[card.flag] || String(card.flag);
   }
+  // What a 需要你 card asks the user, whole (both boards show the same words), or '' when it
+  // sits there without a real question: a session that ended without a receipt, a dispatcher
+  // that gave up, a card moved there by hand with only an old result on it.
+  const NOT_A_QUESTION = [/^已结束，未提交回执/, /^调度已结束/];
+  function cardQuestion(card) {
+    if (!card || card.status !== 'needs_user') return '';
+    if (typeof card.user_question === 'string' && card.user_question.trim()) return card.user_question.trim();
+    const text = String(card.latest_receipt || '').trim();
+    if (!text || NOT_A_QUESTION.some((re) => re.test(text))) return '';
+    if (/:(?:complete|failed|fallback):/.test(card.last_event || '')) return '';
+    return text;
+  }
   function cardReceipt(card) {
     const text = String((card && card.latest_receipt) || '').trim();
     if (/^已结束，未提交回执/.test(text)) return '队员停下了，但没有交结果。';
@@ -621,7 +633,7 @@
     return `${name} 没有记下这条（HTTP ${result.status}）。`;
   }
 
-  return { cleanTodos, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt,
+  return { cleanTodos, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt, cardQuestion,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, rowHealth, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 

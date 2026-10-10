@@ -3762,7 +3762,7 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
   box-shadow: 0 0 30px -14px color-mix(in srgb, var(--tbv-need-lit) var(--tbv-halo), transparent);
 }
 .tbv-ask-label { margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; color: var(--tbv-need); }
-.tbv-ask-question { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--tbv-ink); overflow-wrap: anywhere; }
+.tbv-ask-question { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--tbv-ink); overflow-wrap: anywhere; white-space: pre-line; }
 .tbv-ask-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--tbv-ink-2); }
 .tbv-answer {
   width: 100%; min-height: 76px; resize: vertical; padding: 9px 11px; border-radius: 10px;

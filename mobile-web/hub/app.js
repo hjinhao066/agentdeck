@@ -1612,7 +1612,8 @@
         if (owner) top.append(node('span', 'task-owner', `${owner} 领取`));
         card.append(top, node('h3', '', task.title));
         if (task.assignee) card.append(node('p', 'task-assignee', [task.assignee.agent, task.assignee.model].filter(Boolean).join(' · ')));
-        const receipt = Core.cardReceipt(task);
+        // a 需要你 card shows its whole question, as the desktop's 需要你决定 does
+        const receipt = Core.cardQuestion(task) || Core.cardReceipt(task);
         if (receipt) card.append(markdownNode(receipt, { reply: true, className: 'task-receipt' }));
         section.append(card);
       }
