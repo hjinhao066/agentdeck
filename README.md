@@ -1316,6 +1316,8 @@ bash scripts/rollback-agentdeck.sh --go --backup /absolute/path/backup
 
 不带 `--go` 只显示计划，不再内置历史版本的 DMG 路径或校验值。
 
+回滚不带 `--backup` 时，取比现役版本更旧的备份里最新的一份：每次安装和回滚都会先备份被换下的那一版，所以最新的备份可能正是刚退掉的新版，或现役版本自己。没有更旧的备份就报错停下，请用 `--backup` 指定。
+
 正式安装引擎 `scripts/install-agentdeck.js` 使用一次性 detached 子进程，不注册 launchd，也没有 KeepAlive 或失败自动重启。校验 DMG/签名/目标版本/asar、备份旧应用与用户数据后，最多尝试安装三次；失败恢复旧应用并退出。结果原子写入 userData 的 `install-result.json`，包含目标版本、现役版本、进程状态、尝试次数与失败原因。成功要求目标应用已启动并持续存活，磁盘上出现新版本并不算完成。真实安装证据须加入最终报告，不能用 fixture 测试冒充。
 
 安装会话开始前通过 `progress --install-id ID --target-version VERSION --message "安装待核对"` 登记待核对（正式脚本负责调用）。普通 `complete` 无法结束待核对的任务；应用启动后读取并持续检查结果文件，匹配原任务后提交成功或失败回执。停在安全点、准备安装均只用 `progress`，不用 `complete`。安装失败或回滚走 `notify-user --urgent`；应用停机时复用同一 Bark 发送器离线推送，说明目标版本、失败原因和现役版本。密钥仍从本机配置的密钥文件读取。
