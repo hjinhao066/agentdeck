@@ -233,8 +233,19 @@ test('a task closed only by the three-minute no-receipt fallback is parked for a
     fallbackStop('safe'), task('done', 'done', '功能已做完'), task('live', 'working'),
     task('stop', 'stopped', '队长已请求中断当前操作。', { receipt: { summary: '队长已请求中断当前操作。', failed: '', source: 'captain-stop' } }),
   ]).map((p) => [p.id, p.idle === true]), [['safe', true], ['live', false]]);
-  // A crash never parks: a fallback stop on its own is still not resumed at the next start.
-  assert.equal(R.shouldResume(fallbackStop('safe')), false);
+});
+
+// 10-09 20:26 (2.0.4 installed) and 21:04 (the user restarted by hand): the same five sessions, closed by
+// 已结束，未提交回执 between 18:59 and 20:18, were again not continued, and the Captain woke each one with tell.
+// However the app went down (a clean quit, a force quit, a crash), a task closed only by that fallback is
+// continued at the next start like an open one.
+test('a task closed only by the no-receipt fallback is continued at the next start, without a park', () => {
+  assert.equal(R.shouldResume(fallbackStop('safe')), true);
+  assert.equal(R.holdsAcrossRestart(fallbackStop('safe')), true);
+  assert.equal(R.shouldResume(fallbackStop('failed', { receipt: { summary: '', failed: '进程退出', source: 'fallback' } })), false);
+  assert.equal(R.shouldResume(fallbackStop('install', { pendingInstall: { id: 'i' } })), false);
+  assert.equal(R.shouldResume(task('stop', 'stopped', '队长已请求中断当前操作。', { receipt: { summary: '队长已请求中断当前操作。', failed: '', source: 'captain-stop' } })), false);
+  assert.deepEqual(R.planResume([crew('safe'), crew('done')], [fallbackStop('safe'), task('done', 'done', '功能已做完')], {}).map((p) => p.id), ['safe']);
 });
 
 // After a restart the Captain is back only when it does something itself (works, or runs a command) after its

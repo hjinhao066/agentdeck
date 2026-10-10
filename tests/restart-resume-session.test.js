@@ -483,3 +483,21 @@ test('a 队长 replaced within the minute (a Relay, a cleared context) or one a 
     assert.equal(app.barks.length, 0, change);
   }
 });
+
+
+// The quit did not park it (a force quit, a crash, or the version before this fix): a crew task closed by the
+// fallback after its safe-point progress is still continued at the next start, its stale 已结束 notice dropped.
+test('a crew task the fallback closed before a quit that did not park it is continued at the next start', async (t) => {
+  const w = world(t, { task: { status: 'stopped', doneAt: 5, progress: '停在安全点：改动已推送，下一步写在 progress.md',
+    receipt: { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' } } });
+  w.config.mainSession.pending.push({ taskId: 'task', colId: 'worker', title: '修复登录', ts: 5, summary: '已结束，未提交回执', files: [], failed: '', source: 'fallback' });
+  const app = w.boot();
+  await app.resume();
+  assert.equal(app.sends.length, 1, 'its continue message is on its way');
+  const text = await app.deliver();
+  assert.match(text, /AgentDeck 刚重启/);
+  assert.match(text, /停在安全点：改动已推送/, 'its own progress is the last receipt');
+  assert.doesNotMatch(text, /最后回执：已结束，未提交回执/);
+  assert.equal(app.task().status, 'working');
+  assert.deepEqual(w.config.mainSession.pending.filter((p) => p.taskId === 'task' && p.source === 'fallback'), []);
+});

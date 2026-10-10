@@ -165,3 +165,47 @@ test('a 队长 that is not back at work after a start is reported on 待我处�
     fs.rmSync(profile, { recursive: true, force: true });
   }
 });
+
+// 10-09 21:04: the app came back without the five sessions the 3-minute rule had closed, the second time that
+// evening. However the app went down, a crash included (no quit, nothing parked), they are continued.
+test('after a crash, a crew session the 3-minute rule had closed at its safe point is continued', async ({}, testInfo) => {
+  test.setTimeout(180_000);
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-restart-crash-'));
+  const files = { prompts: path.join(profile, 'prompts.jsonl'), early: path.join(profile, 'early.jsonl') };
+  const cmd = standIn(profile) + ' --startup-ms=3000';
+  const now = Date.now();
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, captainTokenSaver: { enabled: false },
+    resumeOnRestart: true, theme: 'dark', fitWindow: true, fitCols: 2,
+    columns: [
+      { id: 'cap', title: '队长', isMain: true, cmd, cwd: profile, modelSessionId: SESSION.cap, modelSessionOwner: 'cap', modelSessionCwd: profile },
+      { id: 'worker-safe', title: '停在安全点', displayTitle: '停在安全点', manualTitle: true, cmd: cmd + ' --screen-only', cwd: profile, width: 460,
+        role: 'manual', captainCrew: true, modelSessionId: SESSION.safe, modelSessionOwner: 'worker-safe', modelSessionCwd: profile },
+    ],
+    mainSession: { colId: 'cap', cmd, gen: 1, fresh: false, crewMarked: true, pending: [], inflight: [], waitlist: [], tasks: [
+      { id: 'k-safe', colId: 'worker-safe', title: '停在安全点', gen: 1, status: 'stopped', sentAt: now, startedAt: now, doneAt: now, turnId: '',
+        progress: '停在安全点：改动已推送，下一步写在 progress.md',
+        receipt: { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' } },
+    ] } }));
+  const received = (colId, from = 0) => rows(files.prompts).slice(from).filter((r) => r.colId === colId).map((r) => r.text);
+  let app;
+  try {
+    app = await launch(profile, files);
+    await expect.poll(() => received('cap').length, { timeout: 60000 }).toBe(1);
+    // The app dies: no quit, so nothing is parked.
+    const child = app.application.process();
+    const gone = new Promise((resolve) => child.once('exit', resolve));
+    child.kill('SIGKILL');
+    await gone;
+    app = null;
+    const mark = rows(files.prompts).length;
+    app = await launch(profile, files);
+    await expect.poll(() => received('worker-safe', mark).some((t) => t.includes('真续接：Claude') && t.includes('AgentDeck 刚重启')), { timeout: 60000 }).toBe(true);
+    expect(await app.page.evaluate(() => window.MainSession.state().tasks.find((t) => t.id === 'k-safe').status)).toBe('working');
+  } catch (error) {
+    await testInfo.attach('restart-crash-state', { body: JSON.stringify({ prompts: rows(files.prompts), early: rows(files.early) }, null, 2), contentType: 'application/json' });
+    throw error;
+  } finally {
+    if (app) await quitAndWait(app.application);
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});
