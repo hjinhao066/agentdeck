@@ -1772,6 +1772,7 @@ body.linking-board .board-port.out::before {
 .at-chev svg { width: 14px; height: 14px; }
 .at-detail { margin-top: 6px; padding: 12px 14px; border-radius: 9px; background: var(--code-bg); display: flex; flex-direction: column; gap: 10px; }
 .at-text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); font-size: 13px; line-height: 1.7; }
+.at-text.md { white-space: normal; }
 .at-files { list-style: none; display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; }
 .at-file { display: flex; align-items: center; gap: 2px; }
 .at-file-main {
