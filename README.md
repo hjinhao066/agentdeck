@@ -1442,6 +1442,20 @@ preserve pending edits, including changes made by other local board writers.
 Older revisioned task snapshots restored by Git keep their older revision when
 submitted, so they cannot silently replace newer server edits.
 Repeated operations do not increment a card revision or add a second conflict.
+The hub settles two kinds of conflict itself instead of keeping the first writer.
+A `complete` the agent submitted with its own command is authoritative: when it
+reaches the hub after another machine wrote a guess over the same card (a fallback
+for an exit with no receipt, an automatic failure, the next attempt's start), the
+completion wins field by field, and the card's dispatch claim and bound delivery are
+cleared; the guess stays in the conflict record (`reason: complete-over-guess`,
+`kept` is what the card holds). Only a written `complete` counts: automatic
+completes, written failures and a second written complete take the ordinary rule.
+A finished card is never claimed again: a new `dispatch_claim` (or delivery
+binding) on a card that is `done` is refused (`claim-on-done`), and a writer whose
+base is older than the card's completion cannot change any attempt field
+(`stale-after-complete`) while title, detail, order and the like still merge. Moving
+the card out of done on purpose from a current base still works. No machine clock
+takes part: the order is the order of arrival at the hub.
 The hub answers a replayed operation from its receipt for 30 days. A transcript
 upload's receipt names the record (hash and time) instead of copying it; a card
 operation's receipt keeps its outcome and the card's id, and a replay is answered
