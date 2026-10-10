@@ -226,10 +226,15 @@ test('1x screen: the text is drawn at the scale it shows at: at 140%, on arrival
     await page.waitForTimeout(300);
     return png;
   };
+  // (3.1) Nothing in the window animates any more, and then a card as Chromium rastered it and the same card rastered
+  // afresh can differ in a few anti-aliased pixels at the edge of the model icon (3–5 measured; with anything at all
+  // animating in the window, 0). Text drawn at another scale, the fault guarded against here, differs in thousands
+  // (2320 measured: the canvas rastered at 100% and shown at 140%). So a handful is allowed.
+  const SAME = 12;
   expect((await read()).label, 'a small map arrives at 140%').toBe('140%');
   const drawn = await card(), fresh = await afresh();
   fs.writeFileSync(test.info().outputPath('crisp-140-arrival-asdrawn.png'), drawn); fs.writeFileSync(test.info().outputPath('crisp-140-arrival-afresh.png'), fresh);
-  expect(await differ(drawn, fresh), 'arrived at 140%: pixels the card as drawn differs in').toBe(0);
+  expect(await differ(drawn, fresh), 'arrived at 140%: pixels the card as drawn differs in').toBeLessThanOrEqual(SAME);
   // at rest (no glide, drag or wheel: a session's news can start a glide on its own) the canvas has no layer of its own
   await expect.poll(() => page.evaluate(() => { const c = document.querySelector('.cm-canvas'); return c.matches('.cm-smooth, .panning .cm-canvas, .cm-moving .cm-canvas') ? 'moving' : getComputedStyle(c).willChange; }), { message: 'no layer of its own at rest' }).toBe('auto');
   await go();
@@ -239,7 +244,7 @@ test('1x screen: the text is drawn at the scale it shows at: at 140%, on arrival
   expect((await read()).label).toBe('140%');
   const zoomed = await card(), again = await afresh();
   fs.writeFileSync(test.info().outputPath('crisp-140-zoomed-asdrawn.png'), zoomed); fs.writeFileSync(test.info().outputPath('crisp-140-zoomed-afresh.png'), again);
-  expect(await differ(zoomed, again), 'zoomed in to 140%: pixels the card as drawn differs in').toBe(0);
+  expect(await differ(zoomed, again), 'zoomed in to 140%: pixels the card as drawn differs in').toBeLessThanOrEqual(SAME);
   expect(errors).toEqual([]);
 });
 
