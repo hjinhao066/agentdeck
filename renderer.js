@@ -2311,8 +2311,8 @@ function buildColumn(col, isFresh) {
       const held = [];
       entry.typing = trackPrompt.typing;
       entry.flushHeld = () => held.splice(0).forEach(forwardInput);
-      // While AgentDeck types a receipt or a task into this box (about half a
-      // second), your keys wait and follow right after its Enter. The wheel,
+      // While AgentDeck types a receipt or a task into this box (up to 3 s
+      // while the agent keeps drawing), your keys wait and follow right after its Enter. The wheel,
       // pointer moves and the terminal's own replies do not wait (ChatCore.passesInputHold).
       term.onData((d) => { if (entry.injecting && !ChatCore.passesInputHold(d)) held.push(d); else forwardInput(d); });
     }
