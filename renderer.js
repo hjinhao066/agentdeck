@@ -266,6 +266,9 @@ if (saved) {
       boardAttempt: typeof c.boardAttempt === 'string' ? c.boardAttempt : '',
       dispatcherCardId: typeof c.dispatcherCardId === 'string' ? c.dispatcherCardId : '',
       ...(c.important === true ? { important: true } : {}),   // 高优先级, for work handed out without a card
+      // The copy `new --worktree` made (reclaimed when the session is archived), and a ChatGPT web column
+      ...(c.worktree && typeof c.worktree === 'object' && !Array.isArray(c.worktree) ? { worktree: c.worktree } : {}),
+      ...(c.executor === 'chatgpt-web' ? { executor: 'chatgpt-web', webMode: c.webMode === 'deep-research' ? 'deep-research' : 'chat' } : {}),
 
       claudeSeatId: c.claudeSeatId || config.activeClaudeSeatId,
       lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
