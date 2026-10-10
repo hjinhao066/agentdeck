@@ -63,6 +63,7 @@ test.afterAll(async () => {
 test('there is one Captain: the sidebar entry creates it first, then just returns to it', { tag: '@smoke' }, async () => {
   await page.locator('.nav-row[data-nav="captain"]').click();
   await expect(page.locator('#mainDialog')).toBeVisible();
+  await expect(page.locator('#mdCmd')).toHaveValue('claude --dangerously-skip-permissions --model claude-opus-5-5 --effort max');
   await page.locator('#mdCmd').fill('');           // a plain shell stands in for the agent
   await page.locator('#mdCwd').fill(profile);
   await page.locator('#mdCreate').click();

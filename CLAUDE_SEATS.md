@@ -103,6 +103,9 @@ Claude 队长行右侧的Relay图标打开席位选择，标注当前席位。�
 用所选席位启动 → 重发队长提示词和「读看板继续」。未完成回复记为 interrupted；
 回执、提问、等待队列和正在跑的队员都保留。任何存档错误都保留原队长。
 新会话默认当前席位；已有会话（包括归档后恢复）继续使用原席位。
+队长的 Claude 命令：Claude 队长之间 Relay 沿用当前命令；新建队长的输入框和从 Codex 交回 Claude 时先用记下的
+`captainRelayClaudeCommand`（每次从 Claude 队长 Relay 时记下），没有就用默认
+`claude --dangerously-skip-permissions --model claude-opus-5-5 --effort max`。
 Relay 只重开队长列，不重启 AgentDeck。侧边栏 Claude 模型标签右侧是该会话绑定的席位里实际登录的账号名（放不下时从左边省略），悬停或聚焦可查看完整邮箱、套餐、席位代号与目录；其他 provider 不显示。
 
 ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能力与 provider 无关。

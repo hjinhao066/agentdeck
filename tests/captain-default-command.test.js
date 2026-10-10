@@ -33,3 +33,9 @@ test('a new Captain is offered the saved Captain command, else the max default, 
   const saved = 'claude --dangerously-skip-permissions --model claude-sonnet-5-5 --effort xhigh';
   assert.equal(dialogCommand({ captainRelayClaudeCommand: saved }), saved);
 });
+
+test('the 创建队长 dialog\'s Claude preset is the Captain default', () => {
+  const html = fs.readFileSync(path.resolve(__dirname, '../index.html'), 'utf8');
+  const dialog = html.slice(html.indexOf('<dialog id="mainDialog">'), html.indexOf('</dialog>', html.indexOf('<dialog id="mainDialog">')));
+  assert.deepEqual([...dialog.matchAll(/data-cmd="(claude[^"]*)"/g)].map((m) => m[1]), [S.CLAUDE_COMMAND]);
+});
