@@ -86,14 +86,38 @@ async function installStandIns() {
   }, FAKE);
 }
 // (a profile still held by the closed Electron's helpers on Windows is reported, it does not fail the run)
-test.afterAll(async () => { if (app) await app.close(); if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); } });
+// Before the app closes, the live terminals are counted once more: a cleanup that broke (and only warned in afterEach) must still turn
+// the run red. More than the kept count plus 2 left over fails here; the app is closed in `finally`, so the check never leaks it.
+test.afterAll(async () => {
+  try {
+    if (app && page) {
+      const left = await page.evaluate(async ([keep]) => {
+        const alive = [];
+        for (const id of terms.keys()) {
+          if (keep.includes(id) || columns.some((c) => c.id === id && c.isMain)) continue;
+          if (await window.deck.ptyIsAlive(id)) alive.push(columns.find((c) => c.id === id)?.title || id);
+        }
+        return alive;
+      }, [keepColumns]);
+      if (left.length > keepColumns.length + 2) {
+        throw new Error(`${left.length} test terminals are still alive at the end (allowed: ${keepColumns.length + 2}): ${left.join(', ')}. Cleanup failed in: ${cleanupFailures.length ? cleanupFailures.join(' | ') : 'no test (the cleanup itself did not remove them)'}`);
+      }
+    }
+  } finally {
+    try { if (app) await app.close(); } finally {
+      if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
+    }
+  }
+});
 // Every worker is a ConPTY PowerShell plus its stand-in node. Left open
 // until the file ends, the first ten tests alone piled up 26 PowerShells and a whole run took the machine to 98% commit. So a test's
-// terminals end with the test: whatever column the test (a worker, a reviewer, a dispatcher stand-in) opened is archived through the
-// Captain's own `archive` path (the PTY is killed and the xterm disposed; the card keeps its record, the conversation is saved).
+// terminals end with the test: whatever column the test (a worker, a reviewer, a dispatcher stand-in) opened is archived with the same
+// host.archiveColumn that `archive --id` ends with (the PTY is killed and the xterm disposed; the conversation is saved). It is only
+// that last step: the card is not set to stopped and the column's pending receipts are not dropped, so a card keeps the state the test left it in.
 // The case that leaves dispatcher stand-ins on purpose ("Gemini out or unread") is covered the same way, after it has finished.
 // Columns present when the tests start (the idle shell and the Captain) stay.
 let keepColumns = [];
+const cleanupFailures = [];   // titles of the tests whose cleanup threw; afterAll names them if terminals piled up
 async function closeTestTerminals() {
   const closed = await page.evaluate((keep) => {
     const ids = [];
@@ -105,10 +129,13 @@ async function closeTestTerminals() {
   return closed.length;
 }
 test.afterEach(async ({}, info) => {
-  if (info.status !== info.expectedStatus) {
-    await info.attach('task-board-state', { body: JSON.stringify({ cards: await list({ archived: true }), notices: await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板')) }), contentType: 'application/json' });
-  }
-  try { await closeTestTerminals(); } catch (error) { console.warn(`terminals of "${info.title}" not all closed: ${error.message.split('\n')[0]}`); }
+  // The failure attachment sits inside the try as well: a crashed page makes list() throw, and the cleanup must still be attempted.
+  try {
+    if (info.status !== info.expectedStatus) {
+      await info.attach('task-board-state', { body: JSON.stringify({ cards: await list({ archived: true }), notices: await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板')) }), contentType: 'application/json' });
+    }
+  } catch (error) { console.warn(`state of "${info.title}" not attached: ${error.message.split('\n')[0]}`); }
+  try { await closeTestTerminals(); } catch (error) { cleanupFailures.push(info.title); console.warn(`terminals of "${info.title}" not all closed: ${error.message.split('\n')[0]}`); }
 });
 
 test('CLI cards bind actual worker receipts, exact text stays in the session and dependencies unlock', async () => {
