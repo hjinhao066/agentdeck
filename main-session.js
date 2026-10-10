@@ -1790,6 +1790,7 @@
     if (message.action === 'session-exit') {
       if (task.status === 'stopped' && task.receipt?.source === 'fallback') {
         task.status = 'working';
+        task.gen = s.gen; // closed under an earlier Captain: the exit receipt goes to this one
         dropReceipts(s, (p) => p.taskId === task.id && p.source === 'fallback');
       }
       if (!CLOSED.includes(task.status) || task.status === 'asking') {
@@ -2435,6 +2436,7 @@
         delete task.doneAt;
         delete task.processEnded;
         task.status = 'working'; task.endedAt = 0;
+        task.gen = s.gen; // a closed task keeps its old Captain's generation, and its receipt would be dropped
         dropReceipts(s, (p) => p.taskId === task.id && p.source === 'fallback');
         autoBoardEvent(task, 'started', '', 'resume-fallback-' + Date.now());
         update(task);
@@ -2448,6 +2450,7 @@
       if (task.status === 'stopped' && task.receipt?.source === 'fallback' &&
           (!entry.alive || entry.state === 'quota' || M.terminalActivity(entry.lastScreen, col?.cmd) === 'quota')) {
         task.status = 'working';
+        task.gen = s.gen;
         dropReceipts(s, (p) => p.taskId === task.id && p.source === 'fallback');
       }
       if (!['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(task.status)) continue;
