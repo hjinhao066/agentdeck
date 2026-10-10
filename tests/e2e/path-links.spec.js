@@ -82,7 +82,7 @@ test.afterAll(async () => {
 function terminalLinks(id, lines) {
   return page.evaluate(({ id, lines }) => {
     const { term } = terms.get(id);
-    const buf = term.buffer.active, provider = term._core._linkProviderService.linkProviders[0];
+    const buf = term.buffer.active, providers = term._core._linkProviderService.linkProviders;
     // a narrow column wraps the lines; where a wide character moved to the next row
     // the spacing at the wrap is not the line's own, so rows are matched without it
     const bare = (t) => t.replace(/\s+/g, '');
@@ -94,8 +94,9 @@ function terminalLinks(id, lines) {
         if (ln && !ln.isWrapped && bare(wrappedLineToCells(buf, r, term.cols).str) === bare(line)) row = r;
       }
       if (row < 0) { out.push(null); continue; }
-      let links = [];
-      provider.provideLinks(row + 1, (found) => { links = found || []; });
+      // xterm's own OSC 8 provider comes first; AgentDeck's answers right away
+      const links = [];
+      for (const provider of providers) provider.provideLinks(row + 1, (found) => links.push(...(found || [])));
       out.push(links.map((l) => ({ text: l.text, range: l.range })));
     }
     return out;
@@ -110,39 +111,49 @@ function cellPoint(id, x, y) {
   }, { id, x, y });
 }
 
-test('terminal: each path is its own link, ending where the path ends, and a click opens that file', async () => {
-  await page.evaluate((i) => jumpToColumn(columns.find((c) => c.id === i)), TERM);
-  await expect.poll(() => terminalLinks(TERM, LINES).then((all) => all.every(Boolean)), { timeout: 20000 }).toBe(true);
-  const found = await terminalLinks(TERM, LINES);
-  // the hovered link on "…settings.json 改前的备份…": its underline is the evidence in the screenshot
-  const hovered = found[1][0];
-  const at = await cellPoint(TERM, hovered.range.start.x + 1, hovered.range.start.y);
-  await page.mouse.move(at.x, at.y);
-  await page.waitForTimeout(400);
-  await col(TERM).screenshot({ path: test.info().outputPath(`terminal-${process.platform}.png`) });
-  expect(found.map((links) => links.map((l) => l.text))).toEqual(WANT);
-  // the second path of "a.json 和 b.json" is clickable on its own cells and opens b.json
-  const second = found[4][1];
-  const point = await cellPoint(TERM, second.range.start.x + 2, second.range.start.y);
-  await page.mouse.move(point.x, point.y);
-  await page.waitForTimeout(300);
-  await page.mouse.click(point.x, point.y);
-  await expect(page.locator('#sidePane .pv-title strong')).toHaveText('b.json');
-  await expect(page.locator('#pvBody')).toContainText('"b.json"');
-  await park();
-});
+// One window for both views: a failed check is reported and the other view still runs.
+test('each path is its own link, ending where the path ends, in the terminal and in a chat reply; a click opens it', async () => {
+  await test.step('terminal', async () => {
+    await page.evaluate((i) => jumpToColumn(columns.find((c) => c.id === i)), TERM);
+    await expect.poll(() => terminalLinks(TERM, LINES).then((all) => all.every(Boolean)), { timeout: 20000 }).toBe(true);
+    const found = await terminalLinks(TERM, LINES);
+    // hover the link on "…settings.json 改前的备份…": its underline is the evidence in the screenshot
+    const hovered = found[1][0];
+    const at = await cellPoint(TERM, hovered.range.start.x + 1, hovered.range.start.y);
+    await page.mouse.move(at.x, at.y);
+    await page.waitForTimeout(400);
+    await col(TERM).screenshot({ path: test.info().outputPath(`terminal-${process.platform}.png`) });
+    expect.soft(found.map((links) => links.map((l) => l.text))).toEqual(WANT);
+    // the second path of "a.json 和 b.json" is clickable on its own cells and opens b.json
+    const second = found[4][1];
+    expect.soft(second, 'a second link on the a.json/b.json line').toBeTruthy();
+    if (second) {
+      const point = await cellPoint(TERM, second.range.start.x + 2, second.range.start.y);
+      await page.mouse.move(point.x, point.y);
+      await page.waitForTimeout(300);
+      await page.mouse.click(point.x, point.y);
+      await expect.soft(page.locator('#sidePane .pv-title strong')).toHaveText('b.json');
+      await expect.soft(page.locator('#pvBody')).toContainText('"b.json"');
+    }
+    await park();
+  });
 
-test('chat: the same lines in a reply link each path alone, and a click opens it', async () => {
-  await page.evaluate((i) => jumpToColumn(columns.find((c) => c.id === i)), CHAT);
-  await page.evaluate((i) => ChatUI.setMode(i, 'chat'), CHAT);
-  const links = col(CHAT).locator('.reply .chat-link.path');
-  await expect(links.first()).toBeVisible();
-  await park();
-  await col(CHAT).screenshot({ path: test.info().outputPath(`chat-${process.platform}.png`) });
-  const paras = await col(CHAT).locator('.reply p').evaluateAll((ps) => ps.map((p) => [...p.querySelectorAll('.chat-link.path')].map((a) => a.textContent)));
-  expect(paras).toEqual(WANT);
-  await links.nth(5).click();
-  await expect(page.locator('#sidePane .pv-title strong')).toHaveText('b.json');
-  await links.nth(6).click();
-  await expect(page.locator('#sidePane .pv-title strong')).toHaveText('config.json');
+  await test.step('chat', async () => {
+    await page.evaluate((i) => jumpToColumn(columns.find((c) => c.id === i)), CHAT);
+    await page.evaluate((i) => ChatUI.setMode(i, 'chat'), CHAT);
+    const links = col(CHAT).locator('.reply .chat-link.path');
+    await expect(links.first()).toBeVisible();
+    await park();
+    await col(CHAT).screenshot({ path: test.info().outputPath(`chat-${process.platform}.png`) });
+    const paras = await col(CHAT).locator('.reply p').evaluateAll((ps) => ps.map((p) => [...p.querySelectorAll('.chat-link.path')].map((a) => a.textContent)));
+    expect.soft(paras).toEqual(WANT);
+    // the second path of "a.json 和 b.json", and the file under "Application Support"
+    await links.nth(5).click();
+    await expect.soft(page.locator('#sidePane .pv-title strong')).toHaveText('b.json');
+    await links.nth(6).click();
+    await expect.soft(page.locator('#sidePane .pv-title strong')).toHaveText('config.json');
+    // the file under ".claude" (its backslash before the dot kept on Windows)
+    await links.nth(0).click();
+    await expect.soft(page.locator('#sidePane .pv-title strong')).toHaveText('settings.json');
+  });
 });
