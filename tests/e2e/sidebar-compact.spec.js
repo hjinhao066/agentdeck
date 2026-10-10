@@ -40,7 +40,8 @@ test.beforeAll(async () => {
   ['/LOGIN', '永动机', '永动机：每晚复盘', '永动机：派活', '永动机：看板巡检'].forEach((summary, i) => store.pushHistory({
     opId: 'op-compact-hist-' + i, sessionId: 'cap-other-' + i, deviceId: 'dev-other',
     contentHash: crypto.createHash('sha256').update(summary + i).digest('hex'),
-    startedAt: new Date().toISOString(), endedAt: null, summary, turns: [{ prompt: summary, reply: 'ok' }],
+    // each its own time, /LOGIN the newest though the hub got it first: the popup sorts by time
+    startedAt: new Date(Date.now() - i * 60000).toISOString(), endedAt: null, summary, turns: [{ prompt: summary, reply: 'ok' }],
   }));
   server = await startSyncServer({ store, token: TOKEN });
   const profile = path.join(root, 'profile');
