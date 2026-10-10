@@ -7,7 +7,7 @@ AgentDeck 仓库里直接带着几处第三方图标和代码（不是通过 `np
 - [1. Lucide 图标](#1-lucide-图标)（ISC，其中 Feather 派生图标为 MIT）
 - [2. xterm.js](#2-xtermjs)（MIT）：终端组件与插件
 - [3. pdf.js](#3-pdfjs)（Apache License 2.0）：手机网页的 PDF 预览
-- [4. core-js](#4-core-js)（MIT）：内嵌在 pdf.js 打包文件里
+- [4. core-js](#4-core-js)（MIT）：内嵌在 pdf.js 的两个打包文件里
 - [5. 讨论功能的提示词](#5-讨论功能的提示词)（MIT）：改编自三个开源项目
 
 ## 1. Lucide 图标
@@ -341,8 +341,8 @@ THE SOFTWARE.
 
 ## 4. core-js
 
-- 项目：core-js，https://github.com/zloirock/core-js ，版本 3.50.0（`mobile-web/hub/pdf.min.js` 的打包代码里记录了 `version:"3.50.0"`）。
-- 位置：内嵌在 `mobile-web/hub/pdf.min.js` 中。
+- 项目：core-js，https://github.com/zloirock/core-js ，版本 3.50.0（两个打包文件里都记录了 `version:"3.50.0"`）。
+- 位置：内嵌在 `mobile-web/hub/pdf.min.js` 和 `mobile-web/hub/pdf.worker.min.js` 中。
 - 版权行（LICENSE 原文）：
   - `Copyright (c) 2013–2025 Denis Pushkarev (zloirock.ru)`
   - `Copyright (c) 2025–2026 CoreJS Company (core-js.io)`
