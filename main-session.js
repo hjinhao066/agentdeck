@@ -2924,8 +2924,11 @@
       if (!SUB_ACTIONS.includes(message.action)) throw new Error('小队长只能用 create-child、receipts、ledger、tell、peek、read、answer、stop、archive，以及 complete/ask/progress 向总队长汇报；其余命令只有队长能用。');
       if (['main-tell', 'main-peek', 'main-read', 'main-answer', 'main-stop', 'main-archive'].includes(message.action)) ownChild(sub, message.to);
     } else if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
-    if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id &&
-        !['main-receipt-listener-status', 'main-install-result'].includes(message.action)) {
+    // Only the Captain's own work proves a Relay started: messages the program sends
+    // in its name (listener heartbeats, install results, the Todo backend) do not.
+    const programMade = ['main-receipt-listener-status', 'main-install-result', 'main-todo-delivery', 'main-todo-error'].includes(message.action) ||
+      (message.action === 'main-notify-user' && message.nativeWeb === true && /^todo-failures-/.test(String(message.id || '')));
+    if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id && !programMade) {
       s.relayStartup.attempt.output = true; save();
     }
     switch (message.action) {
