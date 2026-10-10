@@ -415,6 +415,8 @@
     return {
       colId: str(t.colId, 160), title: str(t.title, 120), status: str(t.status, 20), ...(typeof t.progress === 'string' ? { progress: t.progress } : {}),
       ...(t.webPhase === 'queued' || t.webPhase === 'running' ? { webPhase: t.webPhase } : {}),
+      // why a waiting task waits (quota, a seat, the session limit): its card says so
+      ...(t.status === 'waiting' && str(t.waitReason, 300) ? { waitReason: str(t.waitReason, 300) } : {}),
       // optional: which project the work was for and when its receipt came in (Artifacts groups by them)
       ...(str(t.project, 120) ? { project: str(t.project, 120) } : {}), ...(Number.isFinite(t.doneAt) && t.doneAt > 0 ? { doneAt: t.doneAt } : {}),
       receipt: r ? { summary: str(r.summary, command ? Infinity : 400), failed: str(r.failed, command ? Infinity : 240), question: str(r.question, command ? Infinity : 400), files: list(r.files), images: list(r.images), explicit: !!r.explicit, ...(command ? { source: 'command' } : {}),
