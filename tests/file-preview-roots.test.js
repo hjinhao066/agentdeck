@@ -12,7 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const { execFileSync } = require('node:child_process');
-const { readPreview, localRefusal, secretPath, plainPath, cleanRoots, defaultExtraRoots } = require('../file-preview-core');
+const { readPreview, localRefusal, secretPath, secretText, plainPath, cleanRoots, defaultExtraRoots } = require('../file-preview-core');
 const { MobileWebServer } = require('../mobile-web');
 const SideMain = require('../side-main');
 
@@ -107,7 +107,7 @@ test('key files are refused in the Settings folders, named or not', async (t) =>
   const dir = 'aiproject/projectAlpha/reports/';
   const secrets = ['.env', '.env.local', '.env.production', 'auth.json', 'server.key', 'cert.pem', 'store.p12', 'store.pfx', 'id_rsa', 'id_rsa.pub', 'id_rsa_backup',
     'id_ed25519', 'id_ed25519.pub', 'id_ed25519-old', 'token.json', 'my_token.txt', 'api-tokens.yaml', 'secretary.txt', 'aws-credential.ini', 'credentials.json',
-    'bot-token.md', 'oauth-secret.md', 'token-usage.env', 'token-usage.md.key',
+    'bot-token.txt', 'oauth-secret.yaml', 'token-usage.env', 'token-usage.md.key',
     'secrets/a.md', '.secrets/plan.md', 'credentials/plan.md', '.ssh/plan.md', 'sub/secrets/deep/plan.md', 'secrets/token-usage.md'].map((rel) => s.put(dir + rel, 'SECRET'));
   for (const file of secrets) {
     assert.deepEqual(await s.read(file, { texts: s.named(file) }), { ok: false, code: 'denied' }, file);
@@ -115,7 +115,7 @@ test('key files are refused in the Settings folders, named or not', async (t) =>
   }
   // delivered documents that only mention the word: reports, pages, PDFs and pictures open
   const documents = { 'token-usage.md': '用量报告', 'api-tokens-report.md': '报告', 'my-secret-plan.markdown': '计划', 'aws-credential-review.html': '<p>审查</p>',
-    'token-usage.pdf': '%PDF-1.4', 'Token-Chart.PNG': 'png' };
+    'token-usage.pdf': '%PDF-1.4', 'Token-Chart.PNG': 'png', 'design-tokens.md': '# 设计变量', 'github-auth.md': '# 登录流程', 'bot-token.md': '# 机器人令牌说明' };
   for (const [rel, data] of Object.entries(documents)) {
     const file = s.put(dir + rel, data);
     const read = await s.read(file, { texts: s.named(file) });
@@ -130,12 +130,13 @@ test('key files are refused in the Settings folders, named or not', async (t) =>
   // a listing leaves the key files out and keeps the documents
   const listing = await s.read(s.at(dir.slice(0, -1)), { texts: s.named(s.at(dir.slice(0, -1))) });
   assert.deepEqual(listing.entries.map((e) => e.name),
-    ['sub', 'token-notes', 'api-tokens-report.md', 'aws-credential-review.html', 'my-secret-plan.markdown', 'review.md', 'Token-Chart.PNG', 'token-usage.md', 'token-usage.pdf']);
+    ['sub', 'token-notes', 'api-tokens-report.md', 'aws-credential-review.html', 'bot-token.md', 'design-tokens.md', 'github-auth.md', 'my-secret-plan.markdown', 'review.md',
+      'Token-Chart.PNG', 'token-usage.md', 'token-usage.pdf']);
   // the words anywhere in a name that is not a document, any case; a document whose name ends in the word
-  for (const name of ['/Users/me/reports/Token.JSON', '/Users/me/reports/My_Token.TXT', '/Users/me/reports/SECRET.txt', '/Users/me/reports/x.CREDENTIALS.md', '/Users/me/x/ID_RSA2',
+  for (const name of ['/Users/me/reports/Token.JSON', '/Users/me/reports/My_Token.TXT', '/Users/me/reports/SECRET.txt', '/Users/me/reports/x.CREDENTIALS.json', '/Users/me/x/ID_RSA2',
     '/Users/me/x/.ENV', '/Users/me/x/Credentials/a.md', '/Users/me/x/Secrets/token-usage.md', 'D:\\aiproject\\p\\reports\\Auth.JSON', 'D:\\aiproject\\p\\reports\\a.PFX',
     'D:\\aiproject\\p\\reports\\secrets\\a.md']) assert.equal(secretPath(name, { home: '/Users/me' }), true, name);
-  for (const name of ['/Users/me/reports/Token-Usage.md', '/Users/me/reports/secret-plan.HTML', '/Users/me/reports/credential-flow.svg', 'D:\\aiproject\\p\\reports\\token-usage.pdf'])
+  for (const name of ['/Users/me/reports/Token-Usage.md', '/Users/me/reports/x.CREDENTIALS.md', '/Users/me/reports/secret-plan.HTML', '/Users/me/reports/credential-flow.svg', 'D:\\aiproject\\p\\reports\\token-usage.pdf'])
     assert.equal(secretPath(name, { home: '/Users/me' }), false, name);
   assert.equal(secretPath('/Users/me/reports/token-notes', { home: '/Users/me', dir: true }), false);
 });
@@ -187,7 +188,7 @@ test('letter case does not matter on Windows, in paths, Settings folders or key 
   const review = s.at('aiproject/projectAlpha/reports/review.md');
   assert.equal((await s.read(review, { texts: s.named(review), extra: [s.at('AIPROJECT/*/REPORTS').toLowerCase()] })).text, '项目报告');
   // capitals do not hide a key file or a key folder
-  for (const rel of ['.ENV', 'Auth.Json', 'SERVER.KEY', 'ID_RSA', 'My-TOKEN.md', 'SECRETS/a.md', '.SSH/a.md', 'Credentials/a.md']) {
+  for (const rel of ['.ENV', 'Auth.Json', 'SERVER.KEY', 'ID_RSA', 'My-TOKEN.txt', 'SECRETS/a.md', '.SSH/a.md', 'Credentials/a.md']) {
     const file = s.put('aiproject/projectAlpha/reports/' + rel, 'SECRET');
     assert.deepEqual(await s.read(file, { texts: s.named(file) }), { ok: false, code: 'denied' }, rel);
     assert.deepEqual(await s.read(file.toLowerCase(), { texts: s.named(file.toUpperCase()) }), { ok: false, code: 'denied' }, rel);
@@ -381,6 +382,87 @@ test('key.txt, *_key.txt, service accounts and Terraform state are refused; keyb
     'serviceAccount.json', 'service-account-key.json', 'terraform.tfstate', 'terraform.tfstate.backup', 'prod.tfstate.json', 'TERRAFORM.TFSTATE'].map(at));
   await readable(s, ['keyboard.md', 'monkey.txt', 'keynote-summary.md', 'key-findings.txt', 'hotkeys.txt', 'token-usage.md', 'service-account-setup.md', 'terraform-notes.md',
     'tfstate-migration.md'].map((name) => s.put('aiproject/projectAlpha/reports/' + name, '文档')));
+});
+
+// ---- review round 2: env files by any name, keys inside a text, backup copies ---------------
+test('an env file is refused however it is named, and so is a .private or private folder', async (t) => {
+  const s = setup(t);
+  const at = (rel) => s.put('aiproject/Playground/agent-collaboration/' + rel, 'TOKEN=1');
+  await refusedEverywhere(s, ['deploy.env', 'private-login.env', 'final-deploy.env', 'UI-TEST.ENV', 'app.env.prod', 'site.env.local', '.env', '.env.production',
+    '.private/notes.md', '.private/deploy.env', 'private/readme.txt', 'x/.PRIVATE/a.md'].map(at));
+  await readable(s, ['env.md', 'environment.md', 'envelope.txt', 'environment-setup.md', 'env-vars-guide.md', 'private-notes.md', 'privates.md'].map((rel) => s.put('aiproject/Playground/docs/' + rel, '说明')));
+});
+
+// Built at run time, so no key-shaped text sits in the repository.
+const crypto = require('node:crypto');
+const randomKey = (length) => crypto.randomBytes(length).toString('base64').replace(/[^A-Za-z0-9]/g, '').padEnd(length, '7').slice(0, length - 2) + '42';
+const hexKey = (length) => crypto.randomBytes(length).toString('hex').slice(0, length);
+
+test('the phone is not sent a text that holds a key, whatever the file is called', async (t) => {
+  const s = setup(t);
+  const dir = 'aiproject/Playground/agent-collaboration/workbench/phase2b/';
+  const texts = {
+    'config.yaml': `model:\n  provider: openrouter\n  api_key: ${'sk' + '-or-v1-' + randomKey(64)}\n`,
+    'after-migrate-raw-config.yaml': `gateway:\n  token: ${hexKey(72)}\n  port: 8080\n`,
+    'settings.json': `{\n  "apiKey": "${randomKey(40)}",\n  "theme": "dark"\n}\n`,
+    'deploy-notes.txt': `export GITHUB_TOKEN=${'ghp' + '_' + randomKey(36)}\n`,
+    'handover.md': `# 交接\n\n临时密钥：${'sk' + '-ant-api03-' + randomKey(80)}\n`,
+    'id.txt': `${'-----BEGIN ' + 'OPENSSH PRIVATE KEY-----'}\nb3BlbnNzaC1rZXktdjEAAAAA\n${'-----END ' + 'OPENSSH PRIVATE KEY-----'}\n`,
+    'aws.md': `访问密钥 ${'AKIA' + randomKey(16).toUpperCase().replace(/[^A-Z0-9]/g, 'Q')}\n`,
+    'slack.ini': `[bot]\nslack = ${'xoxb' + '-' + hexKey(12) + '-' + randomKey(24)}\n`,
+    'maps.js': `const key = '${'AIza' + randomKey(35)}';\n`,
+    'db-example.txt': `DB_PASSWORD=${randomKey(28)}\n`,
+    'client.json': `{"client_secret": "${randomKey(32)}"}`,
+    // a Telegram bot token, as the Hermes configs hold it: the colon would end a field's value
+    'telegram-config.yaml': `platforms:\n  telegram:\n    token: ${'81234' + '56789'}:${'AA' + randomKey(33)}\n`,
+    'bot.md': `机器人：${'7012345' + '678'}:${'AA' + randomKey(33)}\n`,
+  };
+  for (const [name, text] of Object.entries(texts)) {
+    const file = s.put(dir + name, text);
+    assert.deepEqual(await s.read(file, { texts: s.named(file) }), { ok: false, code: 'denied' }, name);
+  }
+  // named through the folder too
+  assert.deepEqual(await s.read(s.at(dir + 'config.yaml'), { texts: [`见 ${s.at(dir)}`] }), { ok: false, code: 'denied' });
+  // placeholders, code and ordinary numbers are not keys
+  const fine = {
+    'setup.md': '# 配置\n\n```yaml\napi_key: sk-xxxxxxxxxxxxxxxxxxxxxxxx\ntoken: your-api-key-goes-here-1234\n```\n',
+    'env.md': 'DB_PASSWORD=${DB_PASSWORD}\nAPI_KEY=<your key>\npassword: ********************\n',
+    'code.js': 'const token = process.env.GITHUB_TOKEN_FOR_CI_2;\nconst secret = config.auth.clientSecret;\n',
+    'aws-docs.md': '示例密钥 AKIAIOSFODNN7EXAMPLE，别用真的。\n',
+    'token-usage.md': `| 日期 | token 用量 |\n| --- | --- |\n| 10-09 | 12345678901234567890 |\n\ncommit ${hexKey(40)}\n`,
+    'report.md': '# 验收\n\nsk-learn 的版本是 1.5.2，task-1234567890-abcdefgh 已完成。\n',
+    'times.md': '开始 2026-10-09 18:38:10，耗时 1234567890:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n',
+  };
+  for (const [name, text] of Object.entries(fine)) {
+    const file = s.put(dir + 'ok/' + name, text);
+    assert.equal((await s.read(file, { texts: s.named(file) })).text, text, name);
+  }
+  // the check reads only what would be sent, and a long blob without spaces costs one pass
+  const blob = 'a1'.repeat(600 * 1024);
+  const started = Date.now();
+  assert.equal(secretText(blob), false);
+  assert.equal(secretText('token' + '='.repeat(10) + blob), false);
+  assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
+  // the desktop pane is the user's own screen: it still shows the file
+  assert.equal(localRefusal(s.at(dir + 'config.yaml'), { home: s.at('home') }), '');
+});
+
+test('a backup copy is judged by the name it was copied from', async (t) => {
+  const s = setup(t);
+  const at = (name) => s.put('aiproject/projectAlpha/reports/' + name, 'S');
+  await refusedEverywhere(s, ['auth.json.bak', 'auth.json.old', 'AUTH.JSON.BAK', 'key.txt.bak', '.env.orig', 'deploy.env~', 'credentials.json.1', 'service-account.json.backup',
+    'token.json.save', 'terraform.tfstate.tmp', 'id_rsa~', 'server.pem.bak.2', '.npmrc.bak', 'Local State.old'].map(at));
+  await readable(s, ['backup-notes.md', 'old-plan.md', 'review.md.bak', 'report.md.old', 'notes.txt.1', 'tmp-results.md'].map((name) => s.put('aiproject/projectAlpha/reports/' + name, '文档')));
+});
+
+test('OAuth, Firebase admin, Playwright sign-in, kubeconfig, rclone, WireGuard and DPAPI files are refused by name', async (t) => {
+  const s = setup(t);
+  const at = (name) => s.put('aiproject/Playground/tool/' + name, '{}');
+  await refusedEverywhere(s, ['oauth-client.json', 'oauth_tokens.json', 'OAuth2.json', 'storage_state.json', 'storageState.json', 'storage-state-admin.json',
+    'my-app-firebase-adminsdk-ab12c.json', 'kubeconfig', 'kubeconfig.yaml', 'rclone.conf', 'wg0.conf', 'wg-home.conf', 'master.dpapi', 'mykey.txt', 'openaikey.txt',
+    'deepseekkey.txt'].map(at));
+  await readable(s, ['monkey.txt', 'turkey.md', 'hockey-notes.txt', 'kube-notes.md', 'wget.conf', 'oauth-flow.md', 'storage-notes.json', 'adminsdk-guide.md', 'keyboard.md']
+    .map((name) => s.put('aiproject/Playground/tool/' + name, '说明')));
 });
 
 test('a file with a second name (a hard link) is not sent to the phone', async (t) => {

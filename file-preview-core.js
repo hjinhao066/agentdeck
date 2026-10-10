@@ -23,9 +23,10 @@ const DEFAULT_ROOTS = ['reports', path.join('.agents', 'boards')];
 const EXTRA_ROOTS = { win32: ['D:\\aiproject\\Playground', 'D:\\aiproject\\*\\reports'] };
 const MAX_EXTRA_ROOTS = 20;
 
-// A folder with one of these names holds keys, wherever it is. The last three are a browser profile's storage.
+// A folder with one of these names holds keys, wherever it is (.private holds deploy logins on D:). The last three
+// are a browser profile's storage.
 const SECRET_DIRS = new Set(['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.password-store', 'secrets', '.secrets', 'keychains',
-  'agentdeck-remote', '.git', 'gcloud', '.1password', 'credentials', '.credentials', 'local storage', 'session storage', 'indexeddb']);
+  'agentdeck-remote', '.git', 'gcloud', '.1password', 'credentials', '.credentials', '.private', 'private', 'local storage', 'session storage', 'indexeddb']);
 // Files that carry tokens or shell exports, wherever they are: a project folder on D: has them too.
 const SECRET_FILES = new Set(['.netrc', '.npmrc', '.pypirc', '.git-credentials', '.claude.json', '.zshrc', '.zshenv', '.zprofile', '.bashrc', '.bash_profile', '.profile',
   '.zsh_history', '.bash_history', '.agents-vault-pass', '.gitconfig', '.boto', '.s3cfg', '.pgpass', '.my.cnf', '.envrc', '.dockercfg']);
@@ -37,9 +38,15 @@ const BROWSER_MARK = 'Local State';
 // Formats with nothing to show as text or picture: the page names the file and its size.
 const BINARY_EXT = /\.(?:zip|gz|tgz|bz2|xz|7z|rar|tar|dmg|pkg|iso|exe|dll|so|dylib|bin|app|asar|node|class|jar|o|a|wasm|sqlite|db|docx?|xlsx?|pptx?|pages|numbers|keynote|mp[34]|m4[av]|mov|avi|mkv|wav|flac|ogg|webm|heic|tiff?|psd|ttf|otf|woff2?)$/i;
 const SECRET_EXT = /\.(?:pem|key|p12|pfx|jks|keystore|kdbx|ovpn|asc|gpg|ppk|mobileprovision|cer|crt|der)$/;
-// credentials.json, .credentials.json, auth.json, bot-token.txt, oauth_creds.json, api_key.txt, key.txt, openai_key.txt …
-// (keyboard.md and monkey.txt are not: the word has to stand alone at the end of the name.)
-const SECRET_STEM = /(?:^|[._-])(?:secrets?|credentials?|creds|passwords?|passwd|tokens?|api[_-]?keys?|private[_-]?keys?|keys?|auth|cookies?|vault[_-]?pass)$/;
+// A name ending in one of these words: api_key.txt, key.txt, openai_key.txt, oauth_creds.json, passwords.md …
+// (keyboard.md and monkey.txt are not: the word has to stand alone at the end of the name, or follow a word that
+// says whose key it is: mykey.txt, openaikey.txt.)
+const SECRET_STEM = /(?:(?:^|[._-])(?:creds|passwords?|passwd|api[_-]?keys?|private[_-]?keys?|keys?|cookies?|vault[_-]?pass)|(?:my|api|openai|anthropic|claude|gemini|deepseek|groq|access|secret|private|master|license)keys?)$/;
+// These words at the end refuse a name too (credentials.json, auth.json, bot-token.txt), except a delivered
+// document's (design-tokens.md, github-auth.md): what a document holds is checked when it is read (`secretText`).
+const LOOSE_STEM = /(?:^|[._-])(?:secrets?|credentials?|tokens?|auth)$/;
+// What a backup copy adds to a name: auth.json.bak is auth.json, key.txt.old is key.txt.
+const BACKUP_TAIL = /(?:\.(?:bak|old|orig|backup|save|tmp|\d+)|~)+$/;
 // A file whose name holds one of these words anywhere is refused too (token.json, my_token.txt), unless it is
 // a delivered document: a report, page, PDF or picture (token-usage.md). Those still answer to the exact names,
 // extensions and stems above and to SECRET_DIRS. Folders are judged by SECRET_DIRS only.
@@ -47,7 +54,10 @@ const SECRET_WORD = /token|secret|credential/;
 const DOCUMENT_EXT = /\.(?:md|markdown|html?|pdf|png|jpe?g|gif|webp|bmp|ico|svg|avif)$/;
 // Exact names, any case: cloud service accounts, Terraform state (it holds every secret it created), and a
 // browser profile's sign-in files in case one sits outside its user-data folder (Chromium's and Firefox's).
-const SECRET_NAME = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519).*|known_hosts|authorized_keys|\.htpasswd|login\.keychain(?:-db)?|vps-access\.json|.*vault-pass.*|service[-_]?account.*\.json|.*\.tfstate(?:\..*)?|local state|(?:secure )?preferences|login data.*|web data.*|history(?:-journal)?|network persistent state|logins\.json|key[34]\.db|cookies\.sqlite.*)$/;
+// An env file however it is named: .env, .env.local, deploy.env, private-login.env, app.env.prod (env.md and
+// environment.md are not). Then OAuth and Firebase admin files, Playwright's saved sign-in, kubeconfig, rclone and
+// WireGuard configs, DPAPI blobs.
+const SECRET_NAME = /^(?:.*\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519).*|known_hosts|authorized_keys|\.htpasswd|login\.keychain(?:-db)?|vps-access\.json|.*vault-pass.*|service[-_]?account.*\.json|.*\.tfstate(?:\..*)?|local state|(?:secure )?preferences|login data.*|web data.*|history(?:-journal)?|network persistent state|logins\.json|key[34]\.db|cookies\.sqlite.*|oauth.*\.json|storage[-_]?state.*\.json|.*adminsdk.*\.json|kubeconfig.*|rclone\.conf|wg(?:\d+|[-_][^.]*)\.conf|.*\.dpapi)$/;
 
 const insensitive = (platform) => platform === 'darwin' || platform === 'win32';
 const fold = (value, platform) => insensitive(platform) ? value.toLowerCase() : value;
@@ -63,10 +73,15 @@ function secretPath(real, { home, denied = [], platform = process.platform, lib 
   const parts = lower.split(/[\\/]+/).filter(Boolean);
   const name = parts[parts.length - 1] || '';
   if (parts.slice(0, -1).some((part) => SECRET_DIRS.has(part)) || SECRET_DIRS.has(name)) return true;
-  if (SECRET_NAME.test(name) || SECRET_EXT.test(name) || SECRET_FILES.has(name)) return true;
-  if (!dir && SECRET_WORD.test(name) && !DOCUMENT_EXT.test(name)) return true;
-  const stem = name.replace(/\.[a-z0-9]{1,8}$/, '');
-  if (SECRET_STEM.test(stem) || SECRET_STEM.test(name)) return true;
+  // The name as it is, and without a backup copy's tail.
+  const secretName = (value) => {
+    if (SECRET_NAME.test(value) || SECRET_EXT.test(value) || SECRET_FILES.has(value)) return true;
+    const document = DOCUMENT_EXT.test(value);
+    if (!dir && SECRET_WORD.test(value) && !document) return true;
+    const stem = value.replace(/\.[a-z0-9]{1,8}$/, '');
+    return SECRET_STEM.test(stem) || SECRET_STEM.test(value) || (!document && (LOOSE_STEM.test(stem) || LOOSE_STEM.test(value)));
+  };
+  if (secretName(name) || secretName(name.replace(BACKUP_TAIL, ''))) return true;
   // Inside an agent CLI's folder, wherever it is: only what reads as a document.
   if (parts.slice(0, -1).some((part) => CLI_DIR.test(part)) && !CLI_READABLE.test(name)) return true;
   if (denied.some((dir) => dir && inside(real, dir, platform, lib))) return true;
@@ -74,6 +89,30 @@ function secretPath(real, { home, denied = [], platform = process.platform, lib 
     const top = lib.relative(fold(home, platform), fold(real, platform)).toLowerCase().split(/[\\/]+/);
     if (top[0] === 'library' && ['keychains', 'cookies', 'accounts', 'mail', 'messages', 'safari'].includes(top[1])) return true;
   }
+  return false;
+}
+
+// ---- what a text holds ----
+// A key in a file whose name does not say so (a copied config.yaml): the phone is not sent text holding a private
+// key block, a provider key by its prefix, or a key, token, secret or password field (YAML, JSON or env) set to a
+// long random value. Placeholders (sk-xxxx, your-api-key, <token>) and code (process.env.X) are not keys.
+// Every pattern is bounded and starts at a word edge, so a long blob without spaces costs one pass.
+const PRIVATE_KEY_BLOCK = /-----BEGIN (?:[A-Z0-9]+ ){0,3}PRIVATE KEY(?: BLOCK)?-----/;
+const KEY_PREFIX = /(?<![A-Za-z0-9])(?:sk-(?:ant-|or-|proj-|live-|test-)?|gh[pousr]_|github_pat_|AKIA|xox[abposr]-|AIza)([A-Za-z0-9_-]{16,200})/g;
+const KEY_FIELD = /(?<![A-Za-z0-9_.-])["']?[A-Za-z0-9_.-]{0,40}(?:api[_-]?key|apikey|token|secret|passw(?:or)?d|access[_-]?key|private[_-]?key|credential)[A-Za-z0-9_.-]{0,40}["']?[ \t]{0,5}[:=][ \t]{0,5}["']?([A-Za-z0-9_+/=.~-]{20,200})/gi;
+// A Telegram bot token: the bot's number, a colon, 35 random characters (the colon stops KEY_FIELD's value).
+const TELEGRAM_TOKEN = /(?<![0-9])[0-9]{8,10}:([A-Za-z0-9_-]{35})(?![A-Za-z0-9_-])/g;
+const PLACEHOLDER =/x{4,}|X{4,}|\*{3,}|your|example|placeholder|changeme|dummy|redacted|sample|fake|test[_-]?key|\.\.\./i;
+function randomValue(value) {
+  if (PLACEHOLDER.test(value) || /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/.test(value)) return false;
+  return (value.match(/[0-9]/g) || []).length >= 2 && /[A-Za-z]/.test(value) && new Set(value).size >= 10;
+}
+function secretText(text) {
+  if (typeof text !== 'string' || !text) return false;
+  if (PRIVATE_KEY_BLOCK.test(text)) return true;
+  for (const match of text.matchAll(KEY_PREFIX)) if (randomValue(match[1])) return true;
+  for (const match of text.matchAll(KEY_FIELD)) if (randomValue(match[1])) return true;
+  for (const match of text.matchAll(TELEGRAM_TOKEN)) if (randomValue(match[1])) return true;
   return false;
 }
 
@@ -292,8 +331,11 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], extra
     const bytes = buffer.subarray(0, bytesRead);
     // Bytes that are not text (a NUL near the top) are not shown as text.
     if (bytes.subarray(0, 8000).includes(0)) return { ...base, kind: 'other' };
-    return { ...base, kind, lang: HubCore.languageFor(name), truncated: stat.size > LIMITS.text, text: bytes.toString('utf8') };
+    const text = bytes.toString('utf8');
+    // What would be sent is read for keys first; a hit is refused like a key file.
+    if (secretText(text)) return refuse('denied');
+    return { ...base, kind, lang: HubCore.languageFor(name), truncated: stat.size > LIMITS.text, text };
   } finally { await handle.close(); }
 }
 
-module.exports = { readPreview, localRefusal, secretPath, inBrowserProfile, plainPath, cleanRoots, defaultExtraRoots, absolutePath, mentionedPaths, inside, LIMITS, DEFAULT_ROOTS };
+module.exports = { readPreview, localRefusal, secretPath, secretText, inBrowserProfile, plainPath, cleanRoots, defaultExtraRoots, absolutePath, mentionedPaths, inside, LIMITS, DEFAULT_ROOTS };

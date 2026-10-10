@@ -266,15 +266,22 @@ iOS 内嵌 PDF 只显示第一页，所以不用 iframe）、图片、纯文本�
 - 先解析真实路径（`..`、符号链接、Windows junction、8.3 短文件名都展开）再判断；点名一个符号链接不等于点名它指向的文件。系统目录一律不给。
   Windows 上大小写不分、正反斜杠混用都按同一路径处理；`\\?\`、`\\.\`、UNC（`\\电脑\共享`）路径、NTFS 备用数据流（`a.md:xxx`、`a.md::$DATA`）
   和 Windows 会自动去掉的结尾点或空格（`.env.`）一律拒绝；`a.md:12` 在 Windows 上永远是 `a.md` 的第 12 行。
-- 密钥类一律拒绝，点名也不行：`.ssh`、`.gnupg`、`.aws`、`secrets`、`.secrets`、`credentials` 等目录，`.agents-vault-pass`、`.env*`、`auth.json`、
+- 密钥类一律拒绝，点名也不行：`.ssh`、`.gnupg`、`.aws`、`secrets`、`.secrets`、`credentials`、`.private`、`private` 等目录，`.agents-vault-pass`、
+  env 文件不管怎么起名（`.env`、`.env.local`、`deploy.env`、`app.env.prod`；`env.md`、`environment.md` 不算）、`auth.json`、
   `id_rsa*`、`id_ed25519*`、`*.pem/*.key/*.p12/*.pfx` 等，文件名里任何位置带 token、secret、credential 的非文档文件（`token.json`、`my_token.txt`；交付文档 `.md/.markdown/.html/.pdf` 和图片除外，
-  所以 `token-usage.md` 能看，但它仍受上面的精确规则和目录黑名单约束），名字以 token/secret/auth/password/key 等结尾的文件（`bot-token.md`、`key.txt`、
-  `openai_key.txt` 也拒，`keyboard.md` 不拒），`service-account*.json`、`*.tfstate*`，
+  所以 `token-usage.md`、`design-tokens.md`、`github-auth.md` 能看，但仍受精确规则、目录黑名单和下面的内容检查约束），名字以 password/key/creds/cookie 等结尾的文件（`key.txt`、
+  `openai_key.txt`、`mykey.txt` 也拒，`keyboard.md`、`monkey.txt` 不拒），名字以 token/secret/credential/auth 结尾的非文档文件，`service-account*.json`、`*.tfstate*`、
+  `oauth*.json`、`storage_state*.json`（Playwright 登录态）、`*adminsdk*.json`、`kubeconfig*`、`rclone.conf`、`wg0.conf`、`*.dpapi`，
+  备份副本按原名判断（判断前去掉结尾的 `.bak/.old/.orig/.backup/.save/.tmp/~/.数字`：`auth.json.bak` 就是 `auth.json`），
   任何位置的 `.npmrc`、`.netrc`、`.pypirc`、`.pgpass`、`.my.cnf`、`.boto`、`.s3cfg`、`.envrc`、`.dockercfg`、`.git-credentials`、`.gitconfig`、shell 配置和历史，
   任何位置的 `.claude*`、`.codex`、`.gemini`、`.cursor`、`.config` 等目录里除文档和图片外的文件，`~/.config/agentdeck-remote`、AgentDeck 自己的数据目录。
 - 浏览器登录态：某一层父目录里有 `Local State` 文件的（Chromium 用户数据目录：Chrome、Edge、自动化用的 profile），整个目录和里面的一切都拒绝，
   上一层文件夹列表里也不显示这个目录；`Local State`、`Preferences`、`Secure Preferences`、`Login Data*`、`Web Data*`、`History`、`logins.json`、
   `key3/4.db`、`cookies.sqlite` 放在别处也按名字拒绝，`Local Storage`、`Session Storage`、`IndexedDB` 目录一律拒绝。
+- 手机端发文本前先查内容（`secretText`），命中就答「不在范围内」：私钥块（`-----BEGIN … PRIVATE KEY-----`）；`sk-`、`sk-ant-`、`sk-or-`、`ghp_`、`github_pat_`、
+  `AKIA`、`xox?-`、`AIza` 开头后面跟随机串；Telegram 机器人令牌（数字:35 位随机串）；`api_key`、`token`、`secret`、`password` 这类字段（YAML、JSON、env 写法）
+  后面跟 20 位以上、至少两个数字的随机值。占位符（`sk-xxxx`、`your-api-key`、`<token>`、`****`）和代码引用（`process.env.X`）不算。只查要发出去的那部分（最多 1MB），
+  图片和 PDF 不查。桌面预览栏不查内容（本机自己的屏幕）。
 - 手机端不发有多个名字的文件（硬链接）：realpath 不展开硬链接，换个名字就看不出它是什么。
 - 设置里的文件夹不带 `*` 的（如 Playground），点名它本身只列出目录，不连带里面的文件；点名要在它下面至少一层。带 `*` 的（某个项目的 reports）点名本身就连带。
 - 桌面右侧预览栏走同一套拒绝规则（`localRefusal`）：密钥类文件和上面那些 Windows 路径不显示；位置不限，因为是本机用户自己点的。用编辑器打开不受影响。
