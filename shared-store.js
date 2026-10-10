@@ -26,6 +26,32 @@ const SESSION_ID = /^[A-Za-z0-9._-]{1,160}$/;
 const MUTABLE_KEYS = ['project', 'title', 'detail', 'status', 'flag', 'order', 'depends_on', 'assignee', 'session_id', 'latest_receipt', 'verify', 'rework_count', 'archived', 'consecutive_failures', 'important', 'attempt_id', 'attempt_closed', 'review_session', 'review_verdict', 'last_event', 'last_failure_attempt', 'dispatch_session_id', 'dispatch_claim', 'start_previous_status', 'created', 'session_host', 'session_bound_at', 'dispatch_host', 'dispatch_bound_at', 'dispatch_wait', 'resource_failure', 'user_question', 'needs_user_entry', 'review_round', 'exec_receipt', 'review_claim', 'review_block', 'review_reject'];
 const SECRET_KEY = /^(token|api[_-]?key|password|secret|authorization|cookie|private[_-]?key|access[_-]?token|refresh[_-]?token|bearer)$/i;
 
+// A card's last_event reads `<attempt>:<type>:<source>:<sha256 of the message>`. A
+// `complete` that came from the agent's own `complete` command is the authoritative
+// result; `fallback` (the process ended with no receipt) and automatic failures are
+// guesses made by whichever machine noticed the exit first.
+function eventOf(event) {
+  const match = /:([a-z]+):([^:]*):[0-9a-f]+$/.exec(typeof event === 'string' ? event : '');
+  return match ? { type: match[1], source: match[2] } : null;
+}
+function isCommandComplete(event) {
+  const parsed = eventOf(event);
+  return !!parsed && parsed.type === 'complete' && parsed.source === 'command';
+}
+function isCommandVerdict(event) {
+  const parsed = eventOf(event);
+  return !!parsed && parsed.source === 'command' && (parsed.type === 'complete' || parsed.type === 'failed');
+}
+// What one attempt writes on a card. A writer whose base is older than the card's
+// authoritative completion cannot change any of it: that attempt began without
+// knowing the card was finished.
+const ATTEMPT_KEYS = new Set(['status', 'flag', 'session_id', 'attempt_id', 'attempt_closed', 'last_event', 'last_failure_attempt', 'latest_receipt', 'start_previous_status', 'session_host', 'session_bound_at', 'dispatch_session_id', 'dispatch_claim', 'dispatch_host', 'dispatch_bound_at', 'dispatch_wait', 'resource_failure', 'user_question', 'needs_user_entry', 'consecutive_failures', 'review_session', 'review_verdict', 'review_claim', 'review_block', 'review_reject', 'review_round', 'exec_receipt']);
+// These only ever start another delivery, so a finished card takes no new value for them.
+const DISPATCH_KEYS = ['dispatch_claim', 'dispatch_session_id', 'dispatch_host', 'dispatch_bound_at', 'dispatch_wait'];
+// What the attempt an authoritative completion replaces leaves behind.
+const CLEARED_BY_COMPLETE = ['flag', 'resource_failure', 'user_question', 'needs_user_entry', ...DISPATCH_KEYS];
+const COMPLETE_SEEN_CAP = 20;
+
 function isDeviceId(value) { return typeof value === 'string' && DEVICE_ID.test(value); }
 function isSessionId(value) { return typeof value === 'string' && SESSION_ID.test(value) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value); }
 function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
@@ -45,13 +71,31 @@ function atomicWrite(file, text) {
   const tmp = file + '.' + crypto.randomUUID() + '.tmp';
   const fd = fs.openSync(tmp, 'wx', 0o600);
   try {
-    fs.writeFileSync(fd, text);
-    fs.fsyncSync(fd);
+    try {
+      fs.writeFileSync(fd, text);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, file);
   } finally {
-    fs.closeSync(fd);
+    // A write that failed (a full disk) leaves no empty temp file behind either.
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {}
   }
-  try { fs.renameSync(tmp, file); }
-  finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
+}
+
+// A save the disk refused: 507 when it is full, 500 otherwise; `code` is kept for the log.
+function storageError(err) {
+  const full = err && (err.code === 'ENOSPC' || err.code === 'EDQUOT');
+  return Object.assign(reject(full ? 507 : 500, full ? 'storage-full' : 'Sync store could not be written.'), { code: err && err.code });
+}
+
+// IDs are untrusted keys, including __proto__ and inherited method names.
+// JSON.parse restores ordinary objects, so every index is rebuilt after parsing.
+function indexed(data) {
+  data.ops = data.ops || {};
+  for (const key of ['devices', 'cards', 'ops', 'history']) data[key] = Object.assign(Object.create(null), data[key]);
+  return data;
 }
 
 function emptyData() {
@@ -137,7 +181,7 @@ function compactReceipt(saved, at) {
 }
 
 function publicCard(card) {
-  const { trail, ...rest } = card;
+  const { trail, sealed, completeSeen, ...rest } = card;
   return clone(rest);
 }
 
@@ -188,6 +232,8 @@ class SharedStore {
     this.leaseMs = leaseMs;
     this.now = now;
     this.data = this._load();
+    // What the file holds: a save the disk refuses puts the store back to it.
+    this.saved = JSON.stringify(this.data);
     this.uploads = new Map();
     this.staged = 0;
   }
@@ -204,10 +250,7 @@ class SharedStore {
     if (!data || data.version !== 1 || !data.devices || !data.cards || !data.history) {
       throw reject(500, 'Sync store schema is not version 1. Refusing to overwrite it.');
     }
-    data.ops = data.ops || {};
-    // IDs are untrusted keys, including __proto__ and inherited method names.
-    // JSON.parse restores ordinary objects, so rebuild every index on load too.
-    for (const key of ['devices', 'cards', 'ops', 'history']) data[key] = Object.assign(Object.create(null), data[key]);
+    indexed(data);
     // Older hubs kept the whole transcript or card in each receipt, and no time.
     const at = new Date(this.now()).toISOString();
     for (const saved of Object.values(data.ops)) compactReceipt(saved, at);
@@ -215,9 +258,18 @@ class SharedStore {
     data.seq = Number.isInteger(data.seq) ? data.seq : 0;
     return data;
   }
+  // Every change is saved before it is answered. A save the disk refuses undoes the
+  // change (the store goes back to what its file holds) and the request fails, so
+  // a retry is applied again instead of answered from a receipt the disk never had.
   _save() {
     this.data.seq += 1;
-    atomicWrite(this.file, JSON.stringify(this.data));
+    const text = JSON.stringify(this.data);
+    try { atomicWrite(this.file, text); }
+    catch (err) {
+      this.data = indexed(JSON.parse(this.saved));
+      throw storageError(err);
+    }
+    this.saved = text;
   }
   _remember(opId, status, body) {
     const now = this.now();
@@ -283,6 +335,20 @@ class SharedStore {
     }
     return changed;
   }
+  // The revision at which the card took the authoritative completion it holds, or null.
+  _sealedAt(card) {
+    if (!isCommandComplete(card.last_event)) return null;
+    if (card.sealed && card.sealed.event === card.last_event) return card.sealed.revision;
+    // A card completed before the hub kept this: the latest revision that touched last_event.
+    let at = null;
+    for (const item of card.trail || []) if ((item.keys || []).includes('last_event')) at = Math.max(at === null ? 0 : at, item.revision);
+    return at === null ? card.revision : at;
+  }
+  _noteSeal(card, at = card.revision) {
+    if (!isCommandComplete(card.last_event) || (card.sealed && card.sealed.event === card.last_event)) return;
+    card.sealed = { revision: at, event: card.last_event };
+    card.completeSeen = [...(card.completeSeen || []).filter((event) => event !== card.last_event), card.last_event].slice(-COMPLETE_SEEN_CAP);
+  }
   pushTask({ opId, cardId, expectedRevision, deviceId, set }) {
     if (!isDeviceId(opId) && !(typeof opId === 'string' && /^[A-Za-z0-9_-]{8,160}$/.test(opId))) throw reject(400, 'Invalid opId.');
     if (typeof cardId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(cardId)) throw reject(400, 'Invalid card id.');
@@ -304,18 +370,55 @@ class SharedStore {
         trail: [{ revision: 1, keys: Object.keys(clean) }],
       };
       this.data.cards[cardId] = card;
+      this._noteSeal(card);
       const saved = this._remember(opId, 200, { card: publicCard(card), merged: false, conflict: false });
       this._save();
       return saved;
     }
     if (expectedRevision > card.revision) throw reject(409, 'Revision is ahead of the server.');
     const changed = expectedRevision === card.revision ? new Set() : this._changedSince(card, expectedRevision);
+    const incoming = clean.last_event;
+    // The agent's own `complete` is the authoritative result. When it reaches the hub late,
+    // after another machine has already written a guess over the same card (a fallback
+    // for an exit with no receipt, an automatic failure, the next attempt's start), the
+    // completion wins field by field; the guess is kept in the conflict record. It needs the
+    // other machine to have written a run event since the writer's base: a card a person
+    // moved by hand (which writes no event) is not taken back by a late completion.
+    const authoritative = isCommandComplete(incoming) && changed.has('last_event') && !same(card.last_event, incoming)
+      && !isCommandVerdict(card.last_event) && !(card.completeSeen || []).includes(incoming);
+    // A writer based before the card was completed started its attempt without knowing
+    // that: it cannot change what an attempt writes.
+    const sealedAt = this._sealedAt(card);
+    const stale = sealedAt !== null && expectedRevision < sealedAt;
+    const prior = {};
+    for (const key of DISPATCH_KEYS) if (key in card) prior[key] = clone(card[key]);
     const applied = {};
     const conflicts = {};
     for (const [key, value] of Object.entries(clean)) {
       if (same(card[key], value)) continue;
-      if (changed.has(key)) conflicts[key] = { kept: clone(card[key]), other: clone(value) };
+      if (changed.has(key) && authoritative) {
+        conflicts[key] = { kept: clone(value), other: clone(card[key]), reason: 'complete-over-guess' };
+        applied[key] = value; card[key] = value;
+      } else if (changed.has(key)) conflicts[key] = { kept: clone(card[key]), other: clone(value) };
+      else if (stale && ATTEMPT_KEYS.has(key)) conflicts[key] = { kept: clone(card[key]), other: clone(value), reason: 'stale-after-complete' };
       else { applied[key] = value; card[key] = value; }
+    }
+    if (authoritative) {
+      for (const key of CLEARED_BY_COMPLETE) {
+        if (card[key] == null || key in clean) continue;
+        conflicts[key] = { kept: null, other: clone(card[key]), reason: 'complete-over-guess' };
+        if (key === 'user_question' || key === 'needs_user_entry') delete card[key]; else card[key] = null;
+        applied[key] = null;
+      }
+    }
+    // A finished card is not claimed or handed to a session again.
+    if (card.status === 'done') {
+      for (const key of DISPATCH_KEYS) {
+        if (!(key in applied) || applied[key] == null) continue;
+        conflicts[key] = { kept: key in prior ? prior[key] : null, other: clone(applied[key]), reason: 'claim-on-done' };
+        if (key in prior) card[key] = prior[key]; else delete card[key];
+        delete applied[key];
+      }
     }
     let conflict = null;
     if (Object.keys(conflicts).length) {
@@ -331,6 +434,7 @@ class SharedStore {
       card.updatedByDevice = deviceId;
       card.updated = new Date(this.now()).toISOString();
       card.trail = [...(card.trail || []), { revision: card.revision, keys: touched }].slice(-TRAIL_CAP);
+      this._noteSeal(card, 'last_event' in applied || sealedAt === null ? card.revision : sealedAt);
     }
     const status = conflict ? 409 : 200;
     const saved = this._remember(opId, status, {
@@ -405,7 +509,14 @@ class SharedStore {
     const key = sessionId + '@' + deviceId;
     const existing = this.data.history[key];
     if (existing && existing.contentHash === contentHash) {
-      const saved = this._remember(opId, 200, historyReceipt(existing, true));
+      // Sent again with the times the hub's copy lacks (clients before 2.0.5 sent none
+      // for saved chats): they are filled in; the turns and their hash stay.
+      const times = {};
+      for (const [name, value] of [['startedAt', startedAt], ['endedAt', endedAt]]) {
+        if (!existing[name] && typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value))) times[name] = value;
+      }
+      if (Object.keys(times).length) this.data.history[key] = { ...existing, ...times };
+      const saved = this._remember(opId, 200, historyReceipt(this.data.history[key], true));
       this._save();
       return saved;
     }

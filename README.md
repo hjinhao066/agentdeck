@@ -1426,7 +1426,10 @@ heartbeat, which covers shutdown and sleep. Task cards, their fields, and
 saved captain transcripts are shared; a change is visible on the other side
 within a minute. Edits to different fields of the same card merge. Edits to
 the same field stay as two copies and the card shows 冲突. The sidebar section
-两机 shows online/offline, the last-seen time, and any sync error.
+两机 shows online/offline, the last-seen time, and any sync error, then the 8 most
+recent captain records, each with its own last time (a saved chat's turns carry
+their times in milliseconds; a record the hub has without times gets them when the
+same transcript is sent again).
 
 The service is `node sync-server.js --data <dir> --token-file <path>`. Bind it
 to the WireGuard address when it is deployed; the default listen address is
@@ -1473,6 +1476,20 @@ preserve pending edits, including changes made by other local board writers.
 Older revisioned task snapshots restored by Git keep their older revision when
 submitted, so they cannot silently replace newer server edits.
 Repeated operations do not increment a card revision or add a second conflict.
+The hub settles two kinds of conflict itself instead of keeping the first writer.
+A `complete` the agent submitted with its own command is authoritative: when it
+reaches the hub after another machine wrote a guess over the same card (a fallback
+for an exit with no receipt, an automatic failure, the next attempt's start), the
+completion wins field by field, and the card's dispatch claim and bound delivery are
+cleared; the guess stays in the conflict record (`reason: complete-over-guess`,
+`kept` is what the card holds). Only a written `complete` counts: automatic
+completes, written failures and a second written complete take the ordinary rule.
+A finished card is never claimed again: a new `dispatch_claim` (or delivery
+binding) on a card that is `done` is refused (`claim-on-done`), and a writer whose
+base is older than the card's completion cannot change any attempt field
+(`stale-after-complete`) while title, detail, order and the like still merge. Moving
+the card out of done on purpose from a current base still works. No machine clock
+takes part: the order is the order of arrival at the hub.
 The hub answers a replayed operation from its receipt for 30 days. A transcript
 upload's receipt names the record (hash and time) instead of copying it; a card
 operation's receipt keeps its outcome and the card's id, and a replay is answered
@@ -1509,7 +1526,13 @@ until the hub is upgraded. An older client keeps sending whole transcripts
 but transcript prose is preserved, so sync only to a trusted private service.
 Requests time out after 10 seconds and retry on subsequent sync rounds. A round
 still running when the next is due is not queued behind it (one round at a time,
-none started after sync stops).
+none started after sync stops). The hub saves every change before it answers.
+A save the disk refuses (a full disk answers 507 `storage-full`) undoes the change
+and leaves no temp file; the hub's log names the request and error code (the same
+one at most once a minute, never a body or token), the client says the hub's disk
+is full, and its retry is applied again once there is room. (2026-10-10 the
+Windows disk holding the hub filled for 37 minutes: 500s, 301 empty temp files,
+and retries answered from receipts the disk never had.)
 If the hub loses a card or rolls back behind a pending edit's revision, the
 client discards that edit's old base and queues the complete local card with a
 new operation ID and revision zero for the next round. Newer local fields are

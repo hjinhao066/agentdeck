@@ -59,10 +59,13 @@
       notice = '正在连接两机同步…';
       noticeKind = 'muted';
     } else if (!notice && state.lastSyncAt) notice = '已同步';
-    const history = (state.history || []).slice(0, 8).map((item) => ({
+    // The most recent captain records, each with its own last time (the upload time
+    // only when the record has none): the hub's order is oldest first.
+    const when = (item) => item.endedAt || item.startedAt || item.updatedAt || '';
+    const history = (state.history || []).slice().sort((a, b) => String(when(b)).localeCompare(String(when(a)))).slice(0, 8).map((item) => ({
       sessionId: item.sessionId,
       deviceId: item.deviceId,
-      text: (item.summary || '队长记录') + (item.updatedAt ? ' · ' + formatLastSeen(item.updatedAt, now) : ''),
+      text: (item.summary || '队长记录') + (when(item) ? ' · ' + formatLastSeen(when(item), now) : ''),
     }));
     return { title: '两机', rows, notice, noticeKind, history };
   }
