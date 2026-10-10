@@ -2704,6 +2704,11 @@
     if (!col) {
       const old = archivedCrew(message.to, isSubCaptain(caller) ? caller : null);
       if (old) {
+        // Its copy was reclaimed when it was archived (cwd now the main checkout): it is not brought back to work there.
+        const copy = old.worktree;
+        if (copy && (copy.removed === true || (copy.repo && old.cwd === copy.repo))) {
+          throw new Error(`「${host.columnLabel(old)}」的代码副本 ${copy.path || ''} 已在归档时回收，tell 不会把它恢复到主仓库 ${copy.repo || old.cwd}。请用 new --worktree ${copy.repo || old.cwd} 重新派这件活${copy.branch ? `（它原来的分支是 ${copy.branch}）` : ''}。`);
+        }
         // Back on its own seat or not at all: a seat that is gone or signed out restores nothing.
         const blocked = window.ClaudeSeatsCore.launchBlock(old, host.config, await Promise.resolve(window.deck.claudeSeats?.()).catch(() => []));
         if (blocked) throw new Error(`「${host.columnLabel(old)}」没有恢复：${blocked}，不会换到别的席位。请用户先登录这个席位（席位设置里有复制登录命令的图标）再 tell；急的话用 new --task-id … --seat 另一个已登录席位 改派。`);
