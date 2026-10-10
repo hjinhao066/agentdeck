@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 
 const ROOT = path.resolve(__dirname, '../..');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --token-saver --board-probe`;
@@ -46,7 +47,7 @@ test.beforeEach(async () => {
   fs.writeFileSync(path.join(profile, '.zshrc'), '');   // an empty startup file: no personal hooks, no first-run wizard
   for (const dir of ['.claude', '.claude-us']) {
     fs.mkdirSync(path.join(home, dir), { recursive: true });
-    fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}');
+    fs.writeFileSync(path.join(home, dir, '.credentials.json'), STAND_IN_CREDENTIAL);
   }
   fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"},"hasCompletedOnboarding":true}');
   fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"},"hasCompletedOnboarding":true}');

@@ -27,10 +27,16 @@
 //   (C.BASE_SCALE of the drawn size; the cards and their type grow with it),
 //   centred both ways. A map taller than a page stands in lanes at 100% from
 //   the top. Once the user pans or zooms, the view is theirs.
+// - The zoom the user sets (a button, the number, ⌘/Ctrl+wheel, a pinch) is theirs from then on, saved with the map
+//   (config.crewMap.zoom) and kept over restarts: whenever the map places the view itself (智能一页, arrival, a project
+//   opened from the tray) it arranges itself for that zoom (C.arrangePage's zoom: each frame's columns, the lanes,
+//   one row or wrapped, the whole map on one page where any arrangement gives one, the most compact where none does)
+//   and shows exactly that zoom. Only a map whose zoom was never set picks its own, as above. A zoom that puts the
+//   smallest text under 10 device px is kept too: a line at the bottom says so.
 // 一键整理 puts every frame and card back on the grid in the order the frames
-// were left in, and leaves a hand-set zoom alone. 智能一页 hands both layers
-// back: arrangement and order are worked out again for this window.
-// Either can be undone until the next move by hand.
+// were left in, and leaves a hand-set zoom alone. 智能一页 hands the arrangement
+// back: arrangement and order are worked out again for this window, at the zoom
+// the user set if they set one. Either can be undone until the next move by hand.
 (function () {
   'use strict';
   const C = window.CrewMapCore;
@@ -76,6 +82,10 @@
   let pageFits = true;      // the whole map shows at 100% in this window
   let undo = null;          // what 一键整理 / 智能一页 replaced, until the next move by hand
   let hintT = 0;
+  // The zoom the arrangement in use is made for: the one the user set (config.crewMap.zoom) when the map last placed the
+  // view itself, null while none is set (智能一页 picks the zoom). A zoom the user is still setting, the view theirs,
+  // leaves the arrangement alone until the map places the view again.
+  let planZoom = null;
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -510,8 +520,8 @@
     const bounds = fitBounds(lay), inset = FIT_INSET;
     // A map that shows whole fills the window, centred: as large as the page holds it, up to PAGE_MAX_SCALE of its
     // own 100%, never so small that a card's smallest text is under 10 device px (C.fitLimits). A map taller than
-    // a page: lanes at their scale, from the top.
-    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, C.fitLimits({ plan, pageFits }, density()));
+    // a page: lanes at their scale, from the top. At a zoom the user set: that zoom, centred, or from the top.
+    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, C.fitLimits({ plan, pageFits }, density(), planZoom));
     // too tall for the window: start at the top (队长 and the first rows), not mid-map
     if ((bounds.bottom - bounds.top) * view.scale > vpEl.clientHeight - inset.top - inset.bottom) {
       view.y = inset.top - bounds.top * view.scale;
@@ -557,30 +567,34 @@
     const tightly = { ...TIGHT, captainH: TIGHT.captainH + (capWrap ? CAP_ROW : 0) };
     const build = (p) => C.layout(map, { ...base, ...(p.tight ? tightly : {}), lanes: p.lanes, caps: p.caps });
     // the whole layout shows in this window at `least` of the drawn size or more
-    const whole = (l, least) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= least - 1e-9;
+    const whole = (l, least) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: Infinity }).scale >= least - 1e-9;
     const pinned = hasManual() ? saved().plan : null;
     if (pinned) {
-      const l = build(pinned), keys = new Set(pinned.lanes.flat()), sc = C.scalesFor(density());
+      const l = build(pinned), keys = new Set(pinned.lanes.flat()), sc = C.scalesFor(density(), planZoom);
       // still the same projects on the canvas: the hand-placed map keeps its ground
       if (l.groups.length === keys.size && l.groups.every((g) => keys.has(g.key))) { plan = pinned; pageFits = whole(l, pinned.page ? sc.floor : sc.lanes); return l; }
     }
     if (!hasManual() && saved().plan) { saved().plan = null; host.save(); }   // nothing hand-placed is left to stand on it
-    // 智能一页 for this window (CrewMapCore.arrangePage): one row or lanes, the one in use kept while it is nearly as good
-    const r = C.arrangePage(map, { w: vw, h: vh }, { ...base, tightly, inset: FIT_INSET, returns: showReturn, dpr: density() }, { plan, planW, dpr: planDpr });
+    // 智能一页 for this window (CrewMapCore.arrangePage): one row or lanes, the one in use kept while it is nearly as good;
+    // at the zoom the user set, if they set one
+    const r = C.arrangePage(map, { w: vw, h: vh }, { ...base, tightly, inset: FIT_INSET, returns: showReturn, dpr: density(), zoom: planZoom }, { plan, planW, dpr: planDpr });
     plan = r.plan; planW = vw; planDpr = density(); pageFits = r.pageFits;
     if (hasManual()) { saved().plan = plan; host.save(); }
     return r.lay;
   }
+  // A zoom the user sets is theirs from then on (saved with the map, kept over restarts): 智能一页 arranges the map for it.
   function zoomAt(cx, cy, factor) {
     const scale = Math.min(C.MAX_SCALE, Math.max(C.MIN_SCALE, view.scale * factor));
     const k = scale / view.scale;
     view = { scale, x: cx - (cx - view.x) * k, y: cy - (cy - view.y) * k };
     userView = true;
+    saved().zoom = scale;
     glide(false);
     applyView();
     saveView();
+    syncFit();
   }
-  function zoomCenter(factor) { hush(); zoomAt(vpEl.clientWidth / 2, vpEl.clientHeight / 2, factor); }
+  function zoomCenter(factor) { hush(); zoomAt(vpEl.clientWidth / 2, vpEl.clientHeight / 2, factor); say(smallNote()); }
 
   function startCardDrag(e, n, node, box) {
     if (e.button !== 0) return;
@@ -664,10 +678,12 @@
     // a layer while the wheel turns; dropped once it rests, so the text is drawn afresh at the new scale
     vpEl.classList.add('cm-moving');
     clearTimeout(onWheel.moving);
-    onWheel.moving = setTimeout(() => vpEl.classList.remove('cm-moving'), 200);
+    // (a zoom that comes to rest where the smallest text is under 10 device px says so; otherwise it leaves the bottom
+    // line alone: 智能一页 may have spoken since)
+    onWheel.moving = setTimeout(() => { vpEl.classList.remove('cm-moving'); const note = onWheel.zoomed && smallNote(); onWheel.zoomed = false; if (note) say(note); }, 200);
     const r = vpEl.getBoundingClientRect();
     // a pinch on a trackpad arrives as ctrl+wheel
-    if (e.ctrlKey || e.metaKey) zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0022));
+    if (e.ctrlKey || e.metaKey) { onWheel.zoomed = true; zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0022)); }
     else {
       view = { ...view, x: view.x - e.deltaX, y: view.y - e.deltaY };
       userView = true;
@@ -804,10 +820,12 @@
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
     if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; projectsEl.innerHTML = ''; lay = null; closePop(); return; }
-    // A window narrower than 队长's one-row tally at 100%: the card takes the
+    // the map places the view itself (arrival, 智能一页, nothing moved since): arranged for the zoom the user set, if any
+    if (!view || !userView) planZoom = saved().zoom;
+    // A window narrower than 队长's one-row tally at 100% (at the zoom the user set): the card takes the
     // width there is and its tally wraps to a second row, so no count is cut and nothing scrolls sideways.
     const natural = Math.round(captainWidth(map));
-    const room = Math.floor((vpEl.clientWidth - FIT_INSET.left - FIT_INSET.right) / FIT - 2 * NODE.pad);
+    const room = Math.floor((vpEl.clientWidth - FIT_INSET.left - FIT_INSET.right) / (planZoom || FIT) - 2 * NODE.pad);
     capWrap = natural > room && room >= NODE.captainW;
     rootEl.classList.toggle('cm-cap-wrap', capWrap);
     dims = { ...NODE, captainW: capWrap ? room : natural, captainH: NODE.captainH + (capWrap ? CAP_ROW : 0) };
@@ -873,14 +891,18 @@
   const arranged = () => !hasManual() && !saved().projectOrder.length;
   const FIT_ON = '智能一页：已开启，项目从左往右排成一行，每个框排几列自动算好，整张图放大或缩小到正好铺满一屏（最大 140%）；窗口变了自动重排；点一下回到这一页';
   const FIT_OFF = '智能一页：回到自动排法，放弃手动拖动的位置和先后，缩放回到正好铺满一屏的大小（可撤销）';
+  // at a zoom the user set: the zoom stays, the arrangement is made for it
+  const FIT_ON_AT = (pct) => `智能一页：已开启，按你设的 ${pct}% 排：每个框几列、分几栏、要不要折行自动算好，尽量一屏放下，不改你的比例；窗口变了自动重排；点一下按当前比例重排`;
+  const FIT_OFF_AT = (pct) => `智能一页：回到自动排法，放弃手动拖动的位置和先后，按你设的 ${pct}% 重新排，尽量一屏放下，不改你的比例（可撤销）`;
   // The button says which it is: lit while the map arranges itself, a dot on it once things were placed by hand.
   function syncFit() {
     if (!fitBtn) return;
-    const on = arranged(), text = on ? FIT_ON : FIT_OFF;
+    const on = arranged(), zoom = saved().zoom, pct = zoom && C.zoomPercent(zoom);
+    const text = zoom ? (on ? FIT_ON_AT(pct) : FIT_OFF_AT(pct)) : on ? FIT_ON : FIT_OFF;
     fitBtn.dataset.state = on ? 'auto' : 'manual';
     if (fitBtn.title !== text) { fitBtn.title = text; fitBtn.setAttribute('aria-label', text); }
   }
-  const snapshot = () => ({ positions: { ...saved().positions }, projectPositions: { ...saved().projectPositions }, projectOrder: saved().projectOrder.slice(), plan: saved().plan, view: view && { ...view }, userView });
+  const snapshot = () => ({ positions: { ...saved().positions }, projectPositions: { ...saved().projectPositions }, projectOrder: saved().projectOrder.slice(), plan: saved().plan, view: view && { ...view }, userView, planZoom });
   function say(text) {
     clearTimeout(hintT);
     hintEl.textContent = text || '';
@@ -902,8 +924,9 @@
     setUndo(snap);
     say('');
   }
-  // 智能一页: arrangement and order worked out again for this window and the zoom back at 100%,
-  // so the map uses the page's whole width. When it is taller than the page at 100%, it says so.
+  // 智能一页: arrangement and order worked out again for this window: at the zoom the user set, which stays, or (none
+  // set) at the zoom that fills the page. When the map is taller than the page at that zoom, it says so; at a zoom the
+  // user set that puts the smallest text under 10 device px, it says that too (the zoom is still theirs).
   function page() {
     if (!lay) return;
     const snap = hasManual() || saved().projectOrder.length || userView ? snapshot() : null;
@@ -913,7 +936,17 @@
     host.save();
     render({ smooth: true });
     setUndo(snap);
-    say(pageFits ? '' : `一页放不下：保持 ${C.zoomPercent(view.scale)}% 大小，其余部分向下滚动查看`);
+    onWheel.zoomed = false;   // (a pinch that has not come to rest yet: this line says it all)
+    const pct = C.zoomPercent(view.scale);
+    const tall = pageFits ? '' : planZoom ? `按你设的 ${pct}% 一页放不下：已排到最紧凑，其余部分向下滚动查看` : `一页放不下：保持 ${pct}% 大小，其余部分向下滚动查看`;
+    say([tall, smallNote()].filter(Boolean).join('；'));
+  }
+  // A zoom the user set that shows the smallest text on the map under 10 device px (C.readableScale) is theirs to keep:
+  // this line says so, and from what zoom it reads clearly. '' when it reads clearly, or no zoom was set.
+  function smallNote() {
+    if (!view || !saved().zoom || view.scale >= C.readableScale(density()) - 1e-9) return '';
+    const need = Math.ceil(C.readableScale(density()) / C.BASE_SCALE * 100 - 1e-6);
+    return `${C.zoomPercent(view.scale)}% 下卡片上最小的字不到 10 像素，可能看不清（放大到 ${need}% 或以上就清楚）`;
   }
   function undoArrange() {
     const u = undo;
@@ -921,6 +954,7 @@
     Object.assign(saved(), { positions: u.positions, projectPositions: u.projectPositions, projectOrder: u.projectOrder, plan: u.plan });
     plan = u.plan;
     userView = u.userView;
+    planZoom = u.planZoom;
     host.save();
     render({ smooth: true });
     if (u.userView && u.view) { view = { ...u.view }; glide(true); applyView(); saveView(); }

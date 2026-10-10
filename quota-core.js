@@ -60,6 +60,33 @@
       cursorSonnet,
     ]),
   ]);
+  const CREDENTIAL_STATES = ['ok', 'missing', 'unreadable', 'invalid', 'no-oauth', 'expired'];
+  // The colour of a seat's row, one answer for the sidebar, 队长's `quota` and the phone. ok: the row
+  // stays as it always was. warn (yellow): the numbers are old or the last query failed. bad (red):
+  // the seat cannot work: its stored login is damaged or expired, it is signed out, or it is used up.
+  // label names the case; reason says what was found; action says what to do.
+  const HEALTH_LEVELS = ['ok', 'warn', 'bad'];
+  const HEALTH_KINDS = ['ok', 'stale', 'failed', 'unverified', 'credential', 'login-expired', 'logged-out', 'exhausted'];
+  function seatHealth({ seat, loggedOut, out, recoveryAt, stale, failures, sampledAt }, now) {
+    const info = seat?.info || {}, cred = info.credential;
+    const where = cred?.store === 'file' ? '凭据文件' : '钥匙串';
+    const relogin = seat ? '需要重新登录这个席位' : '需要重新登录';
+    const clock = (t) => { const d = new Date(t), pad = (v) => String(v).padStart(2, '0'); return `${t - now > 86400000 ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` : ''}${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+    const make = (level, kind, label, reason, action) => ({ level, kind, label, reason, action });
+    if (cred?.state === 'invalid') return make('bad', 'credential', '登录凭据坏了', `${where}里的登录凭据有 ${cred.bytes} 字节，不是合法 JSON，读不出来`, relogin);
+    if (cred?.state === 'no-oauth') return make('bad', 'credential', '登录凭据坏了', `${where}里没有 Claude 登录令牌`, relogin);
+    if (cred?.state === 'expired') return make('bad', 'login-expired', '登录已过期', '访问令牌已过期，也没有能用的刷新令牌', relogin);
+    if (loggedOut || (info.loggedIn === false && info.loginReason)) return make('bad', 'logged-out', '未登录',
+      cred?.state === 'missing' ? `${where}里没有这个席位的登录凭据` : seat ? 'Claude 显示这个席位没有登录' : '已确认没有登录', relogin);
+    if (out) return make('bad', 'exhausted', '额度用尽', recoveryAt ? `预计 ${clock(recoveryAt)} 恢复` : '恢复时间未知',
+      recoveryAt ? `等 ${clock(recoveryAt)} 恢复，或换别的席位` : '等额度恢复，或换别的席位');
+    if (stale) return make('warn', 'stale', '数据已旧', `额度数字停在 ${sampledAt ? clock(sampledAt) : '上次采样'}${failures ? `，已连续 ${failures} 次查询失败` : ''}`,
+      '数字可能不准；一直不更新就检查网络，或重新登录这个席位');
+    if (failures) return make('warn', 'failed', '查询失败', `最近 ${failures} 次额度查询失败，显示的是上次的数字`, '先等自动重试；一直失败就检查网络，或重新登录这个席位');
+    if (info.loggedIn === false && info.authReason) return make('warn', 'unverified', '无法核实登录', `读不出这个席位的${where}`, cred?.store === 'file' ? '检查凭据文件的读取权限' : '检查钥匙串访问权限');
+    return make('ok', 'ok', '正常', '', '');
+  }
+  const healthLine = (h) => h.level === 'ok' ? '' : `【${h.level === 'bad' ? '红' : '黄'}】${h.label}：${h.reason}；${h.action}`;
   function claudeSeats(value) {
     const ids = new Set();
     const seats = (Array.isArray(value) ? value : []).slice(0, 8).filter((s) => {
@@ -70,7 +97,12 @@
       const name = String(s.name || (flag ? s.id.toUpperCase() : s.id)).slice(0, 80);
       // info: who is signed in behind this directory right now (seats:list), when the caller has it.
       const info = s.info && typeof s.info === 'object' ? { ...(typeof s.info.loggedIn === 'boolean' ? { loggedIn: s.info.loggedIn } : {}),
-        loginEmail: S.cleanEmail(s.info.loginEmail), accountEmail: S.cleanEmail(s.info.accountEmail), plan: typeof s.info.plan === 'string' ? s.info.plan.slice(0, 20) : '' } : null;
+        loginEmail: S.cleanEmail(s.info.loginEmail), accountEmail: S.cleanEmail(s.info.accountEmail), plan: typeof s.info.plan === 'string' ? s.info.plan.slice(0, 20) : '',
+        // Why the seat cannot be used, from the seat list's passive credential check (seatHealth).
+        ...(typeof s.info.loginReason === 'string' && s.info.loginReason ? { loginReason: s.info.loginReason.slice(0, 300) } : {}),
+        ...(typeof s.info.authReason === 'string' && s.info.authReason ? { authReason: s.info.authReason.slice(0, 300) } : {}),
+        ...(CREDENTIAL_STATES.includes(s.info.credential?.state) ? { credential: { state: s.info.credential.state,
+          bytes: Number.isSafeInteger(s.info.credential.bytes) && s.info.credential.bytes >= 0 ? s.info.credential.bytes : 0, store: s.info.credential.store === 'file' ? 'file' : 'keychain' } } : {}) } : null;
       return { id: s.id, name: flag && !name.includes(flag) ? `${flag} ${name}` : name, configDir: s.configDir.trim(), ...(info ? { info } : {}) };
     });
     return seats.length ? seats : [{ id: 'default', name: 'Claude', configDir: '~/.claude' }];
@@ -415,6 +447,7 @@
       return { provider, authStatus: 'logged-out', loginCommand: entry.auth.loginCommand || '', state: 'danger', label: '未登录', displayLabel: '未登录', sampleLabel: '', statusText: '未登录',
         fiveHour: null, weekly: null, shortText: '未登录', shortRemaining: null, out: true, recoveryAt: null, sampledAt: entry.auth.at,
         stale: false, failures: 0, cells: [], ...who, source: '登录状态确认', confidence: '已确认未登录', name,
+        health: seatHealth({ seat, loggedOut: true }, now),
         detail: `${head}：未登录\n此席位无法继续任务，请重新登录${seat ? `\n${shown ? seatLine + '；' : ''}配置目录：${seat.configDir}` : ''}` };
     }
     const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir && sample.at >= (entry.officialNotBefore || 0)) ||
@@ -487,7 +520,12 @@
     const shortRemaining = fiveHour ?? weekly;
     const expired = sample && trusted && (!fresh || sample.windows?.some((w) => w.resetAt && w.resetAt <= now));
     const shortText = shortRemaining === null ? (out ? '已用尽' : expired ? '过期' : statusText) : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
-    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure && !entry.officialStatus.answered ? entry.officialStatus.failures || 1 : 0, cells, ...who, source: evidence?.source || '', confidence: confidence || '', name: seat ? seatName + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${head}：${left(label)}\n${details.join('\n')}` };
+    // (an answer with no numbers yet is not a failure)
+    const failures = entry.officialStatus?.failure && !entry.officialStatus.answered ? entry.officialStatus.failures || 1 : 0;
+    const health = seatHealth({ seat, out, recoveryAt: out && outAt || null, stale, failures, sampledAt }, now);
+    // For 队长: right after the seat line, ahead of the numbers it qualifies.
+    if (health.level !== 'ok') details.splice(seat ? 1 : 0, 0, healthLine(health));
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures, cells, ...who, source: evidence?.source || '', confidence: confidence || '', name: seat ? seatName + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', health, detail: `${head}：${left(label)}\n${details.join('\n')}` };
   }
   const LAUNCH_WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
   function commandIdentity(command) {
@@ -613,10 +651,10 @@
         short: seat ? plain || 'Claude' : { Codex: 'Codex', Cursor: 'Cursor', Antigravity: 'Gemini' }[provider], flag,
         captain: seat ? seat.id === captainSeatId : !!captainProvider && captainProvider === provider,
         status, failed: q.failures > 0, cells: q.cells.map((c) => ({ key: c.key, remaining: c.remaining, out: !!c.out, resetAt: c.resetAt || null })),
-        recoveryAt: q.recoveryAt || null, sampledAt: q.sampledAt || null, account: maskAccount(q.account || q.storedAccount), source: q.source };
+        recoveryAt: q.recoveryAt || null, sampledAt: q.sampledAt || null, account: maskAccount(q.account || q.storedAccount), source: q.source, health: q.health };
     });
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, QUOTA_LOW_PERCENT, QUOTA_TIERS, quotaSwitchNote, quotaFallbackTitle, quotaFallback, text, maskAccount, mobile };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, seatHealth, HEALTH_LEVELS, HEALTH_KINDS, commandQuota, QUOTA_LOW_PERCENT, QUOTA_TIERS, quotaSwitchNote, quotaFallbackTitle, quotaFallback, text, maskAccount, mobile };
 
 });

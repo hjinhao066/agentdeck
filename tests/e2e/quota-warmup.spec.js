@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 
 const ROOT = path.resolve(__dirname, '../..');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --interruptible`;
@@ -90,7 +91,7 @@ test.beforeEach(async () => {
   for (const id of ['cn', 'us']) {
     const dir = path.join(home, id === 'cn' ? '.claude' : `.claude-${id}`);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, '.credentials.json'), '{}'); // isolated existence fixture
+    fs.writeFileSync(path.join(dir, '.credentials.json'), STAND_IN_CREDENTIAL); // isolated stand-in login
     const metadata = id === 'cn' ? path.join(home, '.claude.json') : path.join(dir, '.claude.json');
     fs.writeFileSync(metadata, JSON.stringify({ oauthAccount: { emailAddress: `${id}@example.test`, accountUuid: accountUuid(id) } }));
   }
@@ -277,7 +278,7 @@ test('US2 idle warmup uses its own directory exactly once and skips its missing 
   cache('us2');
   await tick();
   expect(await runs()).toHaveLength(0);
-  fs.writeFileSync(path.join(dir, '.credentials.json'), '{}');
+  fs.writeFileSync(path.join(dir, '.credentials.json'), STAND_IN_CREDENTIAL);
   await tick([{ ok: true }]);
   await tick();
   expect((await runs()).map((r) => r.seatId)).toEqual(['us2']);

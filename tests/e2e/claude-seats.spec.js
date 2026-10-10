@@ -3,6 +3,7 @@ const closeElectron = require('./fixtures/close-electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --quota-probe --token-saver --board-probe`;
 let application, page, profile, home;
 const cn = 'seat-captain';
@@ -55,7 +56,7 @@ test.beforeEach(async ({}, testInfo) => {
   home = path.join(profile, 'seats-home');
   for (const dir of ['.claude', '.claude-us']) {
     fs.mkdirSync(path.join(home, dir), { recursive: true });
-    fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}'); // stand-in credential existence only
+    fs.writeFileSync(path.join(home, dir, '.credentials.json'), STAND_IN_CREDENTIAL); // stand-in signed-in credential
   }
   fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"},"hasCompletedOnboarding":true,"lastOnboardingVersion":"2.1.289"}');
   fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"},"hasCompletedOnboarding":true}');
@@ -437,7 +438,7 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
   expect(await page.evaluate(() => columns.some((c) => c.displayTitle === 'US2 not logged'))).toBe(false);
   const dir = path.join(home, '.claude-us2');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, '.credentials.json'), '{}'); // fake isolated login
+  fs.writeFileSync(path.join(dir, '.credentials.json'), STAND_IN_CREDENTIAL); // fake isolated login
   // The paid account signs in here: the plan is read from the directory's own account record.
   fs.writeFileSync(path.join(dir, '.claude.json'), '{"oauthAccount":{"emailAddress":"paid.account2@example.test","organizationType":"claude_max","organizationRateLimitTier":"default_claude_max_20x"}}');
   require('../../claude-seats-main').writeUsage({ id: 'us2', configDir: '~/.claude-us2' }, home, { at: Date.now(), windows: [

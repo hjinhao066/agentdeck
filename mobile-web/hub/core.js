@@ -289,6 +289,9 @@
   // Display rows only; the machine already masked the account. Anything that
   // is not the expected shape is dropped so a odd answer never reads as usable.
   const QUOTA_STATUS = ['out', 'stale', 'normal', 'warning', 'danger', 'nodigits', 'expired', 'unknown'];
+  // The row's colour as the computer judged it (QuotaCore.seatHealth): ok, warn (yellow) or bad (red).
+  const HEALTH_LEVELS = ['ok', 'warn', 'bad'];
+  const HEALTH_KINDS = ['ok', 'stale', 'failed', 'unverified', 'credential', 'login-expired', 'logged-out', 'exhausted'];
   function cleanQuota(data) {
     const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
     const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -298,6 +301,8 @@
       cells: (Array.isArray(row.cells) ? row.cells : []).filter((cell) => cell && ['5h', '7d'].includes(cell.key) && Number.isFinite(cell.remaining)).slice(0, 2)
         .map((cell) => ({ key: cell.key, remaining: Math.max(0, Math.min(100, cell.remaining)), out: cell.out === true, resetAt: time(cell.resetAt) })),
       recoveryAt: time(row.recoveryAt), sampledAt: time(row.sampledAt), account: text(row.account, 80), source: text(row.source, 60),
+      health: row.health && HEALTH_LEVELS.includes(row.health.level) && HEALTH_KINDS.includes(row.health.kind)
+        ? { level: row.health.level, kind: row.health.kind, label: text(row.health.label, 20), reason: text(row.health.reason, 160), action: text(row.health.action, 120) } : null,
     }));
     return { rows, version: /^\d+\.\d+\.\d+[\w.-]{0,20}$/.test(data && data.version || '') ? data.version : '' };
   }
@@ -324,8 +329,19 @@
     const blockedOnly = row.status === 'out' && !row.cells.length;
     return ['5h', '7d'].map((key) => row.cells.find((cell) => cell.key === key) || (blockedOnly && key === '5h' ? { key, out: true, resetAt: row.recoveryAt } : { key, missing: true }));
   }
+  // A computer older than the colours sends none: used up is red, old numbers or a failed read yellow.
+  function rowHealth(row) {
+    if (row.health) return row.health;
+    return row.status === 'out' ? { level: 'bad', kind: 'exhausted', label: '额度用尽', reason: '', action: '' }
+      : row.status === 'stale' ? { level: 'warn', kind: 'stale', label: '数据已旧', reason: '', action: '' }
+        : row.failed ? { level: 'warn', kind: 'failed', label: '查询失败', reason: '', action: '' } : { level: 'ok', kind: 'ok', label: '正常', reason: '', action: '' };
+  }
+  // A login that has to be redone is said under the row with what to do; the cells cannot say it.
+  const loginKind = (h) => h.level === 'bad' && h.kind !== 'exhausted';
   // The line under a row is kept for what the cells cannot say: the numbers are old or the last read failed.
   function quotaNote(row, now) {
+    const health = rowHealth(row);
+    if (loginKind(health)) return [health.label, health.action].filter(Boolean).join(' · ');
     const parts = [];
     if (row.failed) parts.push('查询失败');
     if (row.status === 'stale' || row.status === 'expired') parts.push('数据已旧');
@@ -336,11 +352,15 @@
   }
   function quotaLabel(row, now) {
     const windows = row.cells.length || row.status === 'out' ? quotaCells(row).filter((cell) => !cell.missing).map((cell) => cellSpoken(cell, now)) : [emptyText(row)];
-    return [row.name + (row.captain ? '（队长在用）' : ''), ...windows, quotaNote(row, now)].filter(Boolean).join('；');
+    const health = rowHealth(row);
+    // Read out first: a seat that is not fine says which case it is (and, for a login to redo, what to do).
+    const said = health.level === 'ok' ? '' : loginKind(health) ? [health.label, health.action].filter(Boolean).join('，') : health.label;
+    return [row.name + (row.captain ? '（队长在用）' : ''), said, ...windows, loginKind(health) ? '' : quotaNote(row, now)].filter(Boolean).join('；');
   }
-  // The "state" line of the details: why the numbers may not be trusted.
+  // The "state" line of the details: a red seat's case and what to do, then why the numbers may not be trusted.
   function quotaState(row, failed) {
-    return [row.status === 'nodigits' ? '未见用尽报错，此来源不提供百分比' : row.status === 'unknown' ? '暂无额度数据，等待桌面端下次采样' : '',
+    const health = rowHealth(row);
+    return [health.level === 'bad' && health.reason ? `${health.label}：${health.reason}；${health.action}` : '', row.status === 'nodigits' ? '未见用尽报错，此来源不提供百分比' : row.status === 'unknown' ? '暂无额度数据，等待桌面端下次采样' : '',
       row.status === 'stale' || row.status === 'expired' ? '数据已旧，数字仅供参考' : '', row.failed ? '最近一次查询失败' : '', failed ? '手机暂时连不上这台电脑' : ''].filter(Boolean).join('；');
   }
 
@@ -574,7 +594,7 @@
   }
 
   return { cleanTodos, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
-    groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
+    groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, rowHealth, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 
 // 待我处理 on the phone: each computer's list, cleaned field by field again

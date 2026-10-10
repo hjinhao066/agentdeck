@@ -371,13 +371,24 @@ Retina 这类 2 倍屏上就是 80%，Windows 100% 缩放这类 1 倍屏上是 1
 缩放范围 40%–250%，「缩小 / 放大」按钮每次走 10%
 并落在整十上，点中间的比例回到 100%，⌘/Ctrl+滚轮和触控板捏合照旧连续缩放。保存的视角仍按画布原始大小记
 （老版本存下的值不用换算，屏幕上大小不变，只是读数变了：原来的 70% 现在读 100%，原来的 100% 读 143%）。
+手动设过的比例（按钮、点中间的数字、⌘/Ctrl+滚轮、捏合，任意百分比）从此归你：存进配置（`crewMap.zoom`），重启后还是它。
+之后每当架构图自己摆视角（点「智能一页」、启动、从底部托盘展开项目），都按你的比例重新排：上面同一套打分，只是比例不再是
+可调的量而是你给的常数——先要整张图在这个比例下一屏放得下，再挑各框高矮最接近的，都一样时列数少的优先；一行放得下就一行，
+放不下就折成几栏，这时每个框几列和分几栏一起重新试（一行时为了压低高度加宽的框，折行后可以变窄、让别的框排到它旁边），
+放得下的里头再挑形状最贴近这一页的、栏少的；哪种都放不下就在这个比例下排得最矮（只差 3% 以内的挑更匀称的），不出现横向滚动，
+往下滚着看，画布底部提示「按你设的 X% 一页放不下：已排到最紧凑，其余部分向下滚动查看」。比例始终是你的，不会跳回 100%，
+也不会被放大去铺满。窗口来回拖、几种排法交替时同样走上面的保持（几个像素来回不会跳，排法离开后不会再跳回来）。
+比例小到卡片上最小的字不到 10 个设备像素时（2 倍屏低于约 63%，1 倍屏低于约 125%）照样保留，画布底部提示一句
+「X% 下卡片上最小的字不到 10 像素，可能看不清（放大到 Y% 或以上就清楚）」，不强行改。只有从没手动设过比例时，
+才按上面那套自动选比例（一页铺满，最大 140%；下限 80%，1 倍屏上 124%）。
 手动拖过卡片或项目框之后，当时那套排法会被留住，窗口再变大小也不会把手摆的位置顶乱；手动缩放平移过之后视角也归你。
 所以以前手动拖过框的图，升级后打开仍是原来那套排法；点一下右下角「智能一页」就换成新的横排。「智能一页」按钮在自动排法时
 是亮的，手动摆过后变暗、带一个小圆点；离开自动排法的那一次拖动可以「撤销」回去（撤销按钮出现，画布底部也提示一句）。
 画布右下角（图例行右侧）的图标按钮：「一键整理」把拖乱的框和卡片对齐排回网格——按你摆的先后（像读文字一样：顶边差不多高的
 框算一行、从左往右读，再读下一行）排，记住这个先后，不动你手动设的缩放，移动有过渡动画；「撤销」回到整理前
-的位置和缩放（再手动拖一下就不能撤了）；缩小 / 比例 / 放大；「智能一页」把排布、先后和缩放全部交回自动，按当前
-窗口重新算、缩放回到正好铺满一屏的大小（最大 140%），一页放不下时在画布底部提示一句，同样可以撤销。系统开了「减少动态效果」时整理直接到位、没有动画。
+的位置和缩放（再手动拖一下就不能撤了）；缩小 / 比例 / 放大；「智能一页」把排布和先后交回自动，按当前窗口重新算：
+没手动设过比例时缩放回到正好铺满一屏的大小（最大 140%）；设过比例就保持你的比例，只重新排列数、栏数和折行（见上）。
+一页放不下时在画布底部提示一句，同样可以撤销。系统开了「减少动态效果」时整理直接到位、没有动画。
 没有会话在干活/待补充/排队的项目默认收进底部「非活跃项目」托盘（真实数量，点 chip 展开到画布，失败项目标红）；
 项目里再有会话开工会自动重新显示，不动你的视角。
 卡片三层：第一行是状态（图标、颜色和文字，永远完整）和模型 / 账号（模型图标统一成灰色；账号是模型后面的一个小文字标签，
@@ -389,7 +400,7 @@ Retina 这类 2 倍屏上就是 80%，Windows 100% 缩放这类 1 倍屏上是 1
 CLI 自己的升级提示（Update available、brew upgrade 等）、AgentDeck 打进终端的话（重发：…、（AgentDeck 约定）…、回执命令）
 和重启续接时的说明不当进展显示，终端把长行折开时按整行判断。完整内容在悬停提示里；「···」或失败卡片的「查看」
 打开详情浮层（完整回执、会话报的进展、实时活动、文件、打开终端；Esc 关闭）。
-架构图只留当前的活：做完的队长会话没有新指令 10 分钟后自动归档（AgentDeck 重启后也照此处理，重启时已超时的在终端安静约 1 分钟后归档）；
+架构图只留当前的活：做完的队长会话没有新指令 10 分钟后自动归档（AgentDeck 重启后也照此处理，重启时已超时的在终端安静约 1 分钟后归档）。「安静」只看画到屏幕上的输出：Claude Code 闲着时每隔几秒向终端问一次光标位置（`ESC[?6n`），这类只问不画的终端查询不算输出（`MainCore.drawsOutput`）；
 失败或停下的会话要等它的看板卡片已完成、或同一张卡已由另一个会话接手才自动归档，没人接手的失败留在图上等队长处理。
 自动归档前最后再查一次这个终端的进程树（`pty-work.js`，Mac 用 `ps`，Windows 用 `Get-CimInstance Win32_Process`，一次列表所有终端共用 5 秒）：Claude 的工具起的命令（前台或后台）和它们下面的进程还在跑，就不归档。认法：Bash 工具（Mac 的 zsh、Windows 的 Git Bash）的命令都带 Claude 的 shell-snapshots；Windows 的 PowerShell 工具经 Claude 的启动器跑，形如 `cmd /d /s /c "chcp 65001 & pwsh … -Command …CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT…"`，启动器关掉时是 `pwsh -NonInteractive … -EncodedCommand …`。MCP 服务（Windows 上是 `cmd /c npx …`）、状态栏命令、caffeinate 不算。还没拿到答案时这次先不归档，列不出进程时照屏幕判断；答「忙」的结果留 1 分钟再重查（Windows 每查一次要起 PowerShell，约 1.2–1.7 秒），所以后台命令结束后最多晚 1 分钟归档。
 项目框标题的数字只统计图上还在的会话（不含已归档历史），和队长框一致。
@@ -1438,7 +1449,21 @@ copy is kept; copies an older hub kept that way are dropped when it loads. A
 round asks for transcripts by hash (`/v1/snapshot?history=hash`) and fetches
 only the ones whose hash or time changed (`/v1/history`); an older client still
 gets whole transcripts, and every answer over 1 KB is gzipped for a client that
-asks (Node's fetch does). Credential-shaped fields are stripped,
+asks (Node's fetch does).
+Every hub refuses a request body over 2,000,000 bytes, so a transcript is not
+always sent whole in one request. Once the hub has confirmed a version, the next
+save sends only the turns from the first one that changed, laid over that
+version (`/v1/history/assemble` with `base`); the hub checks the result against
+the transcript's hash and answers `base-mismatch` when its copy is not that
+version, and the client then sends it whole. A whole transcript under 1.9 MB goes
+in one `/v1/history` request any hub takes; a bigger one, or a big set of changed
+turns, goes in pieces of 256 K characters (`/v1/history/part`) that the hub holds
+in memory (10 minutes, 256 M characters at once) until `assemble` puts them
+together. A hub restarted between pieces answers `parts-missing` and the
+transcript goes again next round. An older hub answers 404 to both paths: small
+transcripts sync as before, and one over 2 MB shows 「这段对话超过 2 MB，同步服务版本太旧」
+until the hub is upgraded. An older client keeps sending whole transcripts
+(up to 2 MB) and the hub takes them as before. Credential-shaped fields are stripped,
 but transcript prose is preserved, so sync only to a trusted private service.
 Requests time out after 10 seconds and retry on subsequent sync rounds. A round
 still running when the next is due is not queued behind it (one round at a time,

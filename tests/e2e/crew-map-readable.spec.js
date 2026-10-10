@@ -168,6 +168,38 @@ test('1x screen: the 24-session map that stands on one row on a 2x screen is not
   expect(errors).toEqual([]);
 });
 
+// A zoom the user sets is theirs, under the readable size too (100% on a 1x screen puts the smallest text at 8 device px):
+// it is kept, 智能一页 arranges the map for it, and one line says the smallest text is under 10px and from what zoom it is
+// clear. It is said, never changed.
+test('1x screen: a zoom the user sets under the readable size is kept; 智能一页 arranges for it and says the smallest text is under 10px', async () => {
+  const crew = sessionsOf({ agentdeck: 11, 秋招: 3, skills: 1 });
+  await launch(crew);
+  await open(1512, 982, 'dark', crew.length); await settled();
+  expect((await read()).scale, 'untouched: as large as keeps the text readable, or larger').toBeGreaterThanOrEqual(10 / 11.5 - 1e-6);
+  const hint = () => page.evaluate(() => { const h = document.querySelector('.cm-hint'); return h.hidden ? '' : h.textContent; });
+  const SMALL = '100% 下卡片上最小的字不到 10 像素，可能看不清（放大到 125% 或以上就清楚）';
+  // the user zooms to 100%: the line comes up at once
+  await page.locator('[data-cm="reset"]').click();
+  await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');
+  expect.soft(await hint(), 'zoomed under the readable size: said').toBe(SMALL);
+  await page.locator('[data-cm="fit"]').click(); await settled();
+  const g = await read();
+  expect.soft(g.label, '智能一页 keeps the zoom the user set').toBe('100%');
+  expect.soft(g.scale).toBeCloseTo(0.7, 5);
+  expect.soft(g.pageFits, 'at 100% this map shows whole on the page').toBe(true);
+  expect.soft(await hint(), '智能一页 says it too').toBe(SMALL);
+  // what it says is so: the smallest text on the map is under 10 device px at this zoom
+  expect.soft(Math.min(...(await typePx()).map((t) => t.px))).toBeLessThan(10);
+  await picture('page1x-11-3-1-1512x982-dark-user-100');
+  // a zoom that keeps it readable says nothing
+  for (let i = 0; i < 3; i++) await page.locator('[data-cm="in"]').click();
+  await expect(page.locator('[data-cm="reset"]')).toHaveText('130%');
+  await page.locator('[data-cm="fit"]').click(); await settled();
+  expect.soft(await hint(), 'readable at 130%: nothing said about the text').not.toContain('最小的字');
+  readable(await typePx());
+  expect(errors).toEqual([]);
+});
+
 // How many pixels two PNG screenshots differ in (decoded in the page).
 const differ = (a, b) => page.evaluate(async ([a, b]) => {
   const load = (s) => new Promise((ok) => { const i = new Image(); i.onload = () => ok(i); i.src = 'data:image/png;base64,' + s; });

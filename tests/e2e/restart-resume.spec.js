@@ -2,6 +2,7 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 
 const fake = `node "${path.join(__dirname, 'fixtures/fake-agent.js')}" --screen-only`;
 // The stand-in agents start in the column's shell. Whatever shell and startup files the
@@ -184,7 +185,7 @@ require(${JSON.stringify(path.join(__dirname, 'fixtures/fake-agent.js'))});`);
   const cmd = `"${executable}"`;
   // A Claude session starts only on a signed-in seat: a stand-in login for the default seat.
   fs.mkdirSync(path.join(profile2, 'seats-home', '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(profile2, 'seats-home', '.claude', '.credentials.json'), '{}');
+  fs.writeFileSync(path.join(profile2, 'seats-home', '.claude', '.credentials.json'), STAND_IN_CREDENTIAL);
   fs.mkdirSync(path.join(profile2, 'tasks'));
   fs.writeFileSync(path.join(profile2, 'tasks', 'fallback.json'), JSON.stringify({ version: 1, project: 'fallback', cards: [{
     id: 'fallback-card', project: 'fallback', title: 'fallback probe', detail: 'EXACT ORIGINAL CARD TASK', status: 'doing', flag: null,

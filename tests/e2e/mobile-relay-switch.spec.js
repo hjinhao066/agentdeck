@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 
 // Switching the Captain's account from the phone, end to end: the real mobile
 // web service and the real desktop switch inside an isolated AgentDeck profile,
@@ -53,7 +54,7 @@ test.beforeEach(async ({}, testInfo) => {
   // CN and US have a stand-in login; US2 has none.
   for (const dir of ['.claude', '.claude-us']) {
     fs.mkdirSync(path.join(home, dir), { recursive: true });
-    fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}');
+    fs.writeFileSync(path.join(home, dir, '.credentials.json'), STAND_IN_CREDENTIAL);
   }
   fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"},"hasCompletedOnboarding":true,"lastOnboardingVersion":"2.1.289"}');
   fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"},"hasCompletedOnboarding":true}');

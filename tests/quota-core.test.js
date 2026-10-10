@@ -614,7 +614,8 @@ test('phone rows carry display fields only: account name, masked address, no con
   assert.deepEqual(rows.map((r) => r.source), [Q.CLAUDE_OAUTH_SOURCE, Q.CLAUDE_OAUTH_SOURCE, '会话屏幕', '', '']);
   assert.deepEqual(rows[2].cells.map((c) => c.key), ['7d']);
   for (const row of rows) {
-    assert.deepEqual(Object.keys(row).sort(), ['account', 'captain', 'cells', 'failed', 'flag', 'key', 'name', 'provider', 'recoveryAt', 'sampledAt', 'short', 'source', 'status']);
+    assert.deepEqual(Object.keys(row).sort(), ['account', 'captain', 'cells', 'failed', 'flag', 'health', 'key', 'name', 'provider', 'recoveryAt', 'sampledAt', 'short', 'source', 'status']);
+    assert.deepEqual(Object.keys(row.health).sort(), ['action', 'kind', 'label', 'level', 'reason']);
     // The name may go to the phone; a whole address never does (every @ there follows the mask).
     assert.doesNotMatch(JSON.stringify(row), /\.claude|account-|-cred|hjinhao@|[^*]@/);
   }

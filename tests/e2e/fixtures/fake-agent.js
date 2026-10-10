@@ -319,6 +319,9 @@ function start() {
   box();
   listen();
 }
+// --cursor-queries: like Claude Code 2.1.295 sitting idle, ask the terminal where the
+// cursor is (DECXCPR, ESC[?6n) every 2 seconds. Nothing is drawn.
+if (process.argv.includes('--cursor-queries')) setInterval(() => process.stdout.write('\x1b[?6n'), 2000);
 // --claude-trust-menu: Claude Code's folder-trust menu. The cursor starts on "No, exit"; only arrow keys
 // move it, Enter on the second row trusts, and Enter on the first row, a digit or y all end the session.
 if (process.argv.includes('--claude-trust-menu')) {

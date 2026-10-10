@@ -5,6 +5,7 @@ const path = require('path');
 const net = require('net');
 const { TaskStore } = require('../../task-board');
 const closeElectron = require('./fixtures/close-electron');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 const ROOT = path.resolve(__dirname, '../..');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 let application, desktop, browser, mobile, profile, url, token;
@@ -15,9 +16,10 @@ const captures = () => {
 
 async function launch(extraTurns = [], before = () => {}) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-mobile-e2e-'));
-  // The account recorded in the CN seat directory (no credentials: the seat is not signed in, the
-  // record alone names it). A real-length name, so the phone layout is checked with one.
+  // The account signed in behind the CN seat directory (a stand-in login), with a real-length name,
+  // so the phone layout is checked with one. US and US2 have no login at all.
   fs.mkdirSync(path.join(profile, 'seats-home', '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude', '.credentials.json'), STAND_IN_CREDENTIAL);
   fs.writeFileSync(path.join(profile, 'seats-home', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'nhunhao088us@example.test', accountUuid: 'mobile-e2e-cn' } }));
   // Keep the browser's origin stable across an isolated app restart.
   const reservation = net.createServer();

@@ -60,6 +60,11 @@ function imageKind(data) {
 const QUOTA_STATUS = ['out', 'stale', 'normal', 'warning', 'danger', 'nodigits', 'expired', 'unknown'];
 // A seat's name is its account name, the part before the @: a whole address never goes to the phone.
 const nameOnly = (value) => value.replace(/@[^\s，；（）()]*/g, '');
+// The row's colour (QuotaCore.seatHealth): known values only, else none and the phone falls back to the status.
+function quotaHealth(value, text) {
+  if (!value || !QuotaCore.HEALTH_LEVELS.includes(value.level) || !QuotaCore.HEALTH_KINDS.includes(value.kind)) return null;
+  return { level: value.level, kind: value.kind, label: text(value.label, 20), reason: text(value.reason, 160), action: text(value.action, 120) };
+}
 function quotaView(data, now) {
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
   const text = (value, max) => typeof value === 'string' ? nameOnly(value.replace(/[\x00-\x1f\x7f]/g, ' ')).slice(0, max) : '';
@@ -71,6 +76,7 @@ function quotaView(data, now) {
     cells: (Array.isArray(row.cells) ? row.cells : []).filter((cell) => cell && ['5h', '7d'].includes(cell.key) && QuotaCore.percent(cell.remaining) !== null).slice(0, 2)
       .map((cell) => ({ key: cell.key, remaining: cell.remaining, out: cell.out === true, resetAt: time(cell.resetAt) })),
     recoveryAt: time(row.recoveryAt), sampledAt: time(row.sampledAt), account: QuotaCore.maskAccount(row.account), source: text(row.source, 60),
+    ...(quotaHealth(row.health, text) ? { health: quotaHealth(row.health, text) } : {}),
   }));
   return { rows, version: /^\d+\.\d+\.\d+[\w.-]{0,20}$/.test(data?.version || '') ? data.version : '', now };
 }

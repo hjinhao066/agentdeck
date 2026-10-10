@@ -66,6 +66,9 @@ const ICONS = {
   crown: S('<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>'),
   gem: S('<path d="M6 3h12l4 6-10 13L2 9z"/>'),
   ban: S('<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>'),
+  // A seat row that is not fine: yellow triangle (old numbers, failed read), red circle (cannot work).
+  seatWarn: S('<path d="M12 4 2.8 19.5h18.4L12 4Z"/><path d="M12 10v4.5m0 2.6v.2"/>'),
+  seatBad: S('<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5m0 3.2v.2"/>'),
   share: S('<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>'),
   diff: S('<rect x="4" y="3" width="16" height="18" rx="2"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/><line x1="9" y1="17" x2="15" y2="17"/>'),
   eye: S('<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>'),
@@ -516,7 +519,9 @@ function toggleZoom(id) {
 }
 
 function writePtyData(id, t, data, at) {
-  t.lastOutputAt = at; MainSession.onOutput(id, data); t.term.write(data);
+  // a chunk of terminal queries only (an idle Claude asking for the cursor) is not output
+  if (MainCore.drawsOutput(data)) t.lastOutputAt = at;
+  MainSession.onOutput(id, data); t.term.write(data);
 }
 window.deck.onPtyData((id, data, sequence) => {
   const t = terms.get(id);
@@ -4430,7 +4435,12 @@ function renderQuotaBar() {
         lead.classList.toggle('quota-captain', captain);
         lead.innerHTML = (captain ? ICONS.crown : AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider]) + (paid ? `<span class="quota-plan">${ICONS.gem}</span>` : '');
       }
-      fill(name, seat ? [AgentInfo.accountLabel(q.accountLabel)] : [NAMES[provider]]);
+      // Not fine: the name takes the colour (CSS, data-health) and a mark follows it, whose shape
+      // (triangle / circle) tells yellow from red without colour. A used-up row already has its shape,
+      // the ⊘ in its cells, and keeps the name's width. A fine row is left as it was.
+      const health = q.health;
+      const mark = () => { const m = el('span', 'quota-health'); m.innerHTML = health.level === 'bad' ? ICONS.seatBad : ICONS.seatWarn; return m; };
+      fill(name, [...(seat ? [AgentInfo.accountLabel(q.accountLabel)] : [NAMES[provider]]), ...(health.level === 'ok' || health.kind === 'exhausted' ? [] : [mark()])]);
       const state = q.authStatus === 'logged-out' ? 'danger' : q.out ? 'exhausted' : q.state;
       // Signed in to an account other than the one this seat is set to hold.
       const wrong = seat && ClaudeSeats.accountCheck(seat.id)?.state === 'mismatch' ? ClaudeSeats.accountCheck(seat.id).text : '';
@@ -4457,17 +4467,21 @@ function renderQuotaBar() {
       const head = el('span', 'qt-head');
       head.append(el('span', 'qt-name', seat ? q.accountLabel : NAMES[provider]));
       if (captain) { const who = el('span', 'qt-captain'); who.innerHTML = ICONS.crown; who.append('队长在用'); head.append(who); }
-      const badge = el('span', 'qt-badge', q.statusText); badge.dataset.state = state; head.append(badge);
+      const badge = el('span', 'qt-badge', health.level === 'ok' ? q.statusText : health.label);
+      badge.dataset.state = health.level === 'bad' ? 'danger' : health.level === 'warn' ? 'warning' : state; head.append(badge);
       const lines = q.cells.map((c) => {
         const line = el('span', 'qt-window'); line.dataset.level = level(c);
         line.append(el('span', 'qt-key', c.key === '5h' ? '5 小时' : '每周'), el('span', 'qt-pct', c.out ? '已用尽' : `剩余 ${pct(c)}`), meter(c),
           c.resetAt > now ? resetText('qt-reset', '', c.resetAt, '重置') : el('span', 'qt-reset', '重置时间未知'));
         return line;
       });
-      if (q.authStatus === 'logged-out') {
-        lines.unshift(el('span', 'qt-note out', '此席位无法继续任务，请重新登录'));
-        if (q.loginCommand) {
-          const login = el('span', 'qt-login'), command = el('code', 'qt-login-command', q.loginCommand);
+      // A login to redo, whether a confirmed logout or found by the seat list's credential check:
+      // the seat's login command, ready to copy.
+      const relogin = q.authStatus === 'logged-out' || health.level === 'bad' && health.kind !== 'exhausted';
+      const loginCommand = q.loginCommand || (relogin && seat ? ClaudeSeats.loginCommand(seat.id) : '');
+      if (relogin) {
+        if (loginCommand) {
+          const login = el('span', 'qt-login'), command = el('code', 'qt-login-command', loginCommand);
           const copy = el('button', 'rail-btn quota-login-copy'); copy.type = 'button';
           const copied = Number(item.dataset.loginCopiedUntil) > now;
           copy.innerHTML = copied ? ICONS.check : ICONS.copy;
@@ -4480,6 +4494,12 @@ function renderQuotaBar() {
       else if (blockedOnly) lines.unshift(recovery ? resetText('qt-note out', '已用尽，预计 ', recovery, '恢复') : el('span', 'qt-note out', '已用尽，恢复时间未知'));
       else if (!q.cells.length) lines.push(el('span', 'qt-note', state === 'normal' ? '未见用尽，此来源不提供百分比' : '暂无额度数据，等待下次采样'));
       if (wrong) lines.unshift(el('span', 'qt-note out', wrong));
+      // What is wrong, what was found, and what to do: first in the detail, under the name.
+      if (health.level !== 'ok') {
+        const what = el('span', `qt-health ${health.level}`);
+        what.append(mark(), el('span', 'qt-health-text', `${health.label}：${health.reason}`));
+        lines.unshift(what, el('span', `qt-note${health.level === 'bad' ? ' out' : ''}`, `要做：${health.action}`));
+      }
       const warm = seat ? ClaudeSeats.warmupDetail(seat.id) : '';
       if (seat) {
         // warmupDetail = optional warm-up line + the rotation plan, whose first part repeats who is in use.
@@ -4504,11 +4524,15 @@ function renderQuotaBar() {
       const brief = [q.out && q.authStatus !== 'logged-out' && (recovery ? `${longReset(recovery)}恢复` : '恢复时间未知'),
         ...q.cells.map((c) => `${c.key === '5h' ? '5 小时' : '每周'}剩余 ${c.remaining}%${c.resetAt > now ? `（${shortReset(c.resetAt)} 重置）` : ''}`)].filter(Boolean).join('，');
       item.dataset.state = state;
+      item.dataset.health = health.level;
+      item.dataset.healthKind = health.kind;
       item.dataset.authStatus = q.authStatus || '';
       item.dataset.account = wrong ? 'mismatch' : '';
-      item.dataset.loginCommand = q.loginCommand || '';
-      tip.dataset.loginCommand = q.loginCommand ? 'true' : '';
-      item.setAttribute('aria-label', `${seat ? q.accountLabel + (q.planMark ? ` ${q.plan}` : '') : NAMES[provider]}${captain ? '（队长）' : ''}：${wrong ? wrong + '，' : ''}${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
+      item.dataset.loginCommand = loginCommand || '';
+      tip.dataset.loginCommand = loginCommand ? 'true' : '';
+      // A used-up row already says 已用尽 and when it comes back.
+      const spokenHealth = health.level === 'ok' || health.kind === 'exhausted' ? '' : `${health.label}，${health.action}，`;
+      item.setAttribute('aria-label', `${seat ? q.accountLabel + (q.planMark ? ` ${q.plan}` : '') : NAMES[provider]}${captain ? '（队长）' : ''}：${wrong ? wrong + '，' : ''}${spokenHealth}${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
       // Model and the full evidence line: kept for diagnosis, never shown on hover.
       item.dataset.detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + warm;
       if (bar.children[index + 1] !== item) bar.insertBefore(item, bar.children[index + 1] || null);

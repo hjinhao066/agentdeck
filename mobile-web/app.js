@@ -25,6 +25,8 @@
     // A page with one arrow: tells reloading the page apart from refresh's two arrows.
     swap: '<path d="M7 4 3 8l4 4"/><path d="M3 8h14"/><path d="m17 12 4 4-4 4"/><path d="M21 16H7"/>',
     alert: '<path d="M12 4 2.8 19.5h18.4L12 4Z"/><path d="M12 10v4.5m0 2.6v.2"/>',
+    // A seat that cannot work: a circle, so it is told from the warning triangle without colour.
+    stop: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5m0 3.2v.2"/>',
     done: '<circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.8 2.8L16.2 9.5"/>',
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
     reload: '<rect x="2.5" y="2.5" width="19" height="19" rx="4"/><path d="M17.4 12a5.4 5.4 0 1 1-5.4-5.4c1.5 0 3 .6 4 1.6l1.4 1.4"/><path d="M17.4 6.6v3h-3"/>',
@@ -378,12 +380,16 @@
     el.style.setProperty('--pct', (cell.out || cell.missing ? 0 : Math.max(2, Math.min(100, cell.remaining))) + '%');
     return el;
   }
-  // The line under a row is kept for what the cells cannot say: the numbers are old or the last read failed.
-  function quotaNote(row, now) {
-    const parts = [];
-    if (row.failed) parts.push('查询失败');
-    if (row.status === 'stale' || row.status === 'expired') parts.push('数据已旧');
-    return parts.length ? [...parts, sampledText(row, now)].join(' · ') : '';
+  // The row's colour and the line under it follow the hub's rules (core.js), so both phone pages agree.
+  const rowHealth = (row) => window.HubCore.rowHealth(row);
+  const quotaNote = (row, now) => window.HubCore.quotaNote(row, now);
+  // Yellow: a warning triangle; red: a circle. The shape tells them apart without colour. A used-up
+  // row already has its shape, the ⊘ in its cells.
+  function healthMark(row) {
+    const health = rowHealth(row);
+    if (health.level === 'ok' || health.kind === 'exhausted') return null;
+    const mark = node('span', 'quota-health'); mark.innerHTML = svg(health.level === 'bad' ? 'stop' : 'alert'); mark.title = health.label;
+    return mark;
   }
   const windowName = (key) => key === '5h' ? '5 小时' : '每周';
   // Always the two columns of the header. An account that only reported "used up" shows that under 5h.
@@ -395,10 +401,7 @@
   function cellSpoken(cell, now) {
     return windowName(cell.key) + (cell.missing ? '未知' : (cell.out ? '已用尽' : '剩余 ' + percentText(cell)) + (cell.resetAt > now ? '，' + longReset(cell.resetAt, now) + (cell.out ? '恢复' : '重置') : ''));
   }
-  function quotaLabel(row, now) {
-    const windows = row.cells.length || row.status === 'out' ? quotaCells(row).filter((cell) => !cell.missing).map((cell) => cellSpoken(cell, now)) : [emptyText(row)];
-    return [row.name + (row.captain ? '（队长在用）' : ''), ...windows, quotaNote(row, now), '查看详情'].filter(Boolean).join('；');
-  }
+  function quotaLabel(row, now) { return window.HubCore.quotaLabel(row, now) + '；查看详情'; }
   function providerIcon(row) { const icon = node('span', 'quota-icon'); icon.setAttribute('aria-hidden', 'true'); icon.innerHTML = providerIcons[row.provider] || ''; return icon; }
   function renderQuota() {
     const now = Date.now();
@@ -416,6 +419,7 @@
       for (const row of quota.rows) {
         const item = node('div', 'quota-item'); item.setAttribute('role', 'listitem');
         item.dataset.quotaKey = row.key; item.dataset.status = row.status; item.dataset.provider = row.provider;
+        item.dataset.health = rowHealth(row).level;
         if (dimmed(row)) item.dataset.dim = 'true';
         if (row.captain) item.dataset.captain = 'true';
         const button = node('button', 'quota-row'); button.type = 'button';
@@ -424,6 +428,7 @@
         const name = node('span', 'quota-name');
         name.append(node('span', 'quota-name-text', [row.flag, row.short].filter(Boolean).join(' ')));
         if (row.captain) { const crown = node('span', 'quota-captain'); crown.title = '队长在用'; crown.innerHTML = svg('crown'); name.append(crown); }
+        const mark = healthMark(row); if (mark) name.append(mark);
         const values = node('span', 'quota-values');
         if (row.cells.length || row.status === 'out') {
           for (const cell of quotaCells(row)) {
@@ -479,9 +484,10 @@
       else line(windowName(cell.key), cell.out ? '已用尽' : '剩余 ' + percentText(cell), cellLevel(row, cell),
         cell.resetAt > now ? longReset(cell.resetAt, now) + (cell.out ? '恢复' : '重置') : (cell.out ? '恢复' : '重置') + '时间未知');
     }
-    const state = [row.status === 'nodigits' ? '未见用尽报错，此来源不提供百分比' : row.status === 'unknown' ? '暂无额度数据，等待桌面端下次采样' : '',
+    const health = rowHealth(row);
+    const state = [health.level === 'bad' && health.reason ? health.label + '：' + health.reason + '；' + health.action : '', row.status === 'nodigits' ? '未见用尽报错，此来源不提供百分比' : row.status === 'unknown' ? '暂无额度数据，等待桌面端下次采样' : '',
       row.status === 'stale' || row.status === 'expired' ? '数据已旧，数字仅供参考' : '', row.failed ? '最近一次查询失败' : '', quotaFailed ? '手机暂时连不上桌面端' : ''].filter(Boolean).join('；');
-    if (state) line('状态', state, 'none');
+    if (state) line('状态', state, health.level === 'bad' ? 'out' : 'none');
     line('账号', row.account || '未知');
     line('来源', row.source || '未知');
     line('采样', row.sampledAt ? sampledText(row, now).slice(3) : '暂无采样');
@@ -514,7 +520,7 @@
     const cell = row.cells.find((c) => c.key === '5h'), weekly = row.cells.find((c) => c.key === '7d');
     const shown = cell || weekly;
     const value = row.status === 'out' || shown?.out ? '用尽' : shown ? (cell ? '' : '周 ') + percentText(shown) : '—';
-    const level = value === '用尽' ? 'out' : !shown || dimmed(row) ? 'none' : shown.remaining < 10 ? 'low' : 'ok';
+    const level = value === '用尽' || rowHealth(row).level === 'bad' ? 'out' : !shown || dimmed(row) ? 'none' : shown.remaining < 10 ? 'low' : 'ok';
     const label = [row.flag, row.short].filter(Boolean).join(' ');
     // The seat is named by its account, which can be long: the name gives way (from the left,
     // keeping the end that tells accounts apart), the number beside it never does.

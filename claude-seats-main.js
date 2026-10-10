@@ -196,19 +196,43 @@ function seatEnvironment(env, seat, home) {
   else result.CLAUDE_CONFIG_DIR = loc.dir;
   return result;
 }
-function credentialStatus(service, execFileImpl = execFile) {
+// A passive look at a seat's stored login: can it be read, is it JSON, has it run out. Only the
+// state and the byte count leave here, never the content, and nothing is renewed: an expired
+// access token with a live refresh token is fine, Claude renews it itself.
+function credentialHealth(raw, now = Date.now()) {
+  const bytes = Buffer.byteLength(String(raw || '').trim());
+  let oauth;
+  try { oauth = JSON.parse(raw)?.claudeAiOauth; } catch (_) { return { state: 'invalid', bytes }; }
+  const access = typeof oauth?.accessToken === 'string' && !!oauth.accessToken;
+  const refresh = typeof oauth?.refreshToken === 'string' && !!oauth.refreshToken;
+  if (!access && !refresh) return { state: 'no-oauth', bytes };
+  const accessLive = access && !(Number.isFinite(oauth.expiresAt) && oauth.expiresAt <= now);
+  const refreshLive = refresh && !(Number.isFinite(oauth.refreshTokenExpiresAt) && oauth.refreshTokenExpiresAt <= now);
+  return { state: accessLive || refreshLive ? 'ok' : 'expired', bytes };
+}
+function credentialResult({ state, bytes }, store) {
+  const where = store === 'file' ? '凭据文件' : '钥匙串';
+  const loginReason = { missing: '此席位没有登录凭据', invalid: `此席位凭据格式无效（${where}里的凭据有 ${bytes} 字节，不是合法 JSON）`,
+    'no-oauth': '此席位没有可用的 OAuth 凭据', expired: '此席位访问令牌已过期且没有可用的刷新令牌' }[state] || '';
+  return { present: state === 'ok', loginReason,
+    authReason: state === 'unreadable' ? (store === 'file' ? '读不了此席位的凭据文件' : '无法核实此席位钥匙串，请检查钥匙串访问权限') : '',
+    credential: { state, bytes, store } };
+}
+function credentialStatus(service, execFileImpl = execFile, now = Date.now()) {
   return new Promise((resolve) => execFileImpl('security', ['find-generic-password', '-s', service, '-w'],
     { timeout: 2000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
-      if (error) return resolve({ present: false, loginReason: error.code === 44 ? '此席位没有登录凭据' : '', authReason: '无法核实此席位钥匙串，请检查钥匙串访问权限' });
-      try {
-        const oauth = JSON.parse(stdout).claudeAiOauth;
-        const access = typeof oauth?.accessToken === 'string' && !!oauth.accessToken;
-        const refresh = typeof oauth?.refreshToken === 'string' && !!oauth.refreshToken;
-        const expired = Number.isFinite(oauth?.expiresAt) && oauth.expiresAt <= Date.now();
-        const valid = (access && !expired) || refresh;
-        resolve({ present: valid, loginReason: valid ? '' : expired ? '此席位访问令牌已过期且没有刷新令牌' : '此席位没有可用的 OAuth 凭据' });
-      } catch (_) { resolve({ present: false, loginReason: '此席位凭据格式无效' }); }
+      if (error) return resolve(credentialResult({ state: error.code === 44 ? 'missing' : 'unreadable', bytes: 0 }, 'keychain'));
+      resolve(credentialResult(credentialHealth(stdout, now), 'keychain'));
     }));
+}
+// Windows (and test profiles) keep the login in the seat's .credentials.json.
+function credentialFileStatus(file, now = Date.now()) {
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile()) return credentialResult({ state: 'unreadable', bytes: 0 }, 'file');
+    if (stat.size > 64 * 1024) return credentialResult({ state: 'invalid', bytes: stat.size }, 'file');
+    return credentialResult(credentialHealth(fs.readFileSync(file, 'utf8'), now), 'file');
+  } catch (e) { return credentialResult({ state: e.code === 'ENOENT' ? 'missing' : 'unreadable', bytes: 0 }, 'file'); }
 }
 // Who a seat directory is actually signed in to, as `claude auth status` reports it. Read only:
 // the CLI exits 1 when signed out but still prints its JSON. Null when it cannot answer.
@@ -257,7 +281,7 @@ async function seatInfo(seat, home, platform = process.platform, keychain = cred
     email = S.maskEmail(rawEmail);
     accountKey = usageAccountKey(loc) || '';
   } catch (_) {}
-  const status = platform === 'darwin' ? await keychain(loc.keychainService) : fs.existsSync(loc.credentialsPath);
+  const status = platform === 'darwin' ? await keychain(loc.keychainService) : credentialFileStatus(loc.credentialsPath);
   const present = typeof status === 'object' ? status.present : !!status;
   // The CLI's answer wins; without it, the account recorded in the seat's own metadata.
   const auth = present && authStatus ? await authStatus(seat, [loc.dir, rawEmail, accountKey].join('|'), fresh) : null;
@@ -272,7 +296,9 @@ async function seatInfo(seat, home, platform = process.platform, keychain = cred
     loginBase: loginCommand('Claude', { ...seat, email: '' }, home, platform === 'test' ? process.platform : platform),
     credentialKey: crypto.createHash('sha256').update(loc.keychainService).digest('hex').slice(0, 16), loggedIn: !!present && !signedOut,
     loginReason: signedOut ? `${seat.name}（${seat.id}）：Claude 登录状态显示此席位未登录` : typeof status === 'object' ? status.loginReason ? `${seat.name}（${seat.id}）：${status.loginReason}` : '' : present ? '' : `${seat.name}（${seat.id}）：没有登录凭据`,
-    authReason: typeof status === 'object' ? status.authReason ? `${seat.name}（${seat.id}）：${status.authReason}` : '' : '', usagePath: loc.usagePath };
+    authReason: typeof status === 'object' ? status.authReason ? `${seat.name}（${seat.id}）：${status.authReason}` : '' : '', usagePath: loc.usagePath,
+    // What the passive check found: a state and a byte count, never the credential.
+    credential: status?.credential || null };
 
 }
 // The address recorded in a seat directory's own account file; '' when there is none. Read only.
@@ -418,4 +444,4 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
 
   });
 }
-module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, declineAutoModeNudge, seatEnvironment, credentialStatus, readAuthStatus, authStatusCache, seatInfo, recordedAccount, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };
+module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, declineAutoModeNudge, seatEnvironment, credentialHealth, credentialStatus, credentialFileStatus, readAuthStatus, authStatusCache, seatInfo, recordedAccount, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };

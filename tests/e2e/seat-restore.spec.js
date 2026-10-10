@@ -6,6 +6,7 @@ const closeElectron = require('./fixtures/close-electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 const ROOT = path.resolve(__dirname, '../..');
 const FAKE_AGENT = path.join(__dirname, 'fixtures', 'fake-agent.js');
 const FAKE = `node "${FAKE_AGENT}"`;
@@ -69,7 +70,7 @@ test.beforeEach(async () => {
   us2Dir = path.join(seatHome, '.claude-us2');
   for (const dir of [profile, home, path.join(seatHome, '.claude'), us2Dir, path.join(sandbox, 'bin')]) fs.mkdirSync(dir, { recursive: true });
   // Stand-in logins: a credential file exists. A test profile never reads a real Keychain or runs the real CLI.
-  for (const dir of [path.join(seatHome, '.claude'), us2Dir]) fs.writeFileSync(path.join(dir, '.credentials.json'), '{}');
+  for (const dir of [path.join(seatHome, '.claude'), us2Dir]) fs.writeFileSync(path.join(dir, '.credentials.json'), STAND_IN_CREDENTIAL);
   fs.writeFileSync(path.join(seatHome, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test' }, hasCompletedOnboarding: true }));
   fs.writeFileSync(path.join(us2Dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us2@example.test' }, hasCompletedOnboarding: true }));
   claude = path.join(sandbox, 'bin', 'claude');   // a program named claude to the app, never the real CLI

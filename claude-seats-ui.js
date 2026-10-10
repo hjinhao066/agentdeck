@@ -72,7 +72,9 @@
   // fresh: ask each seat's CLI again now instead of using the ten-minute answer.
   async function refresh(fresh = false) {
     host.flushConfig();
-    const accounts = () => JSON.stringify(host.config.claudeSeats.map((s) => [s.id, accountCheck(s.id), display(s.id)]));
+    // A change in a seat's stored login (seatHealth) redraws the rows too.
+    const accounts = () => JSON.stringify(host.config.claudeSeats.map((s) => { const i = seats.find((v) => v.id === s.id);
+      return [s.id, accountCheck(s.id), display(s.id), i && [i.loggedIn, i.loginReason, i.authReason, i.credential]]; }));
     const before = seats.length ? accounts() : '';
     seats = await window.deck.claudeSeats(fresh);
     if (accounts() !== before) window.dispatchEvent(new CustomEvent('claude-seat-accounts'));
@@ -92,6 +94,11 @@
       b.disabled = switching;
     });
     return seats;
+  }
+  // The seat's login command for a row that needs a new login, with the seat's set email.
+  function loginCommand(seatId) {
+    const info = seats.find((s) => s.id === seatId), email = S.cleanEmail(host.config.claudeSeats.find((s) => s.id === seatId)?.email);
+    return info?.loginBase ? info.loginBase + (email ? ' --email ' + email : '') : '';
   }
   // Signed in, signed in to the wrong account, or not signed in: against the seat's configured email.
   function accountCheck(seatId) {
@@ -568,5 +575,5 @@
     });
     return { started: true, id: job.id };
   }
-  window.ClaudeSeats = { init, mobileState, mobileSwitch, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail, automaticTick, accountCheck, display, described, seatName };
+  window.ClaudeSeats = { init, mobileState, mobileSwitch, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail, automaticTick, accountCheck, loginCommand, display, described, seatName };
 })();

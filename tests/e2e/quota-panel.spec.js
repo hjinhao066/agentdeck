@@ -3,6 +3,7 @@
 // All numbers and accounts are injected offline fixtures; the only agent is the stand-in.
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs'), os = require('os'), path = require('path');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 const ROOT = path.resolve(__dirname, '../..'), FAKE = path.join(__dirname, 'fixtures/quota-agent.js');
 let app, page, profile;
 const row = (key) => page.locator(`#quotaBar [data-quota-key="${key}"]`);
@@ -15,7 +16,7 @@ test.beforeAll(async () => {
   for (const [dir, meta, account] of [['.claude-cn', '.claude-cn/.claude.json', { emailAddress: 'hjlnbao088us@example.test', organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x' }],
     ['.claude', '.claude.json', { emailAddress: 'sam.h.second@example.test', organizationType: 'claude_pro', organizationRateLimitTier: 'default_claude_ai' }]]) {
     fs.mkdirSync(path.join(home, dir), { recursive: true });
-    fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}');   // stand-in credential existence only
+    fs.writeFileSync(path.join(home, dir, '.credentials.json'), STAND_IN_CREDENTIAL);   // stand-in signed-in credential
     fs.writeFileSync(path.join(home, meta), JSON.stringify({ oauthAccount: account }));
   }
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
