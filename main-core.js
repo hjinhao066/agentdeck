@@ -1167,7 +1167,11 @@
   }
 
   // Conservative silence windows: status spinners may stay busy during deep thinking.
-  function silenceTimeout(cmd) {
+  // A Claude turn that is over while its background shell or Monitor runs draws nothing for as long as
+  // the command runs (a queued test run can take hours): that wait is only reported after 3 hours.
+  const BACKGROUND_SILENCE = 3 * 3600_000;
+  function silenceTimeout(cmd, backgroundWait) {
+    if (backgroundWait && /\bclaude\b/i.test(cmd || '')) return BACKGROUND_SILENCE;
     if (/\b(?:agy|gemini|cursor-agent)\b/i.test(cmd || '')) return 15 * 60_000;
     if (/\bcodex\b/i.test(cmd || '')) return 30 * 60_000;
     if (/\bclaude\b/i.test(cmd || '')) return 20 * 60_000;
