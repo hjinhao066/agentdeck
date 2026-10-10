@@ -55,3 +55,10 @@ test('the Token view shows 按席位目录 with its note; 金额 keeps 订阅值
   assert.match(ui, /按目录统计，目录换过号会算到当时的目录/);
   assert.match(ui, /!m\.money && seats && data\.seatTokens/);
 });
+
+test('按席位目录 counts this machine even while the chart shows the other one', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'token-usage-ui.js'), 'utf8');
+  // the rows read this machine's seatTokens, so they are drawn on this machine's days and unit
+  const calls = ui.match(/renderSeats\(([^)]*)\)/g).filter((c) => c !== 'renderSeats(m)');
+  assert.deepEqual(calls, ['renderSeats(ownModel || model)', 'renderSeats(own)']);
+});
