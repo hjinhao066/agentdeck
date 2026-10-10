@@ -511,7 +511,9 @@ function toggleZoom(id) {
 }
 
 function writePtyData(id, t, data, at) {
-  t.lastOutputAt = at; MainSession.onOutput(id, data); t.term.write(data);
+  // a chunk of terminal queries only (an idle Claude asking for the cursor) is not output
+  if (MainCore.drawsOutput(data)) t.lastOutputAt = at;
+  MainSession.onOutput(id, data); t.term.write(data);
 }
 window.deck.onPtyData((id, data, sequence) => {
   const t = terms.get(id);
