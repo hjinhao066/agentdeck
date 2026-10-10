@@ -14,7 +14,7 @@ const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 //   AGENTDECK_REAL_CLI=claude npm run e2e -- tests/e2e/real-cli-restart.spec.js
 // A throwaway profile; its `claude` is the installed CLI with an empty config directory and a local
 // stand-in for the model API (no login, no quota). The app is quit and started again three times around the
-// same conversation; each start, the CLI's own request to its "model" must carry the restart notice, once.
+// same conversation four times; each start, the notice must land in the CLI's conversation, once.
 // (Measured with 2.1.295: the UI is up 0.6 s after the CLI starts, 1.5 s for the 队长's 26 MB conversation;
 // padding a test conversation to 25 MB does not slow it, so none is added here.)
 const WANTED = (process.env.AGENTDECK_REAL_CLI || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -87,6 +87,13 @@ test('real claude: after each restart the resumed 队长 takes its restart notic
     return [];
   };
   const notices = () => conversation().filter((l) => l.type === 'user' && l.message?.content === notice).length;
+  // The 队长 of 10-09 had worked for hours: the replay keeps only its last 200 KB of output, long after its switch
+  // to the alternate screen, so the restart painted its last idle frame into the main screen. A short test
+  // session still has that switch in its replay; take it out, as those hours would have.
+  const likeALongSession = () => {
+    const file = path.join(profile, 'sessions', CAPTAIN + '.txt');
+    if (fs.existsSync(file)) fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/\x1b\[\?(?:1049|1047|47)[hl]/g, ''));
+  };
   const launch = async () => {
     const application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
       args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
@@ -105,7 +112,8 @@ test('real claude: after each restart the resumed 队长 takes its restart notic
     await quitAndWait(app.application);
     app = null;
     console.log(`[real-cli-restart] ${execSync(`${JSON.stringify(real)} --version`, { encoding: 'utf8' }).trim()}`);
-    for (let round = 1; round <= 3; round++) {
+    for (let round = 1; round <= 4; round++) {
+      likeALongSession();
       const started = Date.now();
       app = await launch();
       await expect.poll(notices, { timeout: 90000 }).toBe(round);
