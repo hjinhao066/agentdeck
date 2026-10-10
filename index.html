@@ -84,6 +84,10 @@
     <p class="hint">服务只监听本机。远程访问需已配置的私人 HTTPS 隧道；开启后登录 Mac 会自动启动 AgentDeck。首次登录使用 token，随后记住设备。</p>
     <label for="mobileWebOrigin">私人 HTTPS 地址</label><input id="mobileWebOrigin" type="url" placeholder="https://你的私人入口" />
     <button id="mobileWebSaveOrigin" class="btn" type="button">保存访问地址</button>
+    <label for="mobileWebPreviewRoots">手机可预览的其他文件夹（每行一个）</label>
+    <textarea id="mobileWebPreviewRoots" rows="2" autocomplete="off" spellcheck="false" aria-describedby="mobileWebPreviewHint"></textarea>
+    <p id="mobileWebPreviewHint" class="hint">对话里点名的文件，除了家目录和临时目录，也能从这些文件夹在手机上打开。写完整路径，* 代表任意一层文件夹。密钥、.env、名字带 token、secret、credential 的文件始终打不开。</p>
+    <button id="mobileWebSavePreview" class="btn" type="button">保存预览文件夹</button>
     <p id="mobileWebStatus" class="hint" role="status"></p>
     <div class="mobile-web-access" hidden>
       <label for="mobileWebUrl">本地地址</label><input id="mobileWebUrl" readonly />

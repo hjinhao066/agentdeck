@@ -743,6 +743,7 @@ async function updateMobileWebSettings(input) {
     document.querySelector('.mobile-web-access').hidden = !status.enabled;
     document.getElementById('mobileWebUrl').value = status.url || '';
     document.getElementById('mobileWebOrigin').value = status.publicOrigin || '';
+    if (Array.isArray(status.previewRoots)) document.getElementById('mobileWebPreviewRoots').value = status.previewRoots.join('\n');
     document.getElementById('mobileWebPublicUrl').value = status.publicUrl || '';
     document.getElementById('mobileWebMachine').hidden = !status.basePath;
     document.getElementById('mobileWebMachineName').value = status.basePath ? `${status.label || ''} · ${status.basePath}` : '';
@@ -757,6 +758,9 @@ async function updateMobileWebSettings(input) {
 }
 document.getElementById('mobileWebEnabled').addEventListener('change', (event) => updateMobileWebSettings({ enabled: event.target.checked }));
 document.getElementById('mobileWebSaveOrigin').addEventListener('click', () => updateMobileWebSettings({ publicOrigin: document.getElementById('mobileWebOrigin').value.trim() }));
+document.getElementById('mobileWebSavePreview').addEventListener('click', () => updateMobileWebSettings({
+  previewRoots: document.getElementById('mobileWebPreviewRoots').value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+}));
 document.getElementById('mobileWebRevoke').addEventListener('click', () => {
   if (confirm('吊销所有设备并更换登录 token？已登录的手机需要重新登录，旧 token 将立即失效。')) updateMobileWebSettings({ revoke: true });
 });

@@ -44,6 +44,7 @@ const { TaskHeartbeat } = require('./task-heartbeat');
 const { watchDir } = require('./dir-watch');
 const { createRefresh: createClaudeQuotaRefresh, createSeatGate, readSeat: readClaudeSeat, readCredentials: readClaudeCredentials } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
+const FilePreview = require('./file-preview-core');
 const { createMemoryPressure } = require('./memory-pressure');
 const { createPtyWork } = require('./pty-work');
 const { createJsonFileCache } = require('./config-cache');
@@ -1121,8 +1122,8 @@ app.whenReady().then(async () => {
     // Like pasted screenshots, phone images reach the Captain as file paths.
     uploadDir: path.join(app.getPath('userData'), 'mobile-uploads'),
     // Files the phone may preview: what the conversation named, plus the report folders; this app's own data never.
-    // A test profile's report folder is inside the profile.
-    preview: tudArg ? { home: HOME, roots: [path.join(app.getPath('userData'), 'reports')] } : { home: HOME, denied: [app.getPath('userData')] },
+    // A test profile's report folder is inside the profile, and it gets no default folders beyond home (D:\aiproject on Windows).
+    preview: tudArg ? { home: HOME, roots: [path.join(app.getPath('userData'), 'reports')] } : { home: HOME, denied: [app.getPath('userData')], defaultExtra: FilePreview.defaultExtraRoots() },
     getBoardVersion: () => boardVersionOf(taskStore.dir),
     machine: { platform: process.platform, hostname: os.hostname(), appVersion: app.getVersion() },
     saveSettings: (settings) => {
@@ -1149,6 +1150,12 @@ app.whenReady().then(async () => {
       if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1) throw new Error('Invalid mobile web setting.');
       if (typeof input.enabled === 'boolean') await mobileWeb.configure(withEndpoint({ ...mobileSettings, enabled: input.enabled }));
       else if (typeof input.publicOrigin === 'string') await mobileWeb.configure(withEndpoint({ ...mobileSettings, publicOrigin: input.publicOrigin }));
+      else if (input.previewRoots === null || Array.isArray(input.previewRoots)) {
+        // null returns to the default folders. A folder that is not allowed is named back, and nothing is saved.
+        const { bad } = FilePreview.cleanRoots(input.previewRoots || []);
+        if (bad.length) throw new Error('这些文件夹不能用：' + bad.join('、') + '（要写完整路径，至少两层，* 只能代表一整层文件夹，不能是网络路径）');
+        await mobileWeb.configure(withEndpoint({ ...mobileSettings, previewRoots: input.previewRoots }));
+      }
       else if (input.revoke === true) await mobileWeb.revokeDevices();
       else throw new Error('Invalid mobile web setting.');
     }

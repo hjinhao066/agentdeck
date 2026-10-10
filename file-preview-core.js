@@ -7,7 +7,9 @@
 // report folders. The decision is made on the real path (after `..` and
 // symbolic links are resolved), key and credential locations are refused
 // wherever they are reached from, and every read is capped. Read only.
+// The desktop's preview pane uses the same refusals (`localRefusal`).
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const HubCore = require('./mobile-web/hub/core.js');
@@ -15,10 +17,15 @@ const HubCore = require('./mobile-web/hub/core.js');
 const LIMITS = { text: 1024 * 1024, image: 12 * 1024 * 1024, pdf: 32 * 1024 * 1024, chunk: 768 * 1024, path: 1024, entries: 300 };
 // Folders that hold reports and boards: readable without being named first.
 const DEFAULT_ROOTS = ['reports', path.join('.agents', 'boards')];
+// Beyond the home and temp folders, where a named file may also be read. On Windows the
+// deliveries live on D:, so two kinds of folder there by default; a `*` stands for exactly
+// one folder level. The user changes the list in Settings; a Mac has none.
+const EXTRA_ROOTS = { win32: ['D:\\aiproject\\Playground', 'D:\\aiproject\\*\\reports'] };
+const MAX_EXTRA_ROOTS = 20;
 
 // A folder with one of these names holds keys, wherever it is.
 const SECRET_DIRS = new Set(['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.password-store', 'secrets', '.secrets', 'keychains',
-  'agentdeck-remote', '.git', 'gcloud', '.1password']);
+  'agentdeck-remote', '.git', 'gcloud', '.1password', 'credentials', '.credentials']);
 // Files in the home folder itself that carry tokens or shell exports.
 const SECRET_HOME_FILES = new Set(['.netrc', '.npmrc', '.pypirc', '.git-credentials', '.claude.json', '.zshrc', '.zshenv', '.zprofile', '.bashrc', '.bash_profile', '.profile',
   '.zsh_history', '.bash_history', '.agents-vault-pass', '.gitconfig', '.boto', '.s3cfg', '.pgpass', '.my.cnf']);
@@ -26,9 +33,11 @@ const SECRET_HOME_FILES = new Set(['.netrc', '.npmrc', '.pypirc', '.git-credenti
 const BINARY_EXT = /\.(?:zip|gz|tgz|bz2|xz|7z|rar|tar|dmg|pkg|iso|exe|dll|so|dylib|bin|app|asar|node|class|jar|o|a|wasm|sqlite|db|docx?|xlsx?|pptx?|pages|numbers|keynote|mp[34]|m4[av]|mov|avi|mkv|wav|flac|ogg|webm|heic|tiff?|psd|ttf|otf|woff2?)$/i;
 const SECRET_EXT = /\.(?:pem|key|p12|pfx|jks|keystore|kdbx|ovpn|asc|gpg|ppk|mobileprovision|cer|crt|der)$/;
 // credentials.json, .credentials.json, auth.json, bot-token.txt, oauth_creds.json, api_key.txt …
-// A report named token-usage.md is not one of these: the word has to end the name.
 const SECRET_STEM = /(?:^|[._-])(?:secrets?|credentials?|creds|passwords?|passwd|tokens?|api[_-]?keys?|private[_-]?keys?|auth|cookies?|vault[_-]?pass)$/;
-const SECRET_NAME = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|known_hosts|authorized_keys|\.htpasswd|login\.keychain(?:-db)?|vps-access\.json|.*vault-pass.*)$/;
+// A file whose name holds one of these words anywhere is refused too (token-usage.md included):
+// the phone entry is public, and a false refusal costs less than a leaked key. Folders are judged by SECRET_DIRS.
+const SECRET_WORD = /token|secret|credential/;
+const SECRET_NAME = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519).*|known_hosts|authorized_keys|\.htpasswd|login\.keychain(?:-db)?|vps-access\.json|.*vault-pass.*)$/;
 
 const insensitive = (platform) => platform === 'darwin' || platform === 'win32';
 const fold = (value, platform) => insensitive(platform) ? value.toLowerCase() : value;
@@ -38,12 +47,14 @@ function inside(child, parent, platform, lib = path) {
 }
 
 // Is this real path a place keys live? `home` and `denied` are real paths too.
-function secretPath(real, { home, denied = [], platform = process.platform, lib = path } = {}) {
+// `dir`: the path is a folder, judged by its name only through SECRET_DIRS.
+function secretPath(real, { home, denied = [], platform = process.platform, lib = path, dir = false } = {}) {
   const lower = real.toLowerCase();
   const parts = lower.split(/[\\/]+/).filter(Boolean);
   const name = parts[parts.length - 1] || '';
   if (parts.slice(0, -1).some((part) => SECRET_DIRS.has(part)) || SECRET_DIRS.has(name)) return true;
   if (SECRET_NAME.test(name) || SECRET_EXT.test(name)) return true;
+  if (!dir && SECRET_WORD.test(name)) return true;
   const stem = name.replace(/\.[a-z0-9]{1,8}$/, '');
   if (SECRET_STEM.test(stem) || SECRET_STEM.test(name)) return true;
   if (denied.some((dir) => dir && inside(real, dir, platform, lib))) return true;
@@ -67,6 +78,75 @@ function absolutePath(raw, { home, lib = path } = {}) {
   return lib.resolve(value);
 }
 
+// Windows reads some paths as something other than a plain file on this computer: a network
+// share or device path (\\server\share, \\?\C:\…, \\.\…), a second data stream (a.md:hidden,
+// a.md::$DATA) or a name Windows trims (".env." and ".env " open .env). Such a path is never
+// previewed, on the phone or the desktop. `value` is absolute and has lost its ":12" line already.
+function plainPath(value, platform = process.platform) {
+  if (platform !== 'win32') return true;
+  if (/^[\\/]{2}/.test(value) || !/^[A-Za-z]:[\\/]/.test(value) || value.indexOf(':', 2) !== -1) return false;
+  return value.slice(3).split(/[\\/]+/).every((part) => part === '' || part === '.' || part === '..' || !/[. ]$/.test(part));
+}
+
+// The folders in Settings, cleaned: absolute, no network or device path, no `..`, at least two
+// folders deep, and `*` only as a whole folder name after the first one. Returns { roots, bad }.
+function cleanRoots(list, platform = process.platform) {
+  const win = platform === 'win32';
+  const roots = [], bad = [], seen = new Set();
+  for (const raw of Array.isArray(list) ? list : []) {
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) continue;
+    const drive = win ? (/^([A-Za-z]):[\\/]/.exec(value) || [])[1] : (value.startsWith('/') ? '/' : '');
+    const segs = drive ? value.slice(win ? 3 : 1).split(win ? /[\\/]+/ : /\/+/).filter(Boolean) : [];
+    const ok = !!drive && value.length <= LIMITS.path && !/[\x00-\x1f\x7f?"<>|]/.test(value) && plainPath(value.replace(/\*/g, 'x'), platform)
+      && segs.length >= 2 && segs[0] !== '*' && segs.every((seg) => seg === '*' || (!seg.includes('*') && seg !== '.' && seg !== '..' && seg !== '~'));
+    if (!ok) { bad.push(value.slice(0, 120)); continue; }
+    const clean = win ? drive.toUpperCase() + ':\\' + segs.join('\\') : '/' + segs.join('/');
+    if (seen.has(fold(clean, platform))) continue;
+    seen.add(fold(clean, platform));
+    if (roots.length < MAX_EXTRA_ROOTS) roots.push(clean);
+  }
+  return { roots, bad };
+}
+const defaultExtraRoots = (platform = process.platform) => [...(EXTRA_ROOTS[platform] || [])];
+
+// Settings folders ready to compare with real paths: the part before the first `*` is resolved
+// the way the home folder is, the rest is matched folder by folder against the real path. A link
+// or junction below that part is therefore not followed: where it leads has to be allowed itself.
+async function realExtra(patterns, real) {
+  const out = [];
+  for (const pattern of patterns) {
+    const segs = pattern.split(/[\\/]+/).filter(Boolean);
+    const star = segs.indexOf('*');
+    const fixed = star < 0 ? segs : segs.slice(0, star);
+    const base = await real(pattern.startsWith('/') ? '/' + fixed.join('/') : fixed[0] + '\\' + fixed.slice(1).join('\\'));
+    if (base) out.push({ base, rest: star < 0 ? [] : segs.slice(star) });
+  }
+  return out;
+}
+function inExtra(value, extra, platform) {
+  return extra.some(({ base, rest }) => {
+    if (!inside(value, base, platform)) return false;
+    const rel = path.relative(base, value).split(/[\\/]+/).filter(Boolean);
+    return rel.length >= rest.length && rest.every((seg, i) => seg === '*' || fold(seg, platform) === fold(rel[i], platform));
+  });
+}
+
+// The desktop preview pane. The user clicked the path on this computer, so it may be in any
+// folder, but the refusals are the phone's: no network, device or stream path, and no key or
+// credential file, judged on the real path (links, junctions and 8.3 short names resolved).
+// Returns '' when the file may be shown, otherwise 'path', 'secret' or 'missing'.
+function localRefusal(target, { home = os.homedir(), platform = process.platform } = {}) {
+  if (typeof target !== 'string' || !path.isAbsolute(target) || !plainPath(target, platform)) return 'path';
+  let real, stat;
+  try { real = fsSync.realpathSync.native(target); stat = fsSync.statSync(real); } catch (_) { return 'missing'; }
+  if (!plainPath(real, platform)) return 'path';
+  let realHome = home;
+  try { realHome = fsSync.realpathSync.native(home); } catch (_) {}
+  const dir = stat.isDirectory();
+  return secretPath(real, { home: realHome, platform, dir }) || secretPath(target, { home, platform, dir }) ? 'secret' : '';
+}
+
 // The paths the texts name, as the page's own link finder reads them: only what
 // is shown as a link can be opened. A folder named with enough depth under the
 // home folder (or the temp folder) covers the files in it.
@@ -88,21 +168,31 @@ const refuse = (code) => ({ ok: false, code });
 // Decide and read. `texts` are what the Captain, receipts and 待我处理 said.
 // Returns { ok: true, kind, … } or { ok: false, code: 'invalid' | 'denied' | 'missing' }.
 // A path outside what may be read answers 'denied' whether or not it exists.
-async function readPreview(raw, { home = os.homedir(), roots, denied = [], texts = [], offset = 0, platform = process.platform, tmp = os.tmpdir() } = {}) {
+// `extra`: the Settings folders (see EXTRA_ROOTS) where a named file may be read too.
+async function readPreview(raw, { home = os.homedir(), roots, denied = [], extra = [], texts = [], offset = 0, platform = process.platform, tmp = os.tmpdir() } = {}) {
   let line = (/:(\d+)(?::\d+)?$/.exec(String(raw || '')) || [])[1];
   let lexical = absolutePath(raw, { home });
   if (!lexical) return refuse('invalid');
   if (!Number.isSafeInteger(offset) || offset < 0) return refuse('invalid');
+  // On Windows "a.md:12" is always a.md at line 12: a name with a colon in it is a data stream there.
+  if (platform === 'win32' && line) lexical = lexical.replace(/:\d+(?::\d+)?$/, '');
+  if (!plainPath(lexical, platform)) return refuse('invalid');
+  // fs.realpath is the system's own: links and junctions followed, 8.3 short names written out in full.
   const real = async (value) => { try { return await fs.realpath(value); } catch (_) { return ''; } };
   const realHome = await real(home) || home;
   const realRoots = (await Promise.all((roots || DEFAULT_ROOTS.map((dir) => path.join(home, dir))).map(real))).filter(Boolean);
   const realDenied = (await Promise.all(denied.map(real))).filter(Boolean);
   const temps = (await Promise.all([tmp, ...(platform === 'win32' ? [] : ['/tmp'])].map(real))).filter(Boolean);
+  const extras = await realExtra(cleanRoots(extra, platform).roots, real);
   const mentioned = mentionedPaths(texts, { home });
   // "a.md:12" is the file a.md unless a file really carries that name.
   let target = await real(lexical);
-  if (target) line = '';
-  else if (line) { lexical = lexical.replace(/:\d+(?::\d+)?$/, ''); target = await real(lexical); }
+  if (platform !== 'win32') {
+    if (target) line = '';
+    else if (line) { lexical = lexical.replace(/:\d+(?::\d+)?$/, ''); target = await real(lexical); }
+  }
+  // A real path on a network share (a link or junction pointing there) is not this computer's file.
+  if (target && !plainPath(target, platform)) return refuse('denied');
   const same = (a, b) => fold(a, platform) === fold(b, platform);
   // A named path counts where it really is: its folders resolved (/tmp is /private/tmp on a Mac), its own name
   // kept. So naming a symbolic link names the link, never the file it points to: that one has to be allowed itself.
@@ -112,16 +202,17 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], texts
     if (dir) realMentioned.push(path.join(dir, path.basename(entry)));
   }
   const named = (value) => [...mentioned].some((entry) => same(entry, value));
-  // Under a named folder: the folder has to be at least two levels below home, or one below the temp folder.
+  // Under a named folder: the folder has to be at least two levels below home, or one below the temp folder,
+  // or inside one of the Settings folders.
   const depth = (entry, base) => inside(entry, base, platform) ? path.relative(base, entry).split(path.sep).filter(Boolean).length : 0;
   const underNamed = (value) => [...mentioned].some((entry) => inside(value, entry, platform) && !same(value, entry)
-    && (depth(entry, home) >= 2 || depth(entry, realHome) >= 2 || temps.some((dir) => depth(entry, dir) >= 1)));
+    && (depth(entry, home) >= 2 || depth(entry, realHome) >= 2 || temps.some((dir) => depth(entry, dir) >= 1) || inExtra(entry, extras, platform)));
   const inRoots = (value) => realRoots.some((dir) => inside(value, dir, platform));
-  const secret = (value) => secretPath(value, { home: realHome, denied: realDenied, platform });
+  const secret = (value, dir = false) => secretPath(value, { home: realHome, denied: realDenied, platform, dir });
   const byName = named(lexical) || underNamed(lexical);
   const realNamed = (value) => realMentioned.some((entry) => same(entry, value));
   const realUnder = (value) => realMentioned.some((entry) => inside(value, entry, platform) && !same(value, entry)
-    && (depth(entry, realHome) >= 2 || temps.some((dir) => depth(entry, dir) >= 1)));
+    && (depth(entry, realHome) >= 2 || temps.some((dir) => depth(entry, dir) >= 1) || inExtra(entry, extras, platform)));
   if (!target) {
     // Say "gone" only for a path that could have been read; anything else is simply refused.
     // Where it would be: the nearest folder that exists, resolved, plus the rest of the name.
@@ -130,19 +221,21 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], texts
     const would = at ? path.join(at, ...rest) : lexical;
     return refuse(!secret(would) && !secret(lexical) && (inRoots(would) || byName) ? 'missing' : 'denied');
   }
-  if (secret(target) || secret(lexical)) return refuse('denied');
-  // Decided on the real path only. A named one may be anywhere in the home or temp folder, never a system file.
-  const reachable = inside(target, realHome, platform) || temps.some((dir) => inside(target, dir, platform));
+  let stat = null;
+  try { stat = await fs.stat(target); } catch (_) {}
+  const isDir = !!stat && stat.isDirectory();
+  if (secret(target, isDir) || secret(lexical, isDir)) return refuse('denied');
+  // Decided on the real path only. A named one may be anywhere in the home or temp folder or a Settings
+  // folder, never a system file.
+  const reachable = inside(target, realHome, platform) || temps.some((dir) => inside(target, dir, platform)) || inExtra(target, extras, platform);
   if (!(inRoots(target) || ((realNamed(target) || realUnder(target)) && reachable))) return refuse('denied');
-
-  let stat;
-  try { stat = await fs.stat(target); } catch (_) { return refuse('missing'); }
+  if (!stat) return refuse('missing');
   const name = path.basename(lexical);
   const base = { ok: true, name, size: stat.size, mtime: Math.round(stat.mtimeMs), line: line ? Number(line) : 0 };
   if (stat.isDirectory()) {
     let entries = [];
     try { entries = await fs.readdir(target, { withFileTypes: true }); } catch (_) { return refuse('denied'); }
-    const list = entries.filter((entry) => (entry.isDirectory() || entry.isFile()) && !entry.name.startsWith('.') && !secret(path.join(target, entry.name)))
+    const list = entries.filter((entry) => (entry.isDirectory() || entry.isFile()) && !entry.name.startsWith('.') && !secret(path.join(target, entry.name), entry.isDirectory()))
       .map((entry) => ({ name: entry.name, dir: entry.isDirectory() }))
       .sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }));
     return { ...base, kind: 'dir', size: 0, entries: list.slice(0, LIMITS.entries), more: Math.max(0, list.length - LIMITS.entries) };
@@ -173,4 +266,4 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], texts
   } finally { await handle.close(); }
 }
 
-module.exports = { readPreview, secretPath, absolutePath, mentionedPaths, inside, LIMITS, DEFAULT_ROOTS };
+module.exports = { readPreview, localRefusal, secretPath, plainPath, cleanRoots, defaultExtraRoots, absolutePath, mentionedPaths, inside, LIMITS, DEFAULT_ROOTS };
