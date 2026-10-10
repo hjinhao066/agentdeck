@@ -4,7 +4,6 @@ const os = require('os');
 const path = require('path');
 const net = require('net');
 const { TaskStore } = require('../../task-board');
-const ChatCore = require('../../chat-core');
 const closeElectron = require('./fixtures/close-electron');
 const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 const ROOT = path.resolve(__dirname, '../..');
@@ -800,9 +799,9 @@ test('accepted mobile messages survive a blocked delivery attempt and isolated a
   expect(captures().includes(message)).toBe(false);
   await restartDesktop();
   await expect.poll(() => captures().filter((t) => t === message).length, { timeout: 25000 }).toBe(1);
-  // The terminal gets the path the way the column's shell reads it: PowerShell needs a Windows path (backslashes)
-  // in single quotes, a plain POSIX temp path goes bare.
-  const typedImage = ChatCore.shellQuote(image, process.platform);
+  // What the terminal receives is fixed per platform, not worked out with the product's own shellQuote: a Windows
+  // path (backslashes) goes to PowerShell in single quotes, the plain POSIX temp path goes bare.
+  const typedImage = process.platform === 'win32' ? "'" + image + "'" : image;
   await expect.poll(() => captures().filter((t) => t === typedImage + ' 重启后带图送达').length, { timeout: 25000 }).toBe(1);
   await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).mainSession.mobileMessages).toEqual([]);
   expect(await desktop.evaluate((text) => ChatUI.turnsOf('mobile-captain').some((t) => t.user === text), message)).toBe(true);
