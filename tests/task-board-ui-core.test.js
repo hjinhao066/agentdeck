@@ -89,6 +89,8 @@ test('需要你: only a real question is shown; internal wording and stale resul
   assert.equal(U.receiptText({ latest_receipt: '已结束，未提交回执' }), '队员停下了，但没有交结果。');
   assert.equal(U.receiptText({ latest_receipt: '调度已结束，尚未派出执行会话' }), '这件事还没有派给队员。');
   assert.equal(U.receiptText({ latest_receipt: '模板已合并。' }), '模板已合并。');
+  // A quota card names its failure; the phone 看板 uses the same words (mobile-web/hub/core.js).
+  assert.deepEqual(['auth', 'rate_limit', 'quota'].map((resource_failure) => U.flagText({ flag: 'quota', resource_failure })), ['登录', '限流', '额度']);
 });
 
 test('drop anchors, status steps and file paths', () => {

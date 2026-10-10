@@ -156,7 +156,7 @@ function attentionView(data, now) {
       options: item.kind === 'need' ? [...new Set((Array.isArray(item.options) ? item.options : []).map((o) => line(o, 24)).filter(Boolean))].slice(0, 6) : [],
       files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
       project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
-      source: ['captain', 'notify', 'card', 'automation'].includes(item.source) ? item.source : 'captain',
+      source: ['captain', 'notify', 'card', 'automation', 'todo'].includes(item.source) ? item.source : 'captain',
       // The 队长 chat turn a report was said in (an id the captain history already shows).
       turn: item.kind === 'report' && typeof item.turn === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(item.turn) ? item.turn : '',
       automation: item.source === 'automation' ? line(item.automation, 40) : '',
@@ -655,11 +655,17 @@ class MobileWebServer {
       // and CSRF secret again immediately before queuing a command.
       const current = this.writeCredential(req, res, prefixed);
       if (!current) return;
-      if (key === undefined) { await this.sources.sendCaptain(body.message, files); return this.json(res, 200, { queued: true }); }
-      // The desktop gets a key of its own for this phone's key: main may give up on a slow renderer
-      // (5 s) that still queues the message later, and only the renderer can tell the retry of it.
-      const result = await this.sendOnce(current.hash + ':' + key, hash(JSON.stringify([body.message, images])), () => this.sources.sendCaptain(body.message, files, hash('desktop:' + current.hash + ':' + key)));
-      return result ? this.json(res, 200, result) : this.json(res, 409, { error: 'This deduplicationKey was used for a different message.' });
+      try {
+        if (key === undefined) { await this.sources.sendCaptain(body.message, files); return this.json(res, 200, { queued: true }); }
+        // The desktop gets a key of its own for this phone's key: main may give up on a slow renderer
+        // (5 s) that still queues the message later, and only the renderer can tell the retry of it.
+        const result = await this.sendOnce(current.hash + ':' + key, hash(JSON.stringify([body.message, images])), () => this.sources.sendCaptain(body.message, files, hash('desktop:' + current.hash + ':' + key)));
+        return result ? this.json(res, 200, result) : this.json(res, 409, { error: 'This deduplicationKey was used for a different message.' });
+      } catch (err) {
+        // No 队长 running on this computer (MainSession.sendMessage): the phone shows why. Anything else stays a 500.
+        if (!/^请先在 AgentDeck 创建并启动队长/.test(String(err?.message || ''))) throw err;
+        return this.json(res, 409, { error: '请先在 AgentDeck 创建并启动队长。' });
+      }
     }
     // 待我处理: the same login, Origin, Fetch Metadata and CSRF checks as a
     // message to the Captain, re-checked after the body is read. A reply goes

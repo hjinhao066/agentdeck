@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const MAX_PENDING_MS = 30 * 60 * 1000;
+const UNCLAIMED_RETRY_MS = 30 * 1000;
 function readResult(file, runtime, now = Date.now()) {
   let r;
   try {
@@ -21,7 +22,8 @@ function readResult(file, runtime, now = Date.now()) {
     r = { ...r, status: 'failed', reason: '安装超过 30 分钟仍未写出核对结果', activeVersion: runtime.version, running: true };
   }
   if (r.status === 'success' && (r.running !== true || r.activeVersion !== r.targetVersion || runtime.version !== r.targetVersion)) {
-    r = { ...r, status: 'failed', reason: '安装结果与现役应用的运行版本不一致', activeVersion: runtime.version };
+    // versionMismatch: the installer verified this success; only the version running now disagrees.
+    r = { ...r, status: 'failed', reason: '安装结果与现役应用的运行版本不一致', activeVersion: runtime.version, versionMismatch: true };
   }
   return { ...r, activeVersion: runtime.version };
 }
@@ -54,15 +56,21 @@ function notificationLease(result) {
 function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
   const ackFile = file + '.ack.json';
   let busy = false;
+  // A result with no 队长 to take it is looked at again only after a pause: each look parses config.json.
+  let unclaimed = { id: '', until: 0 };
   return async function poll() {
     if (busy) return;
     busy = true;
     try {
       const r = readResult(file, runtime());
-      if (!r) return;
+      if (!r || unclaimed.id === r.id && Date.now() < unclaimed.until) return;
       let ack = {};
       try { ack = JSON.parse(fs.readFileSync(ackFile, 'utf8')); } catch (_) {}
       if (ack.id !== r.id) ack = { id: r.id };
+      // A success whose receipt went out is settled: a version run later by other means is not
+      // this installation failing. (An acknowledgement from before receiptStatus was recorded
+      // reached its success with no alert attempted.)
+      if (ack.receipt && r.versionMismatch && (ack.receiptStatus === 'success' || ack.receiptStatus === undefined && !ack.notificationAttempts)) return;
       // The installer leaves its result in place, so this runs every second for as long as
       // this version runs. Once the receipt is in and no alert can be owed, nothing below
       // would change anything: skip the config.json parse and the acknowledgement rewrite.
@@ -71,10 +79,14 @@ function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
       const config = getConfig();
       const task = config.mainSession?.tasks?.find((t) => t.pendingInstall?.id === r.id || t.installResultId === r.id);
       const captain = config.columns?.find((c) => c.isMain);
-      if (!captain || !task && (r.taskId || r.columnId)) return;
+      if (!captain) { unclaimed = { id: r.id, until: Date.now() + UNCLAIMED_RETRY_MS }; return; }
       if (task) {
         if (r.taskId && r.taskId !== task.id || r.columnId && r.columnId !== task.colId) return;
         r.taskId = task.id; r.columnId = task.colId;
+      } else {
+        // Its task is gone (its 队长 was closed or replaced): no card can take the receipt, so it
+        // reaches the 队长 as a notice, which also acknowledges it for the next install.
+        delete r.taskId; delete r.columnId;
       }
       const saveAck = () => {
         fs.writeFileSync(ackFile + '.tmp', JSON.stringify(ack), { mode: 0o600 });
@@ -83,7 +95,7 @@ function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
       const message = summary(r);
       if (!ack.receipt) {
         await deliver({ id: 'install-' + r.id + '-' + Date.now(), action: 'main-install-result', callerId: captain.id, installResult: r, result: message });
-        ack.receipt = true; saveAck();
+        ack.receipt = true; ack.receiptStatus = r.status; saveAck();
       }
       // Calendar reads, outbox locks and transport may outlast the legacy 15 s
       // window. Only a definitely exited owner relinquishes a pending attempt.

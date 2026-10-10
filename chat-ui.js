@@ -316,7 +316,8 @@
   }
 
   function recallHistory(v, id, dir) {
-    const asked = chatFor(id).turns.map((t) => t.user).reverse();
+    // your own messages only: not 队长's cards and notices, not deliveries with no words of yours
+    const asked = chatFor(id).turns.filter((t) => !t.kind && t.user).map((t) => t.user).reverse();
     if (!asked.length) return;
     v.hist = Math.max(-1, Math.min(asked.length - 1, v.hist + dir));
     v.ta.value = v.hist < 0 ? '' : asked[v.hist];
@@ -504,7 +505,10 @@
     ico.innerHTML = host.ICONS.globe;
     const text = el('span', 'lc-text');
     const path = (m[2] || '').replace(/\/+$/, '');
-    text.append(el('span', 'lc-title', m[1] || url), el('span', 'lc-sub', path ? decodeURI(path).slice(0, 80) : '网页预览'));
+    // a malformed escape ("/repos/%s", "/100%") is shown as written: decodeURI throws on it
+    let shown = path;
+    try { shown = decodeURI(path); } catch (_) {}
+    text.append(el('span', 'lc-title', m[1] || url), el('span', 'lc-sub', path ? shown.slice(0, 80) : '网页预览'));
     main.append(ico, text);
     main.addEventListener('click', (e) => window.SidePane.openLink({ kind: 'url', text: url }, e, v.id));
     const pick = svgButton('icon-btn lc-open', 'more', '打开方式');
@@ -603,7 +607,17 @@
 
   // readOnly: a turn from a retired 队长 conversation; it is not tracked in
   // v.rows, so live updates of the current chat never touch it.
+  // A turn that cannot be drawn shows a short line instead (its saved text is untouched):
+  // it never stops the turns and columns after it.
   function turnRows(v, turn, readOnly, turns) {
+    try { return buildTurnRows(v, turn, readOnly, turns); } catch (error) {
+      console.error('对话回合显示失败：', error);
+      const row = el('div', 'turn turn-broken', '这一轮显示不出来，内容仍在对话记录里。');
+      row.dataset.turn = turn.id;
+      return row;
+    }
+  }
+  function buildTurnRows(v, turn, readOnly, turns) {
     if (turn.kind === 'notice') {
       const notice = el('div', 'captain-relay-notice', turn.reply);
       notice.dataset.turn = turn.id; notice.setAttribute('role', 'status');
@@ -950,6 +964,21 @@
       seg.addEventListener('toggle', () => { if (seg.open && !list.childNodes.length) fill(); });
       seg.appendChild(list);
       box.appendChild(seg);
+      // a search hit in this conversation opens it at that turn
+      const hit = v.retiredHit && v.retiredHit.chatId === chat.id ? v.retiredHit : null;
+      if (!hit) return;
+      v.retiredHit = null;
+      const at = chat.turns.findIndex((t) => t.id === hit.turnId);
+      if (at >= 0) shown = Math.max(shown, chat.turns.length - at);
+      seg.open = true;
+      fill();
+      const rows = [...list.querySelectorAll('[data-turn]')].filter((n) => n.dataset.turn === hit.turnId);
+      const row = hit.role === 'reply' ? rows[rows.length - 1] : rows[0];
+      if (row) requestAnimationFrame(() => {
+        row.scrollIntoView({ block: 'center' });
+        row.classList.add('flash');
+        setTimeout(() => row.classList.remove('flash'), 1800);
+      });
     });
     return box;
   }
@@ -970,7 +999,12 @@
     const v = views.get(id);
     const row = v && v.rows.get(turn.id);
     if (!row) return;
-    const fresh = assistantRow(v, turn);
+    let fresh;
+    try { fresh = assistantRow(v, turn); } catch (error) {
+      console.error('对话回合显示失败：', error);
+      fresh = el('div', 'msg assistant turn-broken', '这一轮显示不出来，内容仍在对话记录里。');
+      fresh.dataset.turn = turn.id;
+    }
     row.asst.replaceWith(fresh);
     row.asst = fresh;
     if (row.wrap) row.wrap.hidden = isSilent(turn, shownReply(v, turn));
@@ -1767,7 +1801,10 @@
     if (!q) { nav.results.hidden = true; list.hidden = false; return; }
     list.hidden = true; nav.results.hidden = false;
     const archivedIds = new Set(host.archived().map((a) => a.id));
-    const hits = C.searchChats(artifactSources(), q);
+    // the 队长's conversations from before each context clear are searched too
+    const retired = captainArchives().map((c) => ({ colId: c.id, title: '清空前的队长对话', turns: c.turns }));
+    const retiredIds = new Set(retired.map((c) => c.colId));
+    const hits = C.searchChats([...artifactSources(), ...retired], q);
     if (!hits.length) { nav.results.appendChild(el('div', 'nr-empty', '没有匹配的对话')); return; }
     hits.forEach((h) => {
       const item = el('button', 'nr-item');
@@ -1775,6 +1812,7 @@
       const head = el('div', 'nr-head');
       head.append(el('span', 'nr-title', h.title), el('span', 'nr-role', h.role === 'user' ? '我' : h.role === 'reply' ? '回复' : '标题'));
       if (archivedIds.has(h.colId)) head.appendChild(el('span', 'nr-role', '已归档'));
+      if (retiredIds.has(h.colId)) head.appendChild(el('span', 'nr-role', '只读'));
       const body = el('div', 'nr-snippet');
       const mark = el('mark', null, h.match);
       body.append(h.before, mark, h.after);
@@ -1783,7 +1821,19 @@
       nav.results.appendChild(item);
     });
   }
+  // A hit from before a context clear opens in the 队长 column's read-only history.
+  function revealRetired(chatId, turnId, role) {
+    const col = host.columns().find((c) => c.isMain);
+    const v = col && views.get(col.id);
+    if (!v) return;
+    host.jumpToColumn(col);
+    if (modeOf(col) !== 'chat') setMode(col.id, 'chat');
+    v.showRetired = true;
+    v.retiredHit = { chatId, turnId, role };
+    renderChat(col.id, true);
+  }
   function reveal(colId, turnId, role) {
+    if (!columnById(colId) && chats.has(colId) && chats.get(colId).captainArchive) { revealRetired(colId, turnId, role); return; }
     if (!columnById(colId)) {
       // an archived conversation comes back first
       if (!host.archived().some((a) => a.id === colId) || !host.restoreArchived(colId, false)) return;
@@ -1847,7 +1897,8 @@
     loaded = true;
     unsaved.forEach((id) => scheduleSave(id));
     unsaved.clear();
-    views.forEach((v, id) => renderChat(id));
+    // one column that cannot be drawn leaves the others, the sidebar and Artifacts alone
+    views.forEach((v, id) => { try { renderChat(id); } catch (error) { console.error('对话显示失败：', error); } });
     if (nav.input.value.trim()) runSearch();
     if (window.Sidebar) window.Sidebar.render();
     if (window.ChatDeliverables) window.ChatDeliverables.refresh();

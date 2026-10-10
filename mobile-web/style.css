@@ -74,6 +74,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .dot[data-status="input"], .dot[data-status="asking"] { background: var(--st-input); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-input) 24%, transparent); }
 .dot[data-status="quota"] { background: var(--st-input); }
 .dot[data-status="failed"] { background: transparent; box-shadow: inset 0 0 0 2px var(--st-input); }
+.dot[data-status="exited"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--st-exited); }
 .dot[data-status="none"] { background: var(--line); }
 /* Desktop unreachable: a hollow ring, since the last known status is stale. */
 .dot[data-status="offline"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }

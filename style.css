@@ -1354,6 +1354,7 @@ body.linking-board .board-port.out::before {
 .reply.md tbody tr:last-child td { border-bottom: none; }
 .reply.md hr { border: none; border-top: 1px solid var(--hairline); margin: 1.2em 0; }
 .reply.quiet { color: var(--muted); font-size: 12.5px; }
+.turn-broken { color: var(--muted); font-size: 12.5px; }
 .reply.pending { display: flex; align-items: center; gap: 9px; color: var(--muted); }
 .live-line { min-width: 0; font-size: 12px; line-height: 1.5; }
 .typing { flex: 0 0 auto; width: 26px; height: 8px; display: inline-block; background:
@@ -1816,6 +1817,7 @@ body.linking-board .board-port.out::before {
 .at-chev svg { width: 14px; height: 14px; }
 .at-detail { margin-top: 6px; padding: 12px 14px; border-radius: 9px; background: var(--code-bg); display: flex; flex-direction: column; gap: 10px; }
 .at-text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); font-size: 13px; line-height: 1.7; }
+.at-text.md { white-space: normal; }
 .at-files { list-style: none; display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; }
 .at-file { display: flex; align-items: center; gap: 2px; }
 .at-file-main {
@@ -3804,7 +3806,7 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
   box-shadow: 0 0 30px -14px color-mix(in srgb, var(--tbv-need-lit) var(--tbv-halo), transparent);
 }
 .tbv-ask-label { margin: 0; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; color: var(--tbv-need); }
-.tbv-ask-question { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--tbv-ink); overflow-wrap: anywhere; }
+.tbv-ask-question { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--tbv-ink); overflow-wrap: anywhere; white-space: pre-line; }
 .tbv-ask-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--tbv-ink-2); }
 .tbv-answer {
   width: 100%; min-height: 76px; resize: vertical; padding: 9px 11px; border-radius: 10px;

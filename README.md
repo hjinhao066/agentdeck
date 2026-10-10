@@ -1082,7 +1082,9 @@ an index from before this counts nothing as new). The phone hub does not have it
   default 13). The native View menu uses the same control; it does not zoom the
   page, so the sidebar and column geometry stay stable.
 - The left sidebar searches every conversation, titles and full text of prompts and
-  replies only. Shortcuts: ⌘K / Ctrl+Shift+K search, ⌘\ / Ctrl+Shift+\ toggle the side pane.
+  replies only, including the 队长's conversations from before each context clear (marked
+  只读; a hit opens it in the 队长 column's read-only history). Shortcuts: ⌘K / Ctrl+Shift+K search,
+  ⌘\ / Ctrl+Shift+\ toggle the side pane.
 - Conversations are saved locally in the app's userData folder under `chats`
   (one private JSON file per session, written atomically) and are not committed.
   Folders, archived sessions and schedules live in the
@@ -1351,9 +1353,11 @@ bash scripts/rollback-agentdeck.sh --go --backup /absolute/path/backup
 
 不带 `--go` 只显示计划，不再内置历史版本的 DMG 路径或校验值。
 
+回滚不带 `--backup` 时，取比现役版本更旧的备份里最新的一份：每次安装和回滚都会先备份被换下的那一版，所以最新的备份可能正是刚退掉的新版，或现役版本自己。没有更旧的备份就报错停下，请用 `--backup` 指定。
+
 正式安装引擎 `scripts/install-agentdeck.js` 使用一次性 detached 子进程，不注册 launchd，也没有 KeepAlive 或失败自动重启。校验 DMG/签名/目标版本/asar、备份旧应用与用户数据后，最多尝试安装三次；失败恢复旧应用并退出。结果原子写入 userData 的 `install-result.json`，包含目标版本、现役版本、进程状态、尝试次数与失败原因。成功要求目标应用已启动并持续存活，磁盘上出现新版本并不算完成。真实安装证据须加入最终报告，不能用 fixture 测试冒充。
 
-安装会话开始前通过 `progress --install-id ID --target-version VERSION --message "安装待核对"` 登记待核对（正式脚本负责调用）。普通 `complete` 无法结束待核对的任务；应用启动后读取并持续检查结果文件，匹配原任务后提交成功或失败回执。停在安全点、准备安装均只用 `progress`，不用 `complete`。安装失败或回滚走 `notify-user --urgent`；应用停机时复用同一 Bark 发送器离线推送，说明目标版本、失败原因和现役版本。密钥仍从本机配置的密钥文件读取。
+安装会话开始前通过 `progress --install-id ID --target-version VERSION --message "安装待核对"` 登记待核对（正式脚本负责调用）。普通 `complete` 无法结束待核对的任务；应用启动后读取并持续检查结果文件，匹配原任务后提交成功或失败回执；原任务已不在（队长关掉或换了新的）时，结果作为通知交给队长，同样算已确认。还没有队长时，结果等队长出现后再交（每 30 秒看一次）。停在安全点、准备安装均只用 `progress`，不用 `complete`。安装失败或回滚走 `notify-user --urgent`；应用停机时复用同一 Bark 发送器离线推送，说明目标版本、失败原因和现役版本。密钥仍从本机配置的密钥文件读取。
 
 入口使用稳定的安装标识和 `install-entry.lock`／`install.lock`／`install-claims` 阻止并发、崩溃后重入及同一安装包重新计数；不会自动删除遗留锁。发现上次 pending、未确认结果或已有 claim 时会拒绝开始，请先检查日志、结果与所属进程，处理失败原因后再由维护者清理相应标记。托管会话必须使用支持待核对协议的应用版本；旧版不能确认登记时安全退出，不以普通 progress 冒充成功登记。`--with-data` 仅允许独立终端使用，避免覆盖正在运行的任务控制状态。 若回滚到尚未包含结果读取机制的旧二进制，它不能自动提交新协议回执；离线 Bark 仍报告失败，结果文件保留，卡片不得据此冒报成功。
 

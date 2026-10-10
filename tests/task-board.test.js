@@ -521,14 +521,14 @@ test('dispatch reservations ignore consumed or replaced start claims before vali
   assert.equal(store.dispatch({ id: card.id, key, session_id: 'stale-after-bind' }).ignored, true);
 });
 
-test('a question on 需要你 keeps two sentences and is dropped once the card leaves it', (t) => {
+test('a question on 需要你 is kept whole and is dropped once the card leaves it', (t) => {
   const { store, add, bind, event } = fixture(t);
   const card = add({ project: '门户', title: '确认密码策略', detail: '定长度。' });
   bind(card.id);
-  const asked = event(card.id, 'ask', '选 8 位？\n第二句说明原因。第三句不要。');
+  const asked = event(card.id, 'ask', '选 8 位？\n第二句说明原因。第三句也留着。');
   assert.equal(asked.card.status, 'needs_user');
   assert.equal(asked.card.latest_receipt, '选 8 位？');
-  assert.equal(asked.card.user_question, '选 8 位？ 第二句说明原因。');
+  assert.equal(asked.card.user_question, '选 8 位？\n第二句说明原因。第三句也留着。');
   event(card.id, 'started', '');
   assert.equal(store.list()[0].status, 'doing');
   assert.equal(store.list()[0].user_question, undefined);
@@ -537,7 +537,7 @@ test('a question on 需要你 keeps two sentences and is dropped once the card l
 
   const moved = add({ project: '报表', title: '对账', detail: '选月份。' });
   store.dispatch({ id: moved.id, session_id: 'dispatcher-1' });
-  const dispatched = store.dispatcherReceipt({ id: moved.id, session_id: 'dispatcher-1', question: '用哪份？\n含税还是不含税。其余忽略。' });
-  assert.equal(dispatched.card.user_question, '用哪份？ 含税还是不含税。');
+  const dispatched = store.dispatcherReceipt({ id: moved.id, session_id: 'dispatcher-1', question: '用哪份？\n含税还是不含税。第三句也留着。' });
+  assert.equal(dispatched.card.user_question, '用哪份？\n含税还是不含税。第三句也留着。');
   assert.equal(dispatched.card.latest_receipt, '用哪份？');
 });
