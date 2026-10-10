@@ -1073,6 +1073,29 @@
       /^\s*[│┃]?\s*[◦●•]\s+[^()\n]{1,60}\(\s*(?:\d+h\s+)?(?:\d+m\s+)?\d+s\s*•\s*esc\b/.test(line) ||
       /^\s*[│┃]?\s*[◦●•]\s*Waiting for background terminals?\s*(?:\(|·)/i.test(line));
   }
+  // Claude's footer under its input box names the key that stops a running turn, "· esc to interrupt",
+  // cut at the column's width ("· esc…", "· esc to i…"). A running turn can have no spinner row on screen:
+  // a narrow column repainted after a resize shows the last tool output right above the box and Claude
+  // may draw nothing more for minutes (c-board-mv1x25yc821s0t, 2026-10-09). Only the rows under the box's
+  // bottom rule are read; the same words in a reply above it are history. A finished turn ends the footer
+  // with "← for agents" or the mode hint instead.
+  const ESC_HINT = 'esc to interrupt';
+  function claudeFooterInterrupt(screen, cmd) {
+    if (cmd && !/\bclaude\b/i.test(cmd)) return false;
+    const lines = String(screen || '').split('\n').slice(-20);
+    const prompt = lines.findLastIndex((line) => /^\s*[│┃]?\s*❯(?:\s|$)/.test(line));
+    if (prompt < 0 || /^\s*[│┃]?\s*❯\s*\d+\./.test(lines[prompt])) return false;
+    const rule = lines.findIndex((line, i) => i > prompt && /^\s*[─━]{3,}\s*$/.test(line));
+    if (rule < 0) return false;
+    return lines.slice(rule + 1, rule + 6).some((line) => line.split('·').some((part, i, parts) => {
+      const text = part.trim().toLowerCase();
+      if (text === ESC_HINT) return true;
+      const cut = /(?:…|\.\.\.)$/.exec(text);
+      if (!cut || i !== parts.length - 1) return false;
+      const head = text.slice(0, cut.index).trimEnd();
+      return head.length >= 3 && ESC_HINT.startsWith(head);
+    }));
+  }
   // Terminal queries draw nothing: cursor position (ESC[6n, ESC[?6n), device status
   // (ESC[5n), device attributes (ESC[c, ESC[>c). Claude Code sends ESC[?6n every few
   // seconds while it sits idle, so a chunk made only of them is not output.
@@ -1098,7 +1121,7 @@
     if (quota > resumed && quota > working) return 'quota';
     // A background command under the ready prompt wins over Cursor's idle
     // prompt. Otherwise that early return would hide the status bar.
-    if (backgroundCommandStatus(screen, cmd) || codexLiveStatus(screen, cmd)) return 'working';
+    if (backgroundCommandStatus(screen, cmd) || codexLiveStatus(screen, cmd) || claudeFooterInterrupt(screen, cmd)) return 'working';
     const cursor = /\bcursor-agent\b/i.test(cmd || '') || /^\s*[│┃]?\s*→/m.test(screen) ? cursorActivity(screen) : '';
     if (cursor === 'working') return 'working';
     if (cursor === 'idle' && /\bcursor-agent\b/i.test(cmd || '')) return '';
