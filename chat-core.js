@@ -536,6 +536,23 @@
     return [...seen.values()].sort((a, b) => b.ts - a.ts).slice(0, limit);
   }
 
+  // The text of a file to preview, or null for a binary file (a NUL near the top).
+  // A byte order mark says UTF-16 (what Windows PowerShell 5.1's `>` and Out-File
+  // write; it is full of NULs) or UTF-8 (Notepad), and is not part of the text.
+  function decodeText(bytes) {
+    const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(0);
+    const bom = (...marks) => marks.every((v, i) => b[i] === v);
+    if (bom(0xfe, 0xff)) {
+      const le = new Uint8Array(b.length - 2 - (b.length % 2));
+      for (let i = 0; i < le.length; i += 2) { le[i] = b[i + 3]; le[i + 1] = b[i + 2]; }
+      return new TextDecoder('utf-16le').decode(le);
+    }
+    if (bom(0xff, 0xfe)) return new TextDecoder('utf-16le', { ignoreBOM: true }).decode(b.subarray(2));
+    if (bom(0xef, 0xbb, 0xbf)) return new TextDecoder('utf-8', { ignoreBOM: true }).decode(b.subarray(3));
+    if (b.subarray(0, 8000).includes(0)) return null;
+    return new TextDecoder('utf-8').decode(b);
+  }
+
   // ---- deliveries: the files the crew listed in their receipts, by project ----
   // One file per path. A Windows path ignores case and slash direction, "~" is
   // the home folder, and a trailing ":line" or slash does not make a new file.
@@ -632,7 +649,7 @@
   }
 
   return {
-    normalizeViewMode, toggleGlobalView, RENDER_STEP, passesInputHold, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, promptLeftInBox, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, passesInputHold, visibleWidth, collectArtifacts, artifactName, pathKey, decodeText, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, promptLeftInBox, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
     // the reply as the chat view shows it

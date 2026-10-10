@@ -50,9 +50,9 @@ function readPreview(target, raw, home, own = '') {
   try {
     const buf = Buffer.alloc(Math.min(stat.size, MAX_TEXT_BYTES));
     const got = fs.readSync(fd, buf, 0, buf.length, 0);
-    const head = buf.subarray(0, Math.min(got, 8000));
-    if (head.includes(0)) return { ...base, kind: 'binary' };
-    return { ...base, kind, text: buf.subarray(0, got).toString('utf8'), truncated: stat.size > MAX_TEXT_BYTES, lang: ChatCore.languageFor(name) };
+    const text = ChatCore.decodeText(buf.subarray(0, got));
+    if (text === null) return { ...base, kind: 'binary' };
+    return { ...base, kind, text, truncated: stat.size > MAX_TEXT_BYTES, lang: ChatCore.languageFor(name) };
   } finally { fs.closeSync(fd); }
 }
 
