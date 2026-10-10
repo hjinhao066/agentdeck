@@ -385,8 +385,9 @@
       const name = node('span', 'quota-name');
       name.append(providerIcon(row), node('span', 'quota-name-text', [row.flag, row.short].filter(Boolean).join(' ')));
       if (row.captain) { const crown = node('span', 'quota-captain'); crown.title = '队长在用'; crown.innerHTML = svg('crown'); name.append(crown); }
-      // Yellow: a warning triangle; red: a circle. The shape tells them apart without colour.
-      if (health.level !== 'ok') { const mark = node('span', 'quota-health'); mark.innerHTML = svg(health.level === 'bad' ? 'stop' : 'alert'); mark.title = health.label; name.append(mark); }
+      // Yellow: a warning triangle; red: a circle. The shape tells them apart without colour. A used-up
+      // row already has its shape, the ⊘ in its cells.
+      if (health.level !== 'ok' && health.kind !== 'exhausted') { const mark = node('span', 'quota-health'); mark.innerHTML = svg(health.level === 'bad' ? 'stop' : 'alert'); mark.title = health.label; name.append(mark); }
       const values = node('span', 'quota-values');
       if (row.cells.length || row.status === 'out') {
         for (const cell of Core.quotaCells(row)) {

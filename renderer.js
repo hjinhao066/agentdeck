@@ -4320,10 +4320,11 @@ function renderQuotaBar() {
         lead.innerHTML = (captain ? ICONS.crown : AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider]) + (paid ? `<span class="quota-plan">${ICONS.gem}</span>` : '');
       }
       // Not fine: the name takes the colour (CSS, data-health) and a mark follows it, whose shape
-      // (triangle / circle) tells yellow from red without colour. A fine row is left as it was.
+      // (triangle / circle) tells yellow from red without colour. A used-up row already has its shape,
+      // the ⊘ in its cells, and keeps the name's width. A fine row is left as it was.
       const health = q.health;
       const mark = () => { const m = el('span', 'quota-health'); m.innerHTML = health.level === 'bad' ? ICONS.seatBad : ICONS.seatWarn; return m; };
-      fill(name, [...(seat ? [AgentInfo.accountLabel(q.accountLabel)] : [NAMES[provider]]), ...(health.level === 'ok' ? [] : [mark()])]);
+      fill(name, [...(seat ? [AgentInfo.accountLabel(q.accountLabel)] : [NAMES[provider]]), ...(health.level === 'ok' || health.kind === 'exhausted' ? [] : [mark()])]);
       const state = q.authStatus === 'logged-out' ? 'danger' : q.out ? 'exhausted' : q.state;
       // Signed in to an account other than the one this seat is set to hold.
       const wrong = seat && ClaudeSeats.accountCheck(seat.id)?.state === 'mismatch' ? ClaudeSeats.accountCheck(seat.id).text : '';
@@ -4413,7 +4414,8 @@ function renderQuotaBar() {
       item.dataset.account = wrong ? 'mismatch' : '';
       item.dataset.loginCommand = loginCommand || '';
       tip.dataset.loginCommand = loginCommand ? 'true' : '';
-      const spokenHealth = health.level === 'ok' ? '' : `${health.label}，${health.action}，`;
+      // A used-up row already says 已用尽 and when it comes back.
+      const spokenHealth = health.level === 'ok' || health.kind === 'exhausted' ? '' : `${health.label}，${health.action}，`;
       item.setAttribute('aria-label', `${seat ? q.accountLabel + (q.planMark ? ` ${q.plan}` : '') : NAMES[provider]}${captain ? '（队长）' : ''}：${wrong ? wrong + '，' : ''}${spokenHealth}${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
       // Model and the full evidence line: kept for diagnosis, never shown on hover.
       item.dataset.detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + warm;

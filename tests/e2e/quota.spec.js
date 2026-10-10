@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '../..');
 const M = require('../../claude-seats-main');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 const FAKE = path.join(__dirname, 'fixtures/quota-agent.js');
 let application, page, profile;
 test.describe.configure({ mode: 'serial' });
@@ -13,6 +14,7 @@ test.beforeAll(async () => {
   const home = path.join(profile, 'seats-home');
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test' } }));
+  fs.writeFileSync(path.join(home, '.claude', '.credentials.json'), STAND_IN_CREDENTIAL);   // CN is signed in
   M.writeUsage({ id: 'cn', configDir: '~/.claude' }, home, { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 19, resetText: 'in 1h' }, { key: 'weekly', remaining: 91, resetText: 'in 4d' }] });
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2,

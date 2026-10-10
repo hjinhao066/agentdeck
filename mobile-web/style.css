@@ -309,7 +309,6 @@ textarea:disabled { opacity: .6; }
 .quota-health svg { width: 14px; height: 14px; stroke-width: 2.1; }
 .quota-item[data-health="warn"] :is(.quota-name-text, .quota-health) { color: var(--quota-low); }
 .quota-item[data-health="bad"] :is(.quota-name-text, .quota-health) { color: var(--quota-out); }
-.quota-item[data-health="bad"] .quota-name-text { font-weight: 650; }
 .quota-item[data-health="bad"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, transparent); }
 .quota-item[data-health="bad"]:not([data-status="out"]) .quota-row-note { color: var(--quota-out); }
 

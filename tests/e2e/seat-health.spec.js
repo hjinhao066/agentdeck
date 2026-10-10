@@ -97,10 +97,13 @@ test('sidebar: fine rows stay as they were; yellow and red rows say what is wron
     await expect(row(id), id).toHaveAttribute('data-health-kind', kind);
     await expect(row(id).locator('.quota-name')).toContainText(account);
     // The mark's shape carries the colour's meaning: none, a triangle (path) or a circle.
-    await expect(row(id).locator('.quota-name .quota-health')).toHaveCount(level === 'ok' ? 0 : 1);
+    // A used-up row's shape is the ⊘ in its cells.
+    const marked = level !== 'ok' && kind !== 'exhausted';
+    await expect(row(id).locator('.quota-name .quota-health')).toHaveCount(marked ? 1 : 0);
+    if (kind === 'exhausted') await expect(row(id).locator('.quota-ban svg').first()).toBeVisible();
     if (level !== 'ok') {
-      await expect(row(id).locator(level === 'bad' ? '.quota-name .quota-health svg circle' : '.quota-name .quota-health svg path').first()).toBeAttached();
-      await expect(row(id)).toHaveAttribute('aria-label', new RegExp(`${label}，`));
+      if (marked) await expect(row(id).locator(level === 'bad' ? '.quota-name .quota-health svg circle' : '.quota-name .quota-health svg path').first()).toBeAttached();
+      await expect(row(id)).toHaveAttribute('aria-label', kind === 'exhausted' ? /：已用尽，\d\d:\d\d/ : new RegExp(`${label}，`));
     }
   }
   // The fine row keeps the usual name colour; yellow and red are each one colour, different from it.
@@ -125,7 +128,7 @@ test('sidebar: fine rows stay as they were; yellow and red rows say what is wron
     // Readable on whatever is behind it (the red rows are tinted): at least 4.5:1 for every name and mark.
     for (const [id,,,, [level]] of SEATS) {
       expect(await contrast(row(id).locator('.seat-acct, .quota-name').first()), `${theme} ${id}`).toBeGreaterThanOrEqual(4.5);
-      if (level !== 'ok') expect(await contrast(row(id).locator('.quota-name .quota-health')), `${theme} ${id} mark`).toBeGreaterThanOrEqual(3);
+      if (level !== 'ok' && id !== 'us4') expect(await contrast(row(id).locator('.quota-name .quota-health')), `${theme} ${id} mark`).toBeGreaterThanOrEqual(3);
     }
     await shot(page.locator('#navQuota'), `sidebar-${theme}`);
     // Hover: the case, what was found and what to do; a login to redo comes with its command.
@@ -176,7 +179,7 @@ test('both phone pages show the same colours, marks and words as the desktop', a
       const item = drawer.locator(`.quota-item[data-quota-key="Claude:${id}"]`);
       await expect(item, id).toHaveAttribute('data-health', level);
       expect(served.find((r) => r.key === `Claude:${id}`).health.kind).toBe(kind);
-      await expect(item.locator('.quota-health')).toHaveCount(level === 'ok' ? 0 : 1);
+      await expect(item.locator('.quota-health')).toHaveCount(level === 'ok' || kind === 'exhausted' ? 0 : 1);
       await expect(item.locator('.quota-name-text')).toHaveText(account);
       expect(await contrast(item.locator('.quota-name-text')), `${theme} ${id}`).toBeGreaterThanOrEqual(4.5);
       if (level !== 'ok') await expect(item.locator('.quota-row')).toHaveAttribute('aria-label', new RegExp(label));
@@ -205,10 +208,10 @@ test('both phone pages show the same colours, marks and words as the desktop', a
     const card = phone.getByRole('article', { name: 'Mac', exact: true });
     await card.getByLabel('Mac 的登录 token').fill(hub.machines.mac.token);
     await card.getByRole('button', { name: '登录 Mac', exact: true }).click();
-    for (const [id,, account,, [level,, label]] of SEATS) {
+    for (const [id,, account,, [level, kind, label]] of SEATS) {
       const item = card.locator('.quota-item').filter({ has: phone.locator('.quota-name-text', { hasText: new RegExp(`^${account}$`) }) });
       await expect(item, id).toHaveAttribute('data-health', level);
-      await expect(item.locator('.quota-health')).toHaveCount(level === 'ok' ? 0 : 1);
+      await expect(item.locator('.quota-health')).toHaveCount(level === 'ok' || kind === 'exhausted' ? 0 : 1);
       expect(await contrast(item.locator('.quota-name-text')), `hub ${theme} ${id}`).toBeGreaterThanOrEqual(4.5);
       if (level !== 'ok') await expect(item.locator('.quota-row')).toHaveAttribute('aria-label', new RegExp(label));
     }

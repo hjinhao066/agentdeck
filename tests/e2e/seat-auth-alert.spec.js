@@ -2,6 +2,7 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const closeElectron = require('./fixtures/close-electron');
 const fs = require('fs'), os = require('os'), path = require('path');
 const M = require('../../claude-seats-main');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 const ROOT = path.resolve(__dirname, '../..'), FAKE = path.join(__dirname, 'fixtures/quota-agent.js');
 let application, page, profile;
 const alerts = () => application.evaluate(({ app }) => app.testQuotaAlerts);
@@ -42,6 +43,7 @@ test.beforeEach(() => {
   const seat = { id: 'us', name: 'US', configDir: '~/.custom-us-seat' }, home = path.join(profile, 'seats-home');
   const loc = M.credentialLocation(seat, home); fs.mkdirSync(loc.dir, { recursive: true });
   fs.writeFileSync(loc.metadataPath, JSON.stringify({ oauthAccount: { accountUuid: 'offline-us', emailAddress: 'us@example.test' } }));
+  fs.writeFileSync(loc.credentialsPath, STAND_IN_CREDENTIAL);   // signed in until a logout is confirmed
   M.writeUsage(seat, home, { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 55 }, { key: 'weekly', remaining: 66 }] });
   const key = path.join(profile, 'fake-key'); fs.writeFileSync(key, 'fake_e2e_auth_key');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ barkKeyFile: key, perpetualCaptain: { enabled: false },

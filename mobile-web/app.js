@@ -383,10 +383,11 @@
   // The row's colour and the line under it follow the hub's rules (core.js), so both phone pages agree.
   const rowHealth = (row) => window.HubCore.rowHealth(row);
   const quotaNote = (row, now) => window.HubCore.quotaNote(row, now);
-  // Yellow: a warning triangle; red: a circle. The shape tells them apart without colour.
+  // Yellow: a warning triangle; red: a circle. The shape tells them apart without colour. A used-up
+  // row already has its shape, the ⊘ in its cells.
   function healthMark(row) {
     const health = rowHealth(row);
-    if (health.level === 'ok') return null;
+    if (health.level === 'ok' || health.kind === 'exhausted') return null;
     const mark = node('span', 'quota-health'); mark.innerHTML = svg(health.level === 'bad' ? 'stop' : 'alert'); mark.title = health.label;
     return mark;
   }

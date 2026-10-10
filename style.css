@@ -429,7 +429,7 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .quota-health { display: inline-flex; flex: 0 0 auto; }
 .quota-health svg { width: 12px; height: 12px; }
 .quota-item[data-health="warn"] .quota-name { color: var(--quota-low); }
-.quota-item[data-health="bad"] .quota-name { color: var(--quota-out); font-weight: 600; }
+.quota-item[data-health="bad"] .quota-name { color: var(--quota-out); }
 .quota-item[data-health="bad"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, transparent); }
 .qt-health { display: flex; align-items: flex-start; gap: 6px; font-weight: 600; }
 .qt-health .quota-health { margin-top: 3px; }
