@@ -148,7 +148,9 @@ test('key and credential files are refused wherever they are, named or not', asy
   const opts = { home: '/Users/me' };
   for (const name of ['/Users/me/.ssh/config', '/Users/me/x/.env.local', '/Users/me/x/id_rsa.pub', '/Users/me/x/server.pem', '/Users/me/x/credentials.json', '/Users/me/x/bot-token.txt',
     '/Users/me/.codex/auth.json', '/Users/me/.gemini/oauth_creds.json', '/Users/me/.claude.json', '/Users/me/.zshrc', '/Users/me/.netrc', '/Users/me/.config/gh/hosts.yml',
-    '/Users/me/Library/Keychains/login.keychain-db', '/Users/me/repo/.git/config', '/Users/me/.aws/config', '/Users/me/.claude-us2/settings.json']) assert.equal(secretPath(name, opts), true, name);
+    '/Users/me/Library/Keychains/login.keychain-db', '/Users/me/repo/.git/config', '/Users/me/.aws/config', '/Users/me/.claude-us2/settings.json',
+    // the words token, secret and credential anywhere in the name of a file that is not a document
+    '/Users/me/reports/token-usage.json', '/Users/me/x/my_token.txt']) assert.equal(secretPath(name, opts), true, name);
   for (const name of ['/Users/me/reports/token-usage.md', '/Users/me/reports/captain-token-saver/review.md', '/Users/me/.claude-us2/CLAUDE.md', '/Users/me/.agents/boards/agentdeck.md',
     '/Users/me/reports/auth-flow.png', '/Users/me/agentdeck/README.md']) assert.equal(secretPath(name, opts), false, name);
 });

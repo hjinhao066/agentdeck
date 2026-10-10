@@ -262,8 +262,35 @@ iOS 内嵌 PDF 只显示第一页，所以不用 iframe）、图片、纯文本�
 谁能读什么（`file-preview-core.js`，电脑端判定，网页不参与）：
 - 只读。只允许：队长回复、队员回执、看板回执、「待我处理」里点名过的路径（手机上自己打的字不算），点名的文件夹至少在家目录下两层才连带里面的文件；
   或在 `~/reports`、`~/.agents/boards` 里。
-- 先解析真实路径（`..`、符号链接都展开）再判断；点名一个符号链接不等于点名它指向的文件。系统目录一律不给。
-- 密钥类一律拒绝，点名也不行：`.ssh`、`.gnupg`、`.aws` 等目录，`.agents-vault-pass`、`.env*`、`id_*`、`*.pem/*.key` 等，名字以 token/secret/credentials/auth 结尾的文件，
-  `.claude*`、`.codex`、`.gemini`、`.config` 等目录里除文档和图片外的文件，`~/.config/agentdeck-remote`、AgentDeck 自己的数据目录，以及 shell 配置和历史。
+- 点名的文件要在家目录、临时目录，或「设置 → 手机网页端 → 手机可预览的其他文件夹」里。这一项 Windows 默认是
+  `D:\aiproject\Playground`（下面全部）和 `D:\aiproject\*\reports`（任意一层项目目录的 reports 下面全部），Mac 默认为空。每行一个完整路径，
+  至少两层，`*` 只能代表一整层文件夹，网络路径、`\\?\`、`..` 都不收；清空就是不额外放开。存在 `config.json` 的 `mobileWeb.previewRoots`，
+  没有这个键时用默认值。`*` 前面那段解析真实路径，后面按真实路径逐层比对，所以项目目录本身是 junction 时，它指向的地方不算在内。
+- 先解析真实路径（`..`、符号链接、Windows junction、8.3 短文件名都展开）再判断；点名一个符号链接不等于点名它指向的文件。系统目录一律不给。
+  Windows 上大小写不分、正反斜杠混用都按同一路径处理；`\\?\`、`\\.\`、UNC（`\\电脑\共享`）路径、NTFS 备用数据流（`a.md:xxx`、`a.md::$DATA`）
+  和 Windows 会自动去掉的结尾点或空格（`.env.`）一律拒绝；`a.md:12` 在 Windows 上永远是 `a.md` 的第 12 行。
+- 密钥类一律拒绝，点名也不行：`.ssh`、`.gnupg`、`.aws`、`secrets`、`.secrets`、`credentials`、`.private`、`private` 等目录，`.agents-vault-pass`、
+  env 文件不管怎么起名（`.env`、`.env.local`、`deploy.env`、`app.env.prod`；`env.md`、`environment.md` 不算）、`auth.json`、
+  `id_rsa*`、`id_ed25519*`、`*.pem/*.key/*.p12/*.pfx` 等，文件名里任何位置带 token、secret、credential 的非文档文件（`token.json`、`my_token.txt`；交付文档 `.md/.markdown/.html/.pdf` 和图片除外，
+  所以 `token-usage.md`、`design-tokens.md`、`github-auth.md` 能看，但仍受精确规则、目录黑名单和下面的内容检查约束），名字以 password/key/creds/cookie 等结尾的文件（`key.txt`、
+  `openai_key.txt`、`mykey.txt` 也拒，`keyboard.md`、`monkey.txt` 不拒），名字以 token/secret/credential/auth 结尾的非文档文件，`service-account*.json`、`*.tfstate*`、
+  `oauth*.json`、`storage_state*.json`（Playwright 登录态）、`*adminsdk*.json`、`kubeconfig*`、`rclone.conf`、`wg0.conf`、`*.dpapi`，
+  副本按原名判断（名字结尾和扩展名前面的 `.bak/.old/.orig/.backup/.save/.tmp/~/.数字/.日期`、`_bak/-old/-backup` 等、Windows 的 ` - 副本`、` - Copy`、
+  ` (1)` 和开头的 `Copy of ` 都去掉再判：`auth.json.bak`、`auth.bak.json`、`auth - 副本.json`、`auth (1).json`、`.env - 副本`、`.env_bak` 都按原名拒绝），
+  任何位置的 `.npmrc`、`.netrc`、`.pypirc`、`.pgpass`、`.my.cnf`、`.boto`、`.s3cfg`、`.envrc`、`.dockercfg`、`.git-credentials`、`.gitconfig`、shell 配置和历史，
+  任何位置的 `.claude*`、`.codex`、`.gemini`、`.cursor`、`.config` 等目录里除文档和图片外的文件，`~/.config/agentdeck-remote`、AgentDeck 自己的数据目录。
+- 浏览器登录态：某一层父目录里有 `Local State` 文件的（Chromium 用户数据目录：Chrome、Edge、自动化用的 profile），整个目录和里面的一切都拒绝，
+  上一层文件夹列表里也不显示这个目录；`Local State`、`Preferences`、`Secure Preferences`、`Login Data*`、`Web Data*`、`History`、`logins.json`、
+  `key3/4.db`、`cookies.sqlite` 放在别处也按名字拒绝，`Local Storage`、`Session Storage`、`IndexedDB` 目录一律拒绝。
+- 手机端发文本前先查内容（`secretText`），命中就答「不在范围内」：私钥块（`-----BEGIN … PRIVATE KEY-----`），以及再用 base64 编过一次的私钥块
+  （kubeconfig 的 `client-key-data`、`XXX_KEY_B64=`，开头是 `LS0tLS1CRUdJTi`，解开看是不是 PRIVATE KEY，证书不拒）；`sk-`、`sk-ant-`、`sk-or-`
+  开头且破折号之间有一段 20 位以上随机串的（`sk-hynix-hbm4-2026-05-02` 这种几个短词连起来的不算，紧跟在 `-` 或 `/` 后面的也不算）；`ghp_`、`github_pat_`、
+  `AKIA`、`xox?-`、`AIza` 开头后面跟随机串；Telegram 机器人令牌（数字:35 位随机串）；`api_key`、`token`、`secret`、`password` 这类字段（YAML、JSON、env 写法，
+  冒号或等号两边可以对齐几十个空格，值也可以写在下一行或 YAML 的 `|`、`>-` 块里）后面跟 20 位以上、至少两个数字的随机值；下一行如果本身是另一个键就不算。
+  占位符（`sk-xxxx`、`your-api-key`、`<token>`、`****`）和代码引用（`process.env.X`）不算。先按 BOM 解码（UTF-8、UTF-16LE/BE）再查，只查要发出去的那部分
+  （最多 1MB），图片和 PDF 不查。桌面预览栏不查内容（本机自己的屏幕）。内容检查是启发式的，已知漏掉的写法见交付报告的「已知限制」。
+- 手机端不发有多个名字的文件（硬链接）：realpath 不展开硬链接，换个名字就看不出它是什么。
+- 设置里的文件夹不带 `*` 的（如 Playground），点名它本身只列出目录，不连带里面的文件；点名要在它下面至少一层。带 `*` 的（某个项目的 reports）点名本身就连带。
+- 桌面右侧预览栏走同一套拒绝规则（`localRefusal`）：密钥类文件和上面那些 Windows 路径不显示；位置不限，因为是本机用户自己点的。用编辑器打开不受影响。
 - 未点名的路径不管存不存在都答「不在范围内」，不泄露是否存在。
 - 回答只有 JSON（入口代理只放行 JSON），路径放在 POST 正文里，不进网址和日志。

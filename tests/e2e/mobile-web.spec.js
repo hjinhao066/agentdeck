@@ -709,6 +709,30 @@ test('desktop copy buttons put the login token and entry password on the clipboa
   expect(await desktop.evaluate(() => deck.clipboardRead()) === token).toBe(false);
 });
 
+test('desktop settings keep the folders the phone may preview from, and name back a folder that is not allowed', async () => {
+  await launch();
+  const box = desktop.locator('#mobileWebPreviewRoots');
+  const saved = () => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).mobileWeb.previewRoots;
+  await expect(box).toBeVisible();
+  // a test profile starts without the D:\aiproject defaults of a real Windows install
+  await expect(box).toHaveValue('');
+  const folders = [path.join(profile, 'work', '*', 'reports'), path.join(profile, 'Playground')];
+  await box.fill(folders.join('\n') + '\n\n');
+  await desktop.getByRole('button', { name: '保存预览文件夹', exact: true }).click();
+  await expect.poll(saved).toEqual(folders);
+  await expect(box).toHaveValue(folders.join('\n'));
+  // a network path or a bare drive is named back and nothing is saved
+  await box.fill(process.platform === 'win32' ? '\\\\server\\share\\reports\nC:\\' : '/reports\nrelative/reports');
+  await desktop.getByRole('button', { name: '保存预览文件夹', exact: true }).click();
+  await expect(desktop.locator('#mobileWebStatus')).toContainText('这些文件夹不能用');
+  expect(saved()).toEqual(folders);
+  // emptied: no folder beyond home and temp
+  await box.fill('');
+  await desktop.getByRole('button', { name: '保存预览文件夹', exact: true }).click();
+  await expect.poll(saved).toEqual([]);
+  expect((await desktop.evaluate(() => deck.mobileWebSettings())).previewRoots).toEqual([]);
+});
+
 test('mobile message waits for desktop draft, goes only to Captain; forbidden controls reject', async () => {
   await launch(); await login();
   const composer = desktop.locator('.column.is-main .composer textarea');

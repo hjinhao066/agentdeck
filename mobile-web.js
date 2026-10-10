@@ -251,7 +251,8 @@ class MobileWebServer {
     this.machine = { platform: machine.platform || process.platform, hostname: machine.hostname || '', appVersion: machine.appVersion || '' };
     this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
     this.uploading = Promise.resolve();
-    // File previews: { home, roots, denied } for file-preview-core, or null for none.
+    // File previews: { home, roots, denied, defaultExtra } for file-preview-core, or null for none.
+    // defaultExtra: the folders beyond home and temp used until Settings holds its own list (previewRoots).
     this.preview = preview;
     this.previewTexts = { at: 0, texts: [] };
     // 待我处理: the list, and the user's read / reply / tick from the phone.
@@ -276,7 +277,12 @@ class MobileWebServer {
     return { enabled, url: enabled ? `http://127.0.0.1:${port}` : '', publicUrl: enabled ? this.settings.publicOrigin : '', publicOrigin: this.settings.publicOrigin,
       token: this.settings.token, port, deviceCount: this.settings.devices.filter((device) => device.expiresAt > this.now()).length, error: this.error,
       ...(this.warning ? { warning: this.warning } : {}),
+      ...(this.preview ? { previewRoots: this.previewRoots(), previewRootsDefault: !Array.isArray(this.settings.previewRoots) } : {}),
       ...(this.settings.basePath ? { basePath: this.settings.basePath, label: this.machineLabel() } : {}) };
+  }
+  // Folders beyond home and temp where a named file may be previewed: Settings' list, else the default.
+  previewRoots() {
+    return Array.isArray(this.settings.previewRoots) ? this.settings.previewRoots : [...(this.preview?.defaultExtra || [])];
   }
   configure(settings = {}) {
     this.pending = this.pending.then(() => this.applySettings(settings));
@@ -319,6 +325,8 @@ class MobileWebServer {
     this.settings = { enabled: next.enabled === true, token, port, publicOrigin: origin || '',
       ...(basePath && validBase ? { basePath } : {}),
       ...(basePath && label && validLabel ? { label } : {}),
+      // null (or none) is the default list; a hand-edited config loses the folders that are not allowed.
+      ...(Array.isArray(next.previewRoots) ? { previewRoots: FilePreview.cleanRoots(next.previewRoots).roots } : {}),
       devices: (!this.settings.token || token === this.settings.token) && Array.isArray(next.devices) ? next.devices.filter((device) => device && /^[a-f0-9]{64}$/.test(device.hash) && Number.isSafeInteger(device.expiresAt) && device.expiresAt > this.now()).slice(-20).map((device) => ({ hash: device.hash, expiresAt: device.expiresAt })) : [] };
     if (!Number.isInteger(port) || port < 0 || port > 65535) {
       this.error = 'Invalid local port.';
@@ -730,7 +738,7 @@ class MobileWebServer {
       if (Object.keys(body).some((key) => key !== 'path' && key !== 'offset') || typeof body.path !== 'string' || !Number.isSafeInteger(offset) || offset < 0) return this.json(res, 400, { error: 'Invalid request.', code: 'invalid' });
       if (!this.writeCredential(req, res, prefixed)) return;
       let result;
-      try { result = await FilePreview.readPreview(body.path, { ...this.preview, texts: await this.namedTexts(), offset }); }
+      try { result = await FilePreview.readPreview(body.path, { ...this.preview, extra: this.previewRoots(), texts: await this.namedTexts(), offset }); }
       catch (_) { result = { ok: false, code: 'denied' }; }
       if (result.ok) return this.json(res, 200, result);
       return this.json(res, result.code === 'invalid' ? 400 : result.code === 'missing' ? 404 : 403, { error: result.code === 'missing' ? 'File not found.' : result.code === 'invalid' ? 'Invalid request.' : 'This file cannot be previewed.', code: result.code });

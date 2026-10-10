@@ -19,7 +19,10 @@ function makeHome() {
   put('reports/r/pack.zip', Buffer.alloc(300, 1));
   const tax = put('Documents/tax.txt', 'private');
   const key = put('.ssh/id_ed25519', 'KEY');
-  fs.symlinkSync(tax, path.join(home, 'reports/r/linked.md'));
+  // A link out of the report folder. Windows needs a privilege for a file link but not for a
+  // junction, so there it is a junction to the private folder: refused all the same.
+  if (process.platform === 'win32') fs.symlinkSync(path.dirname(tax), path.join(home, 'reports/r/linked.md'), 'junction');
+  else fs.symlinkSync(tax, path.join(home, 'reports/r/linked.md'));
   return { report, tax, key };
 }
 async function open(browser, size, { theme = 'dark' } = {}) {

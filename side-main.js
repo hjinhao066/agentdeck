@@ -8,6 +8,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { validId, privateFile } = require('./security');
 const ChatCore = require('./chat-core');
+const FilePreview = require('./file-preview-core');
 
 const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
@@ -17,7 +18,13 @@ const MAX_CHAT_BYTES = 64 * 1024 * 1024;
 const MAX_DIR_ENTRIES = 300;
 
 // ---- previews ----
-function readPreview(target, raw) {
+// What the phone refuses, the desktop pane refuses too (file-preview-core's localRefusal):
+// key and credential files, and network, device or data-stream paths. The pane may show any
+// other file the user clicked on this computer.
+const REFUSED = { path: '这个路径不能预览（网络、设备或数据流路径）', secret: '密钥或登录信息文件不在预览里显示', missing: '路径不存在' };
+function readPreview(target, raw, home, own = '') {
+  const refusal = FilePreview.localRefusal(target, { home, own });
+  if (refusal) return { ok: false, error: REFUSED[refusal] || REFUSED.path };
   const stat = fs.statSync(target);
   const name = path.basename(target);
   const line = (/:(\d+)(?::\d+)?$/.exec(String(raw || '')) || [])[1];
@@ -25,6 +32,7 @@ function readPreview(target, raw) {
 
   if (stat.isDirectory()) {
     const entries = fs.readdirSync(target, { withFileTypes: true })
+      .filter((d) => !FilePreview.secretPath(path.join(target, d.name), { home, dir: d.isDirectory() }) && !(d.isDirectory() && FilePreview.inBrowserProfile(path.join(target, d.name), true, own)))
       .map((d) => ({ name: d.name, dir: d.isDirectory() }))
       .sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name))
       .slice(0, MAX_DIR_ENTRIES);
@@ -100,7 +108,7 @@ const isWebUrl = (u) => typeof u === 'string' && u.length <= 4096 && /^https?:\/
 const clampInt = (n, max) => Math.max(0, Math.min(max, Math.round(Number(n) || 0)));
 
 function registerSideIpc(ctx) {
-  const { onMain, handleMain, send, getWindow, resolveClick, session, WebContentsView, chatDir, home } = ctx;
+  const { onMain, handleMain, send, getWindow, resolveClick, session, WebContentsView, chatDir, home, own } = ctx;
   let view = null;
   let allowedFile = '';
   let lastBounds = { x: 0, y: 0, width: 0, height: 0, visible: false };
@@ -124,7 +132,7 @@ function registerSideIpc(ctx) {
     if (!rawOf(msg)) return { ok: false, error: '路径无效' };
     const r = resolveClick(msg, false);
     if (!r) return { ok: false, error: '路径不存在：' + msg.raw.slice(0, 80) };
-    try { return readPreview(r.target, msg.raw); } catch (error) { return { ok: false, error: error.message }; }
+    try { return readPreview(r.target, msg.raw, home, own); } catch (error) { return { ok: false, error: error.message }; }
   });
   handleMain('artifacts:stat', (_e, msg) => statPaths(msg && msg.paths, home));
 
@@ -192,7 +200,7 @@ function registerSideIpc(ctx) {
   onMain('side:browser-pdf', (_e, msg) => {
     if (!rawOf(msg)) return;
     const r = resolveClick(msg, false);
-    if (!r || ChatCore.fileKind(r.target) !== 'pdf') return;
+    if (!r || ChatCore.fileKind(r.target) !== 'pdf' || FilePreview.localRefusal(r.target, { home, own })) return;
     const v = ensureView();
     if (!v) return;
     allowedFile = pathToFileURL(r.target).href;
