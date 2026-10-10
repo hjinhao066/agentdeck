@@ -179,3 +179,36 @@ test('a task whose own text looks like a menu (shown in the input box) is still 
   assert.ok(await context.sendPrompt({ id: 'w', cmd: 'claude' }, task, null, {}));
   assert.equal(sent.filter((d) => d === '\r').length, 1);
 });
+
+// Review 2026-10-09: the first version matched the menu's words anywhere, so an idle Claude whose reply
+// talked about this very menu read as 停在确认 and a tell's Enter was refused. Only the menu's own row
+// shape counts: the ❯ cursor on a row that is nothing but one of its options.
+const REPLY_ABOUT_IT = [
+  '⏺ Found it. Claude asks "Make auto mode your default permission mode?" once per seat, and Enter picks',
+  '  "Yes, set auto mode as my default permission mode"; declining means "No, keep bypass permissions".',
+  '  The menu rows were:',
+  '  Make auto mode your default permission mode?',
+  '  No, keep bypass permissions',
+  '  2. Yes, I accept',
+  '  No, exit',
+  '',
+  '────────', '❯ ', '────────', '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+];
+test('a reply that talks about the menu, even quoting its rows, is not the menu', async () => {
+  const text = REPLY_ABOUT_IT.join('\n');
+  assert.equal(rctx.classify(text, { state: 'done', hasWorked: true }, 'claude'), 'done');
+  assert.equal(rctx.menuOnScreen(lines(REPLY_ABOUT_IT), '下一步'), false);
+  // and a tell still goes in
+  const { context, sent } = sender(false, [...REPLY_ABOUT_IT.slice(0, -4), '────────', '❯ 下一步', '────────', '  ⏵⏵ bypass permissions on']);
+  assert.ok(await context.sendPrompt({ id: 'w', cmd: 'claude' }, '下一步', null, {}));
+  assert.equal(sent.filter((d) => d === '\r').length, 1);
+});
+test('the real menus still read as menus: cursor on either row, with or without numbers or a box', () => {
+  const nudge = (cursorOnNo) => ['Make auto mode your default permission mode?', '',
+    (cursorOnNo ? '  ' : '❯ ') + 'Yes, set auto mode as my default permission mode', (cursorOnNo ? '❯ ' : '  ') + 'No, keep bypass permissions'];
+  for (const screen of [nudge(false), nudge(true), NUDGE, ['WARNING: Claude Code running in Bypass Permissions mode', '❯ No, exit', '  Yes, I accept'],
+    ['WARNING: Claude Code running in Bypass Permissions mode', '❯ 1. No, exit', '  2. Yes, I accept']]) {
+    assert.equal(rctx.classify(screen.join('\n'), { state: 'plain', hasWorked: false }, 'claude'), 'input', screen.join(' / '));
+    assert.equal(rctx.menuOnScreen(lines(screen), '任务正文'), true);
+  }
+});
