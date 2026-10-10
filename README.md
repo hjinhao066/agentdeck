@@ -1101,7 +1101,8 @@ an index from before this counts nothing as new). The phone hub does not have it
     back, + − 0 1 on the keyboard; Esc or a click beside it closes.
 - Terminal output and bubbles find paths with the same rules
   (`findLinks` in `renderer.js`): a path ends at Chinese or full-width punctuation,
-  curly quotes and the space before the words after it, so two paths on one line
+  curly quotes and the space before the words after it (title marks such as 《》『』 stay
+  inside a file name, `《三体》笔记.md`; one that closes nothing it opened ends the path), so two paths on one line
   are two links. Spaces stay inside a folder name (`Application Support`,
   `Program Files (x86)`), also when that folder ends the path, and in a file name
   that reads as one (`截屏2026-10-09 下午3.04.12.png`); English words after a path

@@ -2494,9 +2494,12 @@ function trimTrail(text, s, e) {
 }
 // Characters no path in agent output goes past: Chinese and full-width
 // punctuation (，。、；：（）「」…), full-width letters, curly quotes, "…" and "—".
-const PATH_STOP = '\\u2014\\u2015\\u2018-\\u201f\\u2026\\u3000-\\u3004\\u3008-\\u303f\\uff01-\\uff60\\uffe0-\\uffe6';
+// Not the title marks 《》『』〈〉〔〕〖〗: they stand inside Chinese file names
+// ("《三体》笔记.md"); pathEnd ends a path at a closing one that nothing opened.
+const PATH_STOP = '\\u2014\\u2015\\u2018-\\u201f\\u2026\\u3000-\\u3004\\u300c\\u300d\\u3010-\\u3013\\u3018-\\u303f\\uff01-\\uff60\\uffe0-\\uffe6';
+const NAME_OPEN = '\u3008\u300a\u300e\u3014\u3016', NAME_CLOSE = '\u3009\u300b\u300f\u3015\u3017';
 const FILE_EXT = /\.[A-Za-z][A-Za-z0-9]{0,7}(?::\d+(?::\d+)?)?$/;
-const CJK_WORD = /^[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]+$/;
+const CJK_WORD = /^[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\u3008-\u300b\u300e\u300f\u3014-\u3017]+$/;
 // Where an absolute path the pattern took really ends. The pattern lets single
 // spaces through for folder names ("Application Support", "My Project"), so it
 // also took the prose after a path: "…/renderer.js 里的 findLinks", or
@@ -2525,9 +2528,15 @@ function pathEnd(text, s, e, sep) {
     if (cut >= 0) { p = p.slice(0, from + cut); break; }
     from = i + 1;
   }
+  // a closing title mark with no opening one before it in the same name: "《/Users/me/a.md》"
+  for (let i = 0, open = 0; i < p.length; i++) {
+    if (sep.test(p[i])) open = 0;
+    else if (NAME_OPEN.includes(p[i])) open++;
+    else if (NAME_CLOSE.includes(p[i]) && open-- <= 0) { p = p.slice(0, i); break; }
+  }
   let name = p.length;
   while (name > 0 && !sep.test(p[name - 1])) name--;
-  const glued = /^(.*?\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?)[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/.exec(p.slice(name));
+  const glued = /^(.*?\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?)[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\u3008\u300a\u300e\u3014\u3016]/.exec(p.slice(name));
   if (glued && !p.slice(name + glued[1].length).includes('.')) p = p.slice(0, name + glued[1].length);
   return trimTrail(text, s, s + p.length);
 }
