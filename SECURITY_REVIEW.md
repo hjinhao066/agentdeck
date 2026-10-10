@@ -78,6 +78,9 @@ and regression pass, not a penetration-test certification.
 - A name is looked up before its request leaves (verdict kept for a minute) and refused when
   any of its addresses is local, so a public name pointing at this machine or the local
   network (`*.nip.io`, `localtest.me`, anyone's own domain) is refused like the address.
+- WebRTC does not pass `onBeforeRequest`: the view's policy is `disable_non_proxied_udp`, so no
+  STUN/UDP leaves the page. A TURN server reached over TCP is still dialled (a fixed handshake,
+  no answer reaches the page).
 - Remaining boundary: a name that answers our lookup with a public address and Chromium's a
   moment later with a local one (DNS rebinding with a zero TTL) is not caught; the browser tab
   checks no names at all. A page can send what it can read (its own folder) to the public web.

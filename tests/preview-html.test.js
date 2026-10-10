@@ -131,7 +131,7 @@ function standIn() {
     constructor(options) {
       this.options = options; this.bounds = null; this.visible = false;
       const wc = this.webContents = { events: {}, loaded: [], closed: false, on: (event, fn) => { const before = wc.events[event]; wc.events[event] = before ? (...a) => { before(...a); fn(...a); } : fn; }, loadURL: (url) => { wc.loaded.push(url); return Promise.resolve(); },
-        setWindowOpenHandler: (fn) => { wc.opener = fn; }, isDestroyed: () => wc.closed, close: () => { wc.closed = true; }, getURL: () => wc.loaded[wc.loaded.length - 1] || '',
+        setWindowOpenHandler: (fn) => { wc.opener = fn; }, setWebRTCIPHandlingPolicy: (policy) => { wc.webrtc = policy; }, isDestroyed: () => wc.closed, close: () => { wc.closed = true; }, getURL: () => wc.loaded[wc.loaded.length - 1] || '',
         getTitle: () => '', isLoading: () => false, canGoBack: () => false, canGoForward: () => false, reload: () => { wc.reloads = (wc.reloads || 0) + 1; },
         finds: [], stops: [], findInPage: (text, o) => { wc.finds.push([text, o]); return (wc.lastRequest = (wc.lastRequest || 0) + 1); }, stopFindInPage: (how) => { wc.stops.push(how); } };
       calls.views.push(this);
@@ -228,6 +228,14 @@ test('a public name that points at this machine or the local network is refused 
   assert.equal(Core.namedHost('http://93.184.216.34/'), '');
   assert.equal(Core.namedHost('http://[2606:2800::1]/'), '');
   assert.equal(Core.namedHost('data:text/plain,x'), '');
+});
+
+test('WebRTC sends no UDP from the page (it does not pass the request filter)', () => {
+  // In the real app a page's STUN packets reached the local network / WireGuard address.
+  const { calls } = standIn();
+  calls.handlers['side:preview-html']({}, { raw: path.join(report, 'index.html') });
+  const view = calls.views.find((v) => v.webContents.loaded.some((u) => u.startsWith('agentdeck-preview://')));
+  assert.equal(view.webContents.webrtc, 'disable_non_proxied_udp');
 });
 
 test('a page\'s alert() or confirm() cannot put a box over the deck window', () => {

@@ -313,6 +313,9 @@ function registerSideIpc(ctx) {
       webPreferences: { session: ensurePageSession(), sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, backgroundThrottling: true, disableDialogs: true },
     });
     const wc = pageView.webContents;
+    // WebRTC does not pass onBeforeRequest: its STUN packets reached addresses on the local
+    // network and the WireGuard link. No UDP leaves the page that way.
+    wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
     wc.on('found-in-page', (_e, r) => {
       if (r && r.finalUpdate && r.requestId === findRequest) send('side:preview-found', { active: r.activeMatchOrdinal || 0, total: r.matches || 0 });
     });
