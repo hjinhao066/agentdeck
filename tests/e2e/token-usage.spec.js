@@ -6,6 +6,7 @@ const path = require('path');
 const C = require('../../token-usage-core');
 const PRICES = require('../../token-prices.json');
 const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
+const NO_DIALOGS = path.join(__dirname, 'fixtures', 'no-dialogs.js');
 
 // Token 用量: the 任务看板 page's fourth tab. Real renderer and a real scan in
 // the utility process, over made-up CLI logs in <profile>/usage-home (a test
@@ -115,8 +116,11 @@ async function launch(config = {}) {
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
-    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
+    // no native dialog can open on the desktop: Electron's own -r loads the guard before main.js
+    // (Playwright drops NODE_OPTIONS), and the replaced functions are checked below
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : ['-r', NO_DIALOGS, path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
+  if (!process.env.AGENTDECK_TEST_EXECUTABLE) expect(await application.evaluate(({ dialog }) => [dialog.showErrorBox, dialog.showMessageBox, dialog.showMessageBoxSync, dialog.showOpenDialog].every((f) => f.noDialogs === true))).toBe(true);
   page = await application.firstWindow(); errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
   // a busy machine (twenty agent sessions) can take well over 5 s to load the page

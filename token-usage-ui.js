@@ -36,8 +36,8 @@
     download: svgIcon('<path d="M12 4v11"/><path d="m7 11 5 5 5-5"/><path d="M5 20h14"/>'),
     alert: svgIcon('<path d="M12 8v5M12 16.5v.01"/><circle cx="12" cy="12" r="9"/>'),
     pencil: svgIcon('<path d="M4 20h4L19 9a2.83 2.83 0 0 0-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/>'),
-    // a chain link broken in two, the gap marked: not connected (a slash read as a muted bell)
-    unlinked: svgIcon('<path d="M10 8H7.5a4 4 0 0 0 0 8H10"/><path d="M14 8h2.5a4 4 0 0 1 0 8H14"/><path d="M12 4v2.5M12 17.5V20"/><path d="M8.5 12H10M14 12h1.5"/>'),
+    // Lucide "unlink" (ISC): two halves of a chain pulled apart, with break marks at the gap
+    unlinked: svgIcon('<path d="m18.84 12.25 1.72-1.71h-.02a5 5 0 0 0-.12-7.07 5 5 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 .12 7.07 5 5 0 0 0 6.95 0l1.71-1.71"/><path d="M8 2v3M2 8h3M16 19v3M19 16h3"/>'),
     clock: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   };
   const UNITS = [['tokens', 'Token'], ['usd', '金额']];
@@ -63,7 +63,7 @@
   let model = null;           // what the last render drew: { days, colors, labels, cols, ... }
   // The chart's Mac | Windows switch: the token-usage:machines answer, the platform
   // picked (null: this machine, the default every time the view opens), the parts.
-  let machines = null, shownPlatform = null, shown = null, machineSig = '', machineTimer = null;
+  let machines = null, shownPlatform = null, shown = null, machineSig = '', machineTimer = null, spoken = '';
   let machineEl, machineNoteEl, offEl;
 
   const el = (tag, cls, text) => {
@@ -391,9 +391,14 @@
     const known = !!(F && self && F.PLATFORMS.some((p) => p.key === self));
     machineEl.hidden = !known;
     root.classList.toggle('off', shownOff());
-    // the notice is a status region: rebuilt (and so read out) only when what it says changes
-    // or when it comes into view, never on a refresh that says the same again
+    // the notice is rebuilt only when what it says changes or it comes into view; it is said
+    // through the page's live region (FleetUsage.speakNotice), once each time, never on a refresh
     const note = F && F.notice(shown);
+    if (F && open) {
+      const talk = F.speakNotice(spoken, note);
+      spoken = talk.spoken;
+      if (talk.say) host.announce(talk.say);
+    }
     if (!note) { offEl.hidden = true; delete offEl.dataset.key; }
     else if (offEl.hidden || offEl.dataset.key !== note.key) {
       offEl.dataset.state = note.state;
@@ -402,6 +407,7 @@
       icon.innerHTML = ICON[note.icon] || ICON.alert;
       icon.setAttribute('aria-hidden', 'true');
       offEl.replaceChildren(icon, el('b', 'tu-off-title', note.title), el('span', 'tu-off-detail', note.detail));
+      if (note.hint) offEl.title = note.hint; else offEl.removeAttribute('title');
       offEl.hidden = false;
     }
     if (!known) { machineNoteEl.textContent = ''; return; }
@@ -420,7 +426,7 @@
       }
       const mm = F.machine({ platform: p, selfPlatform: self, fleet: machines.fleet });
       dot.dataset.state = dotOf(mm);
-      const why = mm.state === 'ok' ? `数字截至 ${asOf(mm.summary.generatedAt)}${mm.stale ? '，它现在离线' : ''}` : mm.title;
+      const why = mm.state === 'ok' ? `数字截至 ${asOf(mm.summary.generatedAt)}${mm.stale ? '，它现在离线' : ''}` : mm.title + (mm.hint ? `（${mm.hint}）` : '');
       b.title = `${label} 的用量：${why}`;
       b.setAttribute('aria-label', `看 ${label} 的用量，${why}`);
     });
@@ -454,7 +460,7 @@
     delete wrapEl.dataset.scrolled;
     render();
     loadMachines();   // what the other machine sent may have changed since the view opened
-    // a notice is read by its own status region; saying it here too would read it twice
+    // a notice is said by renderMachine (speakNotice); saying it here too would read it twice
     const said = F.announcement(shown || { state: 'self', label: F.platformLabel(p) });
     if (said) host.announce(said);
   }
@@ -678,7 +684,7 @@
                 <div class="tu-range tu-machine" role="group" aria-label="看哪台电脑的用量" hidden>${(F ? F.PLATFORMS : []).map((p) => `<button type="button" data-platform="${p.key}"><i class="tu-machine-dot" aria-hidden="true"></i>${p.label}</button>`).join('')}</div>
               </div>
             </div>
-            <div class="tu-off" role="status" hidden></div>
+            <div class="tu-off" hidden></div>
             <div class="tu-chart" tabindex="0" role="group" aria-label="每天的用量柱状图：左右方向键换一天">
               <svg class="tu-svg" aria-hidden="true"></svg>
               <div class="tu-tip" role="tooltip" hidden></div>
@@ -744,7 +750,7 @@
     root.hidden = false;
     const saved = C.viewPrefs(host.prefs());
     range = saved.days; unit = saved.unit; starts = saved.starts;
-    selected = null; hover = null; editing = null; shownPlatform = null; machineSig = '';
+    selected = null; hover = null; editing = null; shownPlatform = null; machineSig = ''; spoken = '';
     delete wrapEl.dataset.scrolled;
     render();
     load(false);

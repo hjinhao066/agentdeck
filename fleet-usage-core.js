@@ -163,8 +163,9 @@
     const base = { platform, label, device: device ? { name: device.name, version: device.version || '', online: !!device.online, lastSeenAt: device.lastSeenAt || null } : null };
     const syncError = f.error ? String(f.error) : '';
     if (showNewer) {
-      const v = device.version ? ` ${device.version}` : '';
-      return { ...base, state: 'newer', title: '那台的 AgentDeck 比本机新，本机升级后才能看', detail: `${label} 上的 AgentDeck${v} 传来的用量是新格式（第 ${newer.u.newer} 版），这台只认得第 ${VERSION} 版；把这台升级到最新版就能看到` };
+      // the format numbers are for the hover hint, not the notice
+      return { ...base, state: 'newer', title: `${label} 上的 AgentDeck 比本机新，本机升级后才能看`, detail: '把这台电脑的 AgentDeck 升级到最新版就能看到',
+        hint: `${label} 传来的是第 ${newer.u.newer} 版用量格式，这台只认得第 ${VERSION} 版` };
     }
     if (withData.length) {
       const u = withData[0].u;
@@ -187,7 +188,15 @@
   const ICONS = { offline: 'clock', waiting: 'clock', connecting: 'clock', unconfigured: 'unlinked' };
   function notice(m) {
     if (!m || m.state === 'self' || m.state === 'ok') return null;
-    return { key: JSON.stringify([m.state, m.title, m.detail]), state: m.state, icon: ICONS[m.state] || 'alert', title: m.title, detail: m.detail };
+    return { key: JSON.stringify([m.state, m.title, m.detail]), state: m.state, icon: ICONS[m.state] || 'alert', title: m.title, detail: m.detail, hint: m.hint || '' };
+  }
+  // The notice is said through the page's own live region (always in the page, so it is
+  // read for sure): once when it comes into view, once more whenever what it says changes,
+  // never on a refresh or poll that says the same. `spoken` is the key last said ('' once the
+  // notice went away). Returns { say, spoken }.
+  function speakNotice(spoken, note) {
+    if (!note) return { say: '', spoken: '' };
+    return note.key === spoken ? { say: '', spoken } : { say: note.title, spoken: note.key };
   }
   function announcement(m) {
     if (!m) return '';
@@ -198,6 +207,6 @@
 
   return {
     USAGE_SESSION, VERSION, KEEP_DAYS, MAX_MODELS, MAX_BYTES, MORE, FIRST_VERSION, LABEL, EPOCH, PLATFORMS,
-    summarize, clean, turnsOf, fromRecord, newerOf, byteSize, versionAtLeast, platformLabel, machine, notice, announcement, showsSources,
+    summarize, clean, turnsOf, fromRecord, newerOf, byteSize, versionAtLeast, platformLabel, machine, notice, speakNotice, announcement, showsSources,
   };
 });

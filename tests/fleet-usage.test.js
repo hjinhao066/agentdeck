@@ -385,7 +385,7 @@ test('the notice is keyed by what it says, so a refresh saying the same is not r
   assert.equal(F.announcement({ state: 'old', label: 'Mac', title: 'x' }), '', 'the status region reads a notice itself');
 });
 
-test('a summary in a newer format: 那台的 AgentDeck 比本机新, never 几分钟内会传上来, and kept over a restart', async (t) => {
+test('a summary in a newer format: Mac 上的 AgentDeck 比本机新, never 几分钟内会传上来, and kept over a restart', async (t) => {
   const v2 = { ...F.summarize(scan({ days: 2 })), v: F.VERSION + 1, extra: { newField: 1 } };
   assert.equal(F.fromRecord({ turns: F.turnsOf(v2) }), null);
   assert.equal(F.newerOf({ turns: F.turnsOf(v2) }), F.VERSION + 1);
@@ -403,9 +403,11 @@ test('a summary in a newer format: 那台的 AgentDeck 比本机新, never 几�
   await win.syncOnce();
   const m = F.machine({ platform: 'darwin', selfPlatform: 'win32', fleet: win.usageSnapshot() });
   assert.equal(m.state, 'newer');
-  assert.equal(m.title, '那台的 AgentDeck 比本机新，本机升级后才能看');
-  assert.match(m.detail, /2\.1\.0/);
-  assert.doesNotMatch(m.title + m.detail, /几分钟/);
+  assert.equal(m.title, 'Mac 上的 AgentDeck 比本机新，本机升级后才能看');
+  assert.equal(m.detail, '把这台电脑的 AgentDeck 升级到最新版就能看到');
+  assert.doesNotMatch(m.title + m.detail, /几分钟|版本|第 \d 版|\d+\.\d+/, 'plain words: no format or version numbers in the notice');
+  assert.equal(m.hint, `Mac 传来的是第 ${F.VERSION + 1} 版用量格式，这台只认得第 ${F.VERSION} 版`);
+  assert.equal(F.notice(m).hint, m.hint, 'the format numbers go to the hover hint');
   const again = client(root, 'win', 'win32', { url: 'http://127.0.0.1:9/' });
   assert.equal(F.machine({ platform: 'darwin', selfPlatform: 'win32', fleet: { ...again.usageSnapshot(), devices: win.usageSnapshot().devices } }).state, 'newer');
   // a machine with readable numbers seen more recently than the newer one wins
@@ -425,4 +427,23 @@ test('icons: not connected is a broken link (no slash, which read as a muted bel
   for (const name of ['unlinked', 'clock', 'alert']) assert.match(ui, new RegExp('^\\s+' + name + ': svgIcon\\(', 'm'), name);
   const unlinked = /^\s+unlinked: svgIcon\('(.*)'\),$/m.exec(ui)[1];
   assert.doesNotMatch(unlinked, /M3 3l18 18|M2 2l20 20/, 'no strike-through');
+});
+
+// ---- third round (re-review of 9e0d089) ----
+test('a notice is said once when it comes into view and once when what it says changes, never on a refresh saying the same', () => {
+  const fleet = (version) => ({ configured: true, devices: [{ id: 'dev-mac', platform: 'darwin', version, online: true }], usage: {}, lastSyncAt: 'x' });
+  const note = (version) => F.notice(F.machine({ platform: 'darwin', selfPlatform: 'win32', fleet: fleet(version) }));
+  let spoken = '';
+  const step = (n) => { const r = F.speakNotice(spoken, n); spoken = r.spoken; return r.say; };
+  assert.equal(step(note('2.0.6')), 'Mac 上的 AgentDeck 2.0.6 还不会上传用量', 'switched to it: said once');
+  assert.equal(step(note('2.0.6')), '', 'a poll saying the same: silent');
+  assert.equal(step(note('2.0.6')), '', 'a refresh saying the same: silent');
+  assert.equal(step(note('2.0.7')), 'Mac 还没传上用量', 'what it says changed in the same tab: said once');
+  assert.equal(step(note('2.0.7')), '');
+  assert.equal(step(null), '', 'back to a machine with numbers: nothing to say here');
+  assert.equal(spoken, '');
+  assert.equal(step(note('2.0.7')), 'Mac 还没传上用量', 'switched back to it: said again, once');
+  // the notice itself is no live region any more: the page's own live region says it
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'token-usage-ui.js'), 'utf8');
+  assert.match(ui, /<div class="tu-off" hidden><\/div>/);
 });

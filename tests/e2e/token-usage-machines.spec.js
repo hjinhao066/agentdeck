@@ -101,6 +101,13 @@ test.afterEach(async () => {
   root = null;
 });
 
+// Everything the page's live region says from now on, in order.
+const listen = () => page.evaluate(() => {
+  window.__said = [];
+  const live = document.querySelector('#taskBoardView .tbv-live');
+  new MutationObserver(() => { if (live.textContent) window.__said.push(live.textContent); }).observe(live, { childList: true, characterData: true, subtree: true });
+});
+const saidCount = (text) => page.evaluate((t) => window.__said.filter((s) => s === t).length, text);
 const caps = () => page.evaluate(() => [...document.querySelectorAll('#taskBoardView .tu-col')].map((g) => ({ day: g.dataset.day, total: (g.querySelector('.tu-total') || {}).textContent || '' })));
 
 test('默认本机; the other machine: an older build says so, then its own numbers; the cards stay this machine\'s; both themes', async () => {
@@ -144,6 +151,7 @@ test('默认本机; the other machine: an older build says so, then its own numb
 
   // the other machine still runs an older build: why, in the chart's place; never empty columns
   await expect(otherBtn).toHaveAttribute('aria-label', new RegExp(`看 ${otherLabel} 的用量，.*还不会上传用量`), { timeout: 25000 });
+  await listen();
   await otherBtn.focus();
   await page.keyboard.press('Enter');
   await expect(otherBtn).toHaveAttribute('aria-pressed', 'true');
@@ -151,7 +159,11 @@ test('默认本机; the other machine: an older build says so, then its own numb
   const off = view.locator('.tu-off');
   await expect(off).toBeVisible();
   await expect(off).toHaveAttribute('data-state', 'old');
-  await expect(off.locator('.tu-off-title')).toHaveText(`${otherLabel} 上的 AgentDeck 2.0.6 还不会上传用量`);
+  const oldTitle = `${otherLabel} 上的 AgentDeck 2.0.6 还不会上传用量`;
+  await expect(off.locator('.tu-off-title')).toHaveText(oldTitle);
+  // the notice is no live region itself; the page's live region says it, exactly once
+  expect(await off.getAttribute('role')).toBeNull();
+  await expect.poll(() => saidCount(oldTitle)).toBe(1);
   await expect(off.locator('.tu-off-detail')).toContainText('2.0.7');
   await expect(view.locator('.tu-chart')).toBeHidden();
   await expect(view.locator('.tu-col')).toHaveCount(0);
@@ -161,21 +173,28 @@ test('默认本机; the other machine: an older build says so, then its own numb
   await expect(otherBtn).toBeFocused();
   // 数据来源 lists this machine's logs: hidden while the chart shows the other one
   await expect(view.locator('.tu-sources')).toBeHidden();
-  // the switch does not say the notice too: its status region reads it, once
-  expect(await view.locator('.tbv-live').textContent()).not.toContain('还不会上传用量');
   // a refresh that says the same keeps the status region's nodes (nothing is read out again)
   await page.evaluate(() => { document.querySelector('#taskBoardView .tu-off-title').dataset.mark = 'kept'; });
   await view.locator('.tu-refresh').click();
   await expect(view.locator('.tu-refresh')).not.toHaveClass(/busy/, { timeout: 30000 });
   await page.waitForTimeout(11000);   // past one machine poll (10 s) too
   await expect(off.locator('.tu-off-title')).toHaveAttribute('data-mark', 'kept');
+  expect(await saidCount(oldTitle), 'a refresh and a poll saying the same are silent').toBe(1);
   await screenshot('dark-3-other-missing');
 
   // it updates and sends its summary: its columns, its legend, its day table; the cards stay this machine's
   const summary = otherSummary(today);
   const push = () => store.pushHistory({ opId: 'op-other-' + Date.now(), sessionId: F.USAGE_SESSION, deviceId: 'dev-other', contentHash: require('crypto').createHash('sha256').update(JSON.stringify(F.turnsOf(summary))).digest('hex'),
     summary: F.LABEL, startedAt: F.EPOCH, endedAt: F.EPOCH, turns: F.turnsOf(summary) });
-  version = '2.0.7'; heartbeat(); push();
+  // what the notice says changes in the same tab (it updated, has not sent yet): said once more
+  version = '2.0.7'; heartbeat();
+  const waitTitle = `${otherLabel} 还没传上用量`;
+  await expect(off.locator('.tu-off-title')).toHaveText(waitTitle, { timeout: 25000 });
+  await expect.poll(() => saidCount(waitTitle)).toBe(1);
+  await page.waitForTimeout(11000);
+  expect(await saidCount(waitTitle)).toBe(1);
+  expect(await saidCount(oldTitle)).toBe(1);
+  push();
   await expect.poll(async () => (await page.evaluate(() => window.deck.tokenUsageMachines())).fleet.usage['dev-other'] ? 1 : 0, { timeout: 15000 }).toBe(1);
   await selfBtn.click();
   await otherBtn.click();
@@ -200,16 +219,21 @@ test('默认本机; the other machine: an older build says so, then its own numb
   expect(await view.locator('.tbv-live').textContent()).toBe(`${otherLabel} 的用量`);
 
   // a later AgentDeck there sends a newer format: says to update this machine, never "wait"
+  version = '2.1.0'; heartbeat();
   const newer = { ...summary, v: F.VERSION + 1 };
+  const newerTitle = `${otherLabel} 上的 AgentDeck 比本机新，本机升级后才能看`;
   store.pushHistory({ opId: 'op-newer-' + Date.now(), sessionId: F.USAGE_SESSION, deviceId: 'dev-other', contentHash: require('crypto').createHash('sha256').update(JSON.stringify(F.turnsOf(newer))).digest('hex'),
     summary: F.LABEL, startedAt: F.EPOCH, endedAt: F.EPOCH, turns: F.turnsOf(newer) });
   await expect(off).toBeVisible({ timeout: 20000 });
   await expect(off).toHaveAttribute('data-state', 'newer');
-  await expect(off.locator('.tu-off-title')).toHaveText('那台的 AgentDeck 比本机新，本机升级后才能看');
+  await expect(off.locator('.tu-off-title')).toHaveText(newerTitle);
+  await expect(off.locator('.tu-off-detail')).toHaveText('把这台电脑的 AgentDeck 升级到最新版就能看到');
   await expect(off).not.toContainText('几分钟');
+  await expect(off).toHaveAttribute('title', `${otherLabel} 传来的是第 ${F.VERSION + 1} 版用量格式，这台只认得第 ${F.VERSION} 版`);
+  await expect.poll(() => saidCount(newerTitle)).toBe(1);
   await expect(view.locator('.tu-col')).toHaveCount(0);
   await screenshot('dark-5-other-newer');
-  push();
+  version = '2.0.7'; heartbeat(); push();
   await expect(off).toBeHidden({ timeout: 20000 });
 
   // back to this machine
@@ -241,7 +265,8 @@ test('默认本机; the other machine: an older build says so, then its own numb
   store.pushHistory({ opId: 'op-newer-light-' + Date.now(), sessionId: F.USAGE_SESSION, deviceId: 'dev-other', contentHash: require('crypto').createHash('sha256').update(JSON.stringify(F.turnsOf(newer))).digest('hex'),
     summary: F.LABEL, startedAt: F.EPOCH, endedAt: F.EPOCH, turns: F.turnsOf(newer) });
   await expect(off).toHaveAttribute('data-state', 'newer', { timeout: 20000 });
-  await expect(off.locator('.tu-off-detail')).toContainText('2.1.0');
+  await expect(off.locator('.tu-off-title')).toHaveText(newerTitle);
+  await expect(off.locator('.tu-off-detail')).not.toContainText('2.1.0');
   await screenshot('light-5-other-newer');
 
   // opened again, the view starts on this machine
