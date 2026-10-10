@@ -2693,7 +2693,10 @@
       // it lasts hours.
       const backgroundWait = M.claudeBackgroundTasks(entry.lastScreen, col?.cmd);
       const quietLimit = M.silenceTimeout(col?.cmd, backgroundWait);
-      if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' &&
+      // A turn that is over, the agent resting at its empty input box (state 'done': no spinner, no background
+      // work), waits for 队长 or the user. Nothing is being worked on, so nothing is stuck: that is no silence.
+      // If it handed in nothing, the three-minute 已结束，未提交回执 below tells 队长 once.
+      if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' && entry.state !== 'done' &&
           (task.status === 'working' || task.status === 'queued' && !task.supplement)) {
         const summary = backgroundWait
           ? `在等后台命令，已经 ${Math.floor((Date.now() - quietSince) / 3600_000)} 小时没有输出，请检查会话；未自动中断或重派。`

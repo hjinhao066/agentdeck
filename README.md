@@ -682,7 +682,10 @@ again with the current provider, model and effort instructions.
   across restarts; fresh output rearms a later silence notice. A Claude session whose screen shows
   a background shell/Monitor still running (「… 1 shell still running」, footer 「· 1 shell ·」, also when
   wrapped) is silent by design: it is reported only after 3 hours, as 「在等后台命令，已经 X 小时没有输出」;
-  any other Claude session keeps the 20-minute notice. Relay reminds its
+  a session resting at its empty input box (screen state `done`: turn over, no spinner, no background work) is
+  waiting for 队长 or the user, not stuck, and gets no silence notice at all (a turn that handed in nothing
+  gets the one-time 「已结束，未提交回执」 instead); a working session whose screen is still keeps the
+  20-minute notice. Relay reminds its
   new Captain of unresolved input even if the previous Captain read it. An exit with code zero before
   a command receipt is also an abnormal receipt, rather than a successful task.
   If unread receipts have waited three minutes with no live listener, the app
