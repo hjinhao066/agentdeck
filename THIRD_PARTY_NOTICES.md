@@ -8,6 +8,7 @@ AgentDeck 仓库里直接带着几处第三方图标和代码（不是通过 `np
 - [2. xterm.js](#2-xtermjs)（MIT）：终端组件与插件
 - [3. pdf.js](#3-pdfjs)（Apache License 2.0）：手机网页的 PDF 预览
 - [4. core-js](#4-core-js)（MIT）：内嵌在 pdf.js 打包文件里
+- [5. 讨论功能的提示词](#5-讨论功能的提示词)（MIT）：改编自三个开源项目
 
 ## 1. Lucide 图标
 
@@ -370,6 +371,97 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+```
+
+## 5. 讨论功能的提示词
+
+- 项目与固定版本（`discussion-core.js` 的 `PROMPT_SOURCES` 与 `docs/discuss.md` 第 98 行登记的来源）：
+  - agent-council：https://github.com/yogirk/agent-council/blob/f6d1e1ad9c6597c03e7922f2bae41c73b7b760b2/src/prompts.ts
+  - Council Plus Advisors（llm-council-plus）：https://github.com/jacob-bd/llm-council-plus/blob/8351aa1998681a11b77d0e6aa09d8c5e1498eabf/backend/advisor_prompts.py
+  - Ensemble：https://github.com/raiyanyahya/ensemble/blob/47a8f147f624237ca783f28bc09cd4ff002be45e/src/agent.py
+- 用在哪：`discussion-core.js` 的提示词正文（`metadataPrompt`、`prompt`）。仓库文档写明这些提示词「改编自」上述项目；没有逐句与原文对照，因此按改编处理，保留其 MIT 声明。
+- 许可全文来源：各项目在上述固定提交中的 LICENSE 文件，取自 https://raw.githubusercontent.com/<owner>/<repo>/<commit>/LICENSE （2026-10-10 取得），逐字抄录。
+- 版权行（来自各 LICENSE）：
+  - agent-council：`Copyright (c) 2026 Agent Council Contributors`
+  - llm-council-plus：`Copyright (c) 2025 Jacob Ben David`
+  - ensemble：`Copyright (c) 2026 Raiyan Yahya`
+
+agent-council 许可全文（逐字）：
+
+```text
+MIT License
+
+Copyright (c) 2026 Agent Council Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+llm-council-plus 许可全文（逐字）：
+
+```text
+MIT License
+
+Copyright (c) 2025 Jacob Ben David
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+ensemble 许可全文（逐字）：
+
+```text
+MIT License
+
+Copyright (c) 2026 Raiyan Yahya
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 ## 不在本文件内的内容
