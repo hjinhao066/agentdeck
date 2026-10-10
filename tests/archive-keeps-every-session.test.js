@@ -119,7 +119,7 @@ test('the sidebar pages a long archive: the newest 100, then 显示更早的 dow
     columnLabel: (c) => c.title, lastTurnTs: () => 0, terms: new Map(),
     saveConfig() {}, syncNav() {}, restoreArchived() {}, deleteArchived() {},
   };
-  const win = { SidebarCore: SC, TodoUI: { shortcutLabel: () => '' }, addEventListener() {} };
+  const win = { SidebarCore: SC, AppShortcutsCore: require('../app-shortcuts-core.js'), TodoUI: { shortcutLabel: () => '' }, addEventListener() {} };
   win.window = win;
   const document = { body: new Node('body'), createElement: (t) => new Node(t), getElementById: (id) => byId[id] || null, addEventListener() {} };
   class MutationObserver { observe() {} disconnect() {} }

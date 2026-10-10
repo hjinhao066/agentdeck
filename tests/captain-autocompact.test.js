@@ -53,7 +53,7 @@ function harness(t, config) {
   const source = read('main.js');
   const body = source.slice(source.indexOf('function spawnPty('), source.indexOf('\nfunction send('));
   const context = vm.createContext({ fs, path, HOME: home, tudArg: false, app: { getPath: () => home },
-    quotaWarmup: null, validId: () => true, ptys, ptySeats, ptyLaunchDirs: new Map(), ENV: { PATH: '/bin' },
+    quotaWarmup: null, validId: () => true, ptys, ptySeats, ptySeatDefs: new Map(), ptyLaunchDirs: new Map(), ENV: { PATH: '/bin' },
     ClaudeSeatsCore: S, AgentSessions, credentialLocation: M.credentialLocation, initializeOnboarding: M.initializeOnboarding, seatEnvironment: M.seatEnvironment,
     ttyFromPty, writeCredentials: () => {}, removeCredentials: () => {}, crypto: require('crypto'), managedSessions: new Map(), receiptSessions: new Map(), notifications: null,
     spoolPath: () => path.join(home, 'unused'), boardControlDir: home, boardCliPath: '/fake/board.js',
@@ -119,6 +119,7 @@ test('the launch handler: only the 队长 column gets the hook file', async (t) 
     prepareWorkspaceTrust: (command) => ({ command }),
     codexLauncher: { prepare: (cmd) => cmd },
     tudArg: null, HOME: os.tmpdir(), send() {}, seatGate: null, AgentSessions, captainCompactSettings: file,
+    ClaudeSeatsCore: S, ptySeatDefs: new Map(), declineAutoModeNudge: async () => ({ ok: true }), nlog() {},
   });
   vm.runInContext(source.slice(begin, end), context);
   assert.equal(await handler(null, { id: 'captain', command: 'claude --model opus' }), `claude --settings "${file}" --model opus`);
