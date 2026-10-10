@@ -2371,9 +2371,11 @@ function buildColumn(col, isFresh) {
       // While AgentDeck types a receipt or a task into this box (up to 3 s
       // while the agent keeps drawing), your keys wait and follow right after its Enter. The wheel,
       // pointer moves and the terminal's own replies do not wait (ChatCore.passesInputHold).
+      // The one gate every keystroke goes through, including the keys a waiting Ctrl+V held back.
+      entry.routeInput = (d) => { if (entry.injecting && !ChatCore.passesInputHold(d)) held.push(d); else forwardInput(d); };
       term.onData((d) => {
         if (ctrlV.hold(d)) return; // a Ctrl+V is still waiting for the clipboard: this key follows it
-        if (entry.injecting && !ChatCore.passesInputHold(d)) held.push(d); else forwardInput(d);
+        entry.routeInput(d);
       });
     }
     term.onResize(({ cols, rows }) => window.deck.ptyResize(col.id, cols, rows));
@@ -2446,7 +2448,7 @@ function buildColumn(col, isFresh) {
         clearTimeout(pasteHintTimer);
         pasteHintTimer = setTimeout(() => { pasteHint.hidden = true; }, 5000);
       },
-      sendHeld: forwardInput,
+      sendHeld: (d) => { const entry = terms.get(col.id); if (entry && entry.routeInput) entry.routeInput(d); else forwardInput(d); },
       passes: ChatCore.passesInputHold,
     });
     disposers.push(() => { clearTimeout(pasteHintTimer); ctrlV.cancel(); });
