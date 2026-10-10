@@ -1400,7 +1400,9 @@ the same field stay as two copies and the card shows 冲突. The sidebar section
 两机 is one line: a dot per computer (Mac / Windows) and, only when something needs a look, 同步失败
 or the number of 冲突. Hovering it, reaching it with the keyboard, or clicking it (kept open until
 Esc or a click elsewhere) shows each computer's full name with online/offline and the last-seen time,
-the whole sync message, and the latest 队长记录, beside the sidebar.
+the whole sync message, and the 8 most recent 队长记录, beside the sidebar. Each record shows its own
+last time (a saved chat's turns carry their times in milliseconds; a record the hub has without times
+gets them when the same transcript is sent again).
 
 The service is `node sync-server.js --data <dir> --token-file <path>`. Bind it
 to the WireGuard address when it is deployed; the default listen address is
@@ -1483,7 +1485,13 @@ until the hub is upgraded. An older client keeps sending whole transcripts
 but transcript prose is preserved, so sync only to a trusted private service.
 Requests time out after 10 seconds and retry on subsequent sync rounds. A round
 still running when the next is due is not queued behind it (one round at a time,
-none started after sync stops).
+none started after sync stops). The hub saves every change before it answers.
+A save the disk refuses (a full disk answers 507 `storage-full`) undoes the change
+and leaves no temp file; the hub's log names the request and error code (the same
+one at most once a minute, never a body or token), the client says the hub's disk
+is full, and its retry is applied again once there is room. (2026-10-10 the
+Windows disk holding the hub filled for 37 minutes: 500s, 301 empty temp files,
+and retries answered from receipts the disk never had.)
 If the hub loses a card or rolls back behind a pending edit's revision, the
 client discards that edit's old base and queues the complete local card with a
 new operation ID and revision zero for the next round. Newer local fields are

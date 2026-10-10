@@ -45,7 +45,10 @@ function readBody(req) {
   });
 }
 
-function startSyncServer({ store, token, host = '127.0.0.1', port = 0, log = () => {} } = {}) {
+// report: where a failed request's cause goes (the hub's own log), the same cause at
+// most once a minute. It names the request and the error code, never a body or token.
+function startSyncServer({ store, token, host = '127.0.0.1', port = 0, log = () => {}, report = () => {} } = {}) {
+  const reported = new Map();
   if (!store) throw new Error('Sync server requires a store.');
   if (typeof token !== 'string' || !token.trim() || token.length > 4096) throw new Error('Sync server requires a token.');
   const server = http.createServer(async (req, res) => {
@@ -100,6 +103,14 @@ function startSyncServer({ store, token, host = '127.0.0.1', port = 0, log = () 
       return finish(404, { error: 'not-found' });
     } catch (err) {
       const status = Number.isInteger(err.status) ? err.status : 500;
+      if (status >= 500) {
+        const line = `${req.method} ${pathname} ${status} ${(err && err.code) || (err && err.name) || 'error'}`;
+        const now = Date.now();
+        if (!(now - (reported.get(line) || 0) < 60_000)) {
+          reported.set(line, now);
+          try { report(new Date(now).toISOString() + ' ' + line); } catch (_) {}
+        }
+      }
       finish(status, { error: status === 500 ? 'server-error' : String(err.message || 'bad-request') });
     }
   });
@@ -135,7 +146,7 @@ function main() {
   catch (_) { console.error('token file unreadable'); process.exit(1); }
   if (!token) { console.error('token file is empty'); process.exit(1); }
   const store = new SharedStore({ file: path.join(data, 'store.json') });
-  startSyncServer({ store, token, host, port }).then((server) => {
+  startSyncServer({ store, token, host, port, report: (line) => console.error(line) }).then((server) => {
     console.log('agentdeck sync listening ' + server.url);
   }).catch((err) => {
     console.error(err && err.code ? err.code : 'sync server failed');

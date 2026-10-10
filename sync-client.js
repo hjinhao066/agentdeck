@@ -253,7 +253,10 @@ class FleetClient {
     const contentHash = crypto.createHash('sha256').update(JSON.stringify(turns)).digest('hex');
     const previous = this.historyOutbox.get(sessionId);
     if (previous?.contentHash === contentHash) return;
-    const times = turns.map((turn) => Date.parse(turn.ts || turn.at || '')).filter(Number.isFinite);
+    // A saved chat stamps each turn in milliseconds (`ts`, and `end` once it finished);
+    // Date.parse read those numbers as NaN, so no transcript had its own times.
+    const at = (value) => (typeof value === 'number' ? value : Date.parse(value || ''));
+    const times = turns.flatMap((turn) => [at(turn.ts ?? turn.at), at(turn.end)]).filter(Number.isFinite);
     this.historyOutbox.set(sessionId, {
       opId: 'op-' + crypto.randomUUID(),
       sessionId, contentHash, turns,
@@ -285,6 +288,7 @@ class FleetClient {
       catch (_) { throw new Error('同步失败：服务返回了无法识别的内容'); }
     }
     if (response.status === 401) throw new Error('同步失败：同步服务拒绝了本机（检查令牌文件）');
+    if (response.status === 507) throw new Error('同步失败：同步服务那台电脑的磁盘满了，腾出空间后会自动恢复');
     if ((response.status === 409 && pathname === '/v1/tasks') || accept.includes(response.status)) {
       return { status: response.status, body: payload };
     }
