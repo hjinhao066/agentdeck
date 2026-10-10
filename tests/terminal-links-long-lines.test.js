@@ -47,6 +47,8 @@ for (const [name, text] of [
   ['20,000 characters of "a."', 'a.'.repeat(10000)],
   ['a long list of dotted versions', 'v1.2.3-'.repeat(3000)],
   ['a long dotted path', 'a.b/'.repeat(5000) + 'c.js:12'],
+  // each path ends at its first space, so the search starts again right after it
+  ['20,000 characters of paths with words between them', '/a/b.md ('.repeat(2250)],
 ]) {
   test(`findLinks on ${name} finishes in linear time`, () => {
     findLinks('/warm/up.js:1');
@@ -54,6 +56,14 @@ for (const [name, text] of [
     assert.ok(ms < BUDGET_MS, `took ${ms.toFixed(0)} ms`);
   });
 }
+
+test('findLinks on 20,000 characters of Windows paths with words between them finishes in linear time on Windows', () => {
+  const win = load('win32').findLinks;
+  win('C:\\warm\\up.js:1');
+  const { value, ms } = timed(() => win('C:\\a\\b.md 和 C:\\c d\\e.md, '.repeat(800)));
+  assert.ok(ms < BUDGET_MS, `took ${ms.toFixed(0)} ms`);
+  assert.equal(value.length, 1600);
+});
 
 test('links found in ordinary lines are unchanged', () => {
   // What findLinks returned before the change, except where a path took the

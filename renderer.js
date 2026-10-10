@@ -2573,10 +2573,12 @@ function findLinks(text) {
   // by another space or a slash (stops at double-spaces and at " /" so two paths
   // on one line don't merge). pathEnd then gives back the prose after the path,
   // and the search goes on from there: the rest of the line may hold the next one.
-  // What remains ambiguous is settled in the main process, which resolves the
+  // No path is longer than 1024 characters (macOS's PATH_MAX); the cap keeps a
+  // long line of short paths with prose between them from being read to its end
+  // once per path. What remains ambiguous is settled in the main process, which resolves the
   // longest path that actually exists on disk.
   const sep = env.platform === 'win32' ? /[\\/]/ : /\//;
-  const fileRe = new RegExp('(?:file:\\/\\/)?(?:~\\/|\\/)(?:\\\\ |[^\\s"\'`<>|' + PATH_STOP + ']| (?![\\s/]))+', 'gu');
+  const fileRe = new RegExp('(?:file:\\/\\/)?(?:~\\/|\\/)(?:\\\\ |[^\\s"\'`<>|' + PATH_STOP + ']| (?![\\s/])){1,1024}', 'gu');
   while ((m = fileRe.exec(text))) {
     const raw = m[0], s = m.index;
     if (/^https?:/.test(raw) || raw.length < 4) continue;
@@ -2593,7 +2595,7 @@ function findLinks(text) {
   // Windows absolute paths: "C:\Users\jinhao\proj\file.js:12" or "C:/…". Only
   // matched on Windows so a stray "C:\" in prose can't hijack macOS output.
   if (env.platform === 'win32') {
-    const winRe = new RegExp('\\b[A-Za-z]:[\\\\/](?:[^\\s"\'`<>|:*?' + PATH_STOP + ']| (?![\\s\\\\/]))+(?::\\d+(?::\\d+)?)?', 'gu');
+    const winRe = new RegExp('\\b[A-Za-z]:[\\\\/](?:[^\\s"\'`<>|:*?' + PATH_STOP + ']| (?![\\s\\\\/])){1,1024}(?::\\d+(?::\\d+)?)?', 'gu');
     while ((m = winRe.exec(text))) {
       const s = m.index, e = pathEnd(text, s, trimTrail(text, s, s + m[0].length), sep);
       winRe.lastIndex = Math.max(e, s + 1);
