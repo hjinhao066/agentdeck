@@ -113,6 +113,9 @@ test('navigation stays on the opened page\'s own address', () => {
 });
 
 // ---- the view the page runs in ----
+// What names resolve to in these tests (a public name may point at this machine or the local network).
+const NAMES = { 'cdn.jsdelivr.net': ['151.101.1.229'], 'example.com': ['93.184.216.34'], 'lan-alias.example.com': ['127.0.0.1'],
+  'nas.example.org': ['192.168.1.20'], 'v6-loop.example.net': ['::1'], 'mixed.example.net': ['93.184.216.34', '10.0.0.7'] };
 function standIn() {
   const calls = { handlers: {}, invoke: {}, sent: [], views: [], partitions: [] };
   const makeSession = (name) => {
@@ -141,6 +144,8 @@ function standIn() {
     onMain: (channel, fn) => { calls.handlers[channel] = fn; }, handleMain: (channel, fn) => { calls.invoke[channel] = fn; },
     send: (channel, message) => calls.sent.push([channel, message]), getWindow: () => win, session, WebContentsView,
     resolveClick: (msg) => (fs.existsSync(msg.raw) ? { target: msg.raw } : null), chatDir: () => path.join(tmp, 'chats'), home, tmp: opts.tmp,
+    // names are looked up before a request leaves; no real lookups in a test
+    lookup: async (host) => (NAMES[host] || []).map((address) => ({ address, family: address.includes(':') ? 6 : 4 })),
   });
   return { calls, sessions, win, pane };
 }
@@ -176,11 +181,11 @@ test('the page opens in a view of its own: sandboxed, no bridge, a session nothi
   assert.equal((await get(url, 'POST')).status, 405);
 
   // requests leaving the view
-  const verdict = (target) => { let out; ses.filter({ url: target }, (r) => { out = r; }); return !!out.cancel; };
-  assert.equal(verdict('file:///etc/hosts'), true);
-  assert.equal(verdict('http://127.0.0.1:8787/hub'), true);
-  assert.equal(verdict('https://cdn.jsdelivr.net/npm/chart.js'), false);
-  assert.equal(verdict(url), false);
+  const verdict = (target) => new Promise((resolve) => ses.filter({ url: target }, (r) => resolve(!!r.cancel)));
+  assert.equal(await verdict('file:///etc/hosts'), true);
+  assert.equal(await verdict('http://127.0.0.1:8787/hub'), true);
+  assert.equal(await verdict('https://cdn.jsdelivr.net/npm/chart.js'), false);
+  assert.equal(await verdict(url), false);
 
   // permissions, downloads, new windows
   let granted = null; ses.permission({}, 'media', (v) => { granted = v; });
@@ -208,6 +213,21 @@ test('the page opens in a view of its own: sandboxed, no bridge, a session nothi
   assert.equal(leave('http://192.168.1.1/'), true);
   assert.equal(leave('agentdeck-preview://' + 'f'.repeat(32) + '/index.html'), true);
   assert.equal(calls.sent.length, 0);
+});
+
+test('a public name that points at this machine or the local network is refused like the address itself', async () => {
+  // In the real app a name resolving to 127.0.0.1 reached a local service and the page read its answer.
+  const { calls, sessions } = standIn();
+  calls.handlers['side:preview-html']({}, { raw: path.join(report, 'index.html') });
+  const ses = sessions.get('agentdeck-preview');
+  const verdict = (target) => new Promise((resolve) => ses.filter({ url: target }, (r) => resolve(!!r.cancel)));
+  for (const url of ['http://lan-alias.example.com:8787/hub/api', 'https://nas.example.org/', 'http://v6-loop.example.net/', 'https://mixed.example.net/a.js', 'https://nowhere.example/'])
+    assert.equal(await verdict(url), true, url);
+  for (const url of ['https://cdn.jsdelivr.net/npm/chart.js', 'https://example.com/a.png', 'https://EXAMPLE.com./b.png'])
+    assert.equal(await verdict(url), false, url);
+  assert.equal(Core.namedHost('http://93.184.216.34/'), '');
+  assert.equal(Core.namedHost('http://[2606:2800::1]/'), '');
+  assert.equal(Core.namedHost('data:text/plain,x'), '');
 });
 
 test('a page\'s alert() or confirm() cannot put a box over the deck window', () => {

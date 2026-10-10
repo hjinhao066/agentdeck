@@ -108,9 +108,21 @@ function requestAllowed(url) {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
   return !privateHost(parsed.hostname);
 }
+// The name an allowed web request goes to when it is a name and not an address: it is
+// looked up before the request leaves (a public name can point at 127.0.0.1 or the local
+// network: *.nip.io, localtest.me, anyone's own domain). '' for an address, the page's own
+// address, data: and blob:.
+function namedHost(url) {
+  let parsed;
+  try { parsed = new URL(String(url)); } catch (_) { return ''; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
+  if (!host || host.startsWith('[') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return '';
+  return host;
+}
 // Another page of the same opened folder.
 function sameSite(url, token) {
   try { const parsed = new URL(String(url)); return parsed.protocol === SCHEME + ':' && !!token && parsed.hostname === token; } catch (_) { return false; }
 }
 
-module.exports = { SCHEME, PARTITION, MAX_ASSET_BYTES, HTML_NAME, MIME, scopeFor, entryPath, resolveAsset, privateHost, requestAllowed, sameSite };
+module.exports = { SCHEME, PARTITION, MAX_ASSET_BYTES, HTML_NAME, MIME, scopeFor, entryPath, resolveAsset, privateHost, requestAllowed, namedHost, sameSite };

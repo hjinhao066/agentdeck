@@ -4,6 +4,7 @@
 // can ask for is validated here; the page never gets Node or a raw file path
 // it did not click on.
 const crypto = require('crypto');
+const dns = require('dns');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -20,6 +21,9 @@ const MAX_CHAT_BYTES = 64 * 1024 * 1024;
 const MAX_DIR_ENTRIES = 300;
 // A previewed page's link goes to the browser tab only this soon after a real click or key press in it.
 const HAND_OVER_MS = 2000;
+// How long a name a previewed page asked for keeps its looked-up verdict (local or public).
+const NAME_TTL_MS = 60 * 1000;
+const NAMES_KEPT = 500;
 
 // ---- previews ----
 function readPreview(target, raw) {
@@ -252,6 +256,23 @@ function registerSideIpc(ctx) {
   let opened = null;                 // { token, scope }: the one page the address serves right now
   let pageBounds = { x: 0, y: 0, width: 0, height: 0, visible: false };
   const tokens = new Map();          // folder (or lone file) → its address, the same for the whole run
+  // A name is looked up before a request to it leaves: a public name can point at this machine
+  // or the local network. Not proof against a name that answers differently a moment later
+  // (DNS rebinding), but every name that simply points there is refused.
+  const lookup = ctx.lookup || ((host) => dns.promises.lookup(host, { all: true, verbatim: true }));
+  const names = new Map();           // name → { at, local }: a page loads many files from one CDN
+  function nameIsLocal(host) {
+    const known = names.get(host);
+    if (known && Date.now() - known.at < NAME_TTL_MS) return Promise.resolve(known.local);
+    return Promise.resolve().then(() => lookup(host)).then(
+      (list) => !Array.isArray(list) || !list.length || list.some((entry) => PreviewHtml.privateHost(entry && entry.address)),
+      () => true,                      // a name that does not resolve: the request could not go anywhere anyway
+    ).then((local) => {
+      if (names.size >= NAMES_KEPT) names.clear();
+      names.set(host, { at: Date.now(), local });
+      return local;
+    });
+  }
   const refusal = (status) => new Response(null, { status, headers: { 'cache-control': 'no-store' } });
   async function serve(request) {
     if (request.method !== 'GET' && request.method !== 'HEAD') return refusal(405);
@@ -270,7 +291,12 @@ function registerSideIpc(ctx) {
     if (pageSession) return pageSession;
     const ses = session.fromPartition(PreviewHtml.PARTITION);
     ses.protocol.handle(PreviewHtml.SCHEME, serve);
-    ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !PreviewHtml.requestAllowed(details.url) }));
+    ses.webRequest.onBeforeRequest((details, callback) => {
+      if (!PreviewHtml.requestAllowed(details.url)) { callback({ cancel: true }); return; }
+      const host = PreviewHtml.namedHost(details.url);
+      if (!host) { callback({ cancel: false }); return; }
+      nameIsLocal(host).then((local) => callback({ cancel: local }));
+    });
     ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     ses.setPermissionCheckHandler(() => false);
     ses.on('will-download', (event) => event.preventDefault());

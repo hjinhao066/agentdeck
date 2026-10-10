@@ -1047,7 +1047,8 @@ an index from before this counts nothing as new). The phone hub does not have it
   page lies in (real paths: no `..`, no symbolic link leading out, no hidden file, no
   key or credential name, only formats a page is made of, 64 MB each). Requests to
   `file:`, to this machine (`localhost`, `127.*`, `::1`), to the local network and to
-  anything but `http(s)` on the public web are cancelled, so a CDN chart library loads
+  anything but `http(s)` on the public web are cancelled (a name is looked up first, so a
+  public name that points at this machine or the local network is cancelled too), so a CDN chart library loads
   and the deck's own phone page or sync server cannot be reached. Permissions,
   downloads, dialogs (`alert`, `confirm`) and new windows are denied; the page can move
   between its own pages; a link to the public web that you click opens in the 浏览器 tab
