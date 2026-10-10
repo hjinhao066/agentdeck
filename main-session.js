@@ -2619,13 +2619,17 @@
         continue;
       }
       const quietSince = Math.max(entry.lastOutputAt || 0, task.startedAt || task.sentAt || 0);
-      const quietLimit = M.silenceTimeout(col?.cmd);
       // A Claude turn that is over while its background shell or Monitor runs draws nothing (a static status
-      // row; its cursor queries are not output): that wait is work, not silence.
+      // row; its cursor queries are not output): that wait is work, not silence, and is reported only when
+      // it lasts hours.
+      const backgroundWait = M.claudeBackgroundTasks(entry.lastScreen, col?.cmd);
+      const quietLimit = M.silenceTimeout(col?.cmd, backgroundWait);
       if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' &&
-          !M.claudeBackgroundTasks(entry.lastScreen, col?.cmd) &&
           (task.status === 'working' || task.status === 'queued' && !task.supplement)) {
-        if (push(task, { summary: `已连续 ${quietLimit / 60_000} 分钟没有任何终端输出，请检查会话；可能仍在深度思考，未自动中断或重派。`, source: 'watchdog' })) {
+        const summary = backgroundWait
+          ? `在等后台命令，已经 ${Math.floor((Date.now() - quietSince) / 3600_000)} 小时没有输出，请检查会话；未自动中断或重派。`
+          : `已连续 ${quietLimit / 60_000} 分钟没有任何终端输出，请检查会话；可能仍在深度思考，未自动中断或重派。`;
+        if (push(task, { summary, source: 'watchdog' })) {
           task.silenceNotifiedAt = quietSince; // Fresh output or a new task rearms the watchdog.
           save();
         }

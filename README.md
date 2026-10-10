@@ -674,7 +674,10 @@ again with the current provider, model and effort instructions.
   Each task's ongoing exception is reported once: answering a prompt or returning
   to work rearms input notices, and new tasks always receive their own failure
   receipts. Silence is deduplicated per task and last-output timestamp, retained
-  across restarts; fresh output rearms a later silence notice. Relay reminds its
+  across restarts; fresh output rearms a later silence notice. A Claude session whose screen shows
+  a background shell/Monitor still running (「… 1 shell still running」, footer 「· 1 shell ·」, also when
+  wrapped) is silent by design: it is reported only after 3 hours, as 「在等后台命令，已经 X 小时没有输出」;
+  any other Claude session keeps the 20-minute notice. Relay reminds its
   new Captain of unresolved input even if the previous Captain read it. An exit with code zero before
   a command receipt is also an abnormal receipt, rather than a successful task.
   If unread receipts have waited three minutes with no live listener, the app

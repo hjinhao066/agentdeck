@@ -50,6 +50,54 @@ function world() {
   };
 }
 
+// rows copied off real worker screens, 10-10 overnight (queued full-machine tests)
+const REAL = {
+  'status row': ['  ⏺ 继续等测试排队。', '', '✻ Baked for 27s · done 1:23 AM · 1 shell still running', RULE, '❯ ', RULE, 'Sonnet 5h 69%'].join('\n'),
+  'status row, wrapped in a narrow column': ['  ⏺ 继续等测试排队。', '', '✻ Worked for 3m 38s · done 1:08 AM · 1 shell still', '  running', RULE, '❯ ', RULE, 'Sonnet 5h 69%'].join('\n'),
+  'footer, 1 shell': ['  ⏺ 继续等测试排队。', RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on · 1 shell · ← for ag…'].join('\n'),
+  'footer, 2 shells': ['  ⏺ 继续等测试排队。', RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on · 2 shells · ← for ag…'].join('\n'),
+};
+
+test('every real background-wait screen reads as a background wait', () => {
+  for (const [name, screen] of Object.entries(REAL)) assert.equal(M.claudeBackgroundTasks(screen, 'claude'), true, name);
+  assert.equal(M.claudeBackgroundTasks(REAL['status row'], 'zsh'), false, 'only Claude sessions');
+});
+
+test('a background wait is quiet for 20 minutes, with every real screen', () => {
+  for (const [name, screen] of Object.entries(REAL)) {
+    const w = world(), t = w.task();
+    w.entry.lastScreen = screen;
+    w.pty(25 * 60_000, '\x1b[?6n');
+    assert.deepEqual(w.s.pending.filter((p) => p.anomaly === 'no_output'), [], name);
+    assert.equal(t.status, 'working', name);
+  }
+});
+
+test('a background wait with no output for 3 hours is reported once, saying it is waiting on a background command', () => {
+  for (const [name, screen] of Object.entries(REAL)) {
+    const w = world(), t = w.task();
+    w.entry.lastScreen = screen;
+    w.pty(2.9 * 3600_000, '\x1b[?6n');
+    assert.deepEqual(w.s.pending.filter((p) => p.anomaly === 'no_output'), [], name + ': 2.9h still quiet');
+    w.pty(0.2 * 3600_000, '\x1b[?6n');
+    const got = w.s.pending.filter((p) => p.anomaly === 'no_output');
+    assert.equal(got.length, 1, name);
+    assert.match(got[0].summary, /在等后台命令，已经 3 小时没有输出/, name);
+    assert.doesNotMatch(got[0].summary, /20 分钟/, name);
+    w.pty(1 * 3600_000, '\x1b[?6n');
+    assert.equal(w.s.pending.filter((p) => p.anomaly === 'no_output').length, 1, name + ': not repeated while still silent');
+    assert.equal(t.status, 'working', name);
+  }
+});
+
+test('output during a background wait rearms it: the 3 hours count from the last real output', () => {
+  const w = world(); w.task();
+  w.pty(2 * 3600_000, '\x1b[?6n');
+  w.pty(10_000, 'build finished\r\n');
+  w.pty(2.5 * 3600_000, '\x1b[?6n');
+  assert.deepEqual(w.s.pending.filter((p) => p.anomaly === 'no_output'), []);
+});
+
 test('a Claude worker waiting on its background monitor for 25 minutes is not reported as silent', () => {
   const w = world(), t = w.task();
   assert.equal(M.claudeBackgroundTasks(WAITING, 'claude'), true, 'the screen reads as a background wait');
