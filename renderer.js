@@ -594,6 +594,9 @@ function classify(text, entry, cmd, isCaptain = false, withoutBackground = false
   }
   if (WORKING_RE.test(MainCore.claudeStatusRowsBlanked(text, cmd)) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
+  // Scrolled up in Claude's fullscreen view: the spinner is off screen, not gone. A working turn
+  // stays working until the view is back at the bottom and shows how the turn really stands.
+  if (entry?.state === 'working' && MainCore.claudeScrolledUp(text, cmd)) return 'working';
   if (!isCaptain && !withoutBackground && MainCore.claudeBackgroundTasks(text, cmd)) return 'working';
   // After submission, an unrecognised/empty Cursor screen is initialization
   // or work without a ready prompt, never evidence that the turn finished.
@@ -4132,7 +4135,7 @@ function statusScreen(term) {
     const line = buf.getLine(y);
     // (as wide as the terminal is: a full-screen TUI's row keeps its old length when the terminal narrows)
     const text = line ? line.translateToString(false, 0, term.cols) : '';
-    if (line?.isWrapped && lines.length) {
+    if (line?.isWrapped && lines.length && !chromeRowBreak(buf.getLine(y - 1)?.translateToString(false, 0, term.cols) || '', text)) {
       // a wide character (中文) that did not fit at the end of the row above went down whole: the cell it left
       // there (empty in xterm, a space from the Windows console between two wide characters) is no space in the
       // text; nor are the blank cells after it once the window has grown since (the console paints spaces to the
@@ -4157,6 +4160,15 @@ function statusScreen(term) {
     text = nl >= 0 ? text.slice(nl + 1) : '';
   }
   return text.trimEnd();
+}
+// The Windows console (ConPTY) sends some full-screen TUI rows as a soft wrap of the row above:
+// a box rule that fills the width and the "❯ " row under it, or a padded row and Claude's spinner
+// row ("✽ Skedaddling… (4s)"). Joined, the rule swallows the prompt and the spinner sits mid-line,
+// so nothing anchored at a row's start sees them and a working Claude reads as done. Text really
+// wraps at its last cell; a rule above, or a row that ended in blank cells above TUI chrome, did not.
+function chromeRowBreak(above, row) {
+  return /^\s*[─━═]{3,}\s*$/.test(above) || /^\s*[─━═]{3,}\s*$/.test(row) ||
+    (/\s{2,}$/.test(above) && /^\s*(?:[✻✽✳✶✢✺∴·*]\s+\S|[❯›](?:\s|$)|⎿\s|⏺\s|⏵⏵)/.test(row));
 }
 // Background shell commands under a column's terminal, for the automatic archive
 // (pty-work.js in the main process). An answer is used for PTY_WORK_MS, a busy one
