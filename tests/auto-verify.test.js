@@ -601,3 +601,28 @@ test('nobody is picked from an empty seat list, and the dispatcher leaves a dama
   assert.equal(weak.seat.id, 'us'); assert.equal(weak.unverified, true);
   assert.equal(AV.pickReviewer({ simple: false, seats, stanceOf: () => 'error' }).cmd, undefined);
 });
+
+test('the dispatcher fallback never lands on a damaged seat: the first undamaged one is named, none when every seat is damaged', () => {
+  const commandOf = (c) => c.command || 'agy --model gemini-3.8-flash-high';
+  const seats = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const pick = (table) => AV.pickDispatcher({ commandOf, seats, stanceOf: (cmd, seat) => (/^agy/.test(cmd) ? 'unknown' : table[seat]) });
+  // the active seat (first) is damaged and the others are out: wait on the first undamaged one
+  const waiting = pick({ a: 'error', b: 'out', c: 'out' });
+  assert.equal(waiting.cmd, undefined); assert.equal(waiting.allError, false); assert.equal(waiting.fallbackSeat.id, 'b');
+  // an undamaged active seat keeps its lead
+  assert.equal(pick({ a: 'out', b: 'error', c: 'out' }).fallbackSeat.id, 'a');
+  // every seat damaged: the Captain decides, no seat to wait on
+  const broken = pick({ a: 'error', b: 'error', c: 'error' });
+  assert.equal(broken.allError, true); assert.equal(broken.fallbackSeat, null);
+  // a seat that has room is simply picked, as before
+  assert.equal(pick({ a: 'error', b: 'out', c: 'ok' }).seat.id, 'c');
+});
+
+test('a Claude command is recognised by its program name: claude.exe, a path to it and NAME=value prefixes count; claude-ds and other programs do not', () => {
+  for (const cmd of ['claude --model x', 'claude', 'claude.exe --model x', 'C:\\Tools\\claude.exe --effort high', '"C:\\Program Files\\Claude\\claude.exe" --x',
+    '/usr/local/bin/claude --x', "'/opt/claude' --x", 'command claude --x', 'FOO=1 claude --x']) assert.equal(AV.isClaudeCommand(cmd), true, cmd);
+  for (const cmd of ['claude-ds --x', 'claudex', 'node claude', 'node /x/claude.js', 'codex --x', 'agy --model m', 'echo claude', '', undefined]) assert.equal(AV.isClaudeCommand(cmd), false, String(cmd));
+  // the same name the quota reading uses
+  const Q = require('../quota-core');
+  assert.equal(Q.commandIdentity('C:\\Tools\\claude.exe --model m').name, 'claude');
+});

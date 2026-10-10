@@ -666,3 +666,22 @@ test('--seat <account>: of two directories recording the account, the one signed
   const namesake = [infos[0], infos[1], { id: 'us2', loggedIn: false, loginEmail: '', accountEmail: 'taylor.h.sub@example.org' }];
   assert.match(S.resolveSeat('taylor.h.sub', seats, namesake).error, /有 2 个不同的账号都叫这个名字/);
 });
+
+test('seatByConfigDir only finds a directory the user configured as a seat', () => {
+  const seats = [{ id: 'cn', name: 'CN', configDir: '~/.claude' }, { id: 'extra', name: 'Extra', configDir: ' ~/.claude-extra ' }];
+  assert.equal(S.seatByConfigDir(seats, '~/.claude').id, 'cn');
+  assert.equal(S.seatByConfigDir(seats, '~/.claude-extra').id, 'extra', 'the saved directory is trimmed like the list');
+  for (const dir of ['/etc', 'C:\\Windows', '~/.claude/..', '~/.claude-us', '', '   ', null, undefined, 7, {}]) assert.equal(S.seatByConfigDir(seats, dir), null, String(dir));
+  assert.equal(S.seatByConfigDir(undefined, '~/.claude-us').id, 'us', 'no saved list means the three default seats');
+  assert.equal(S.seatByConfigDir(undefined, '/tmp/elsewhere'), null);
+});
+
+test('the main process records a trust answer only in a configured seat directory, for the copy it just made and for the reviewer', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const handler = (name) => { const at = source.indexOf(`handleMain('${name}'`); return source.slice(at, source.indexOf('\nhandleMain(', at + 10)); };
+  for (const name of ['worktree:prepare', 'worktree:trust']) {
+    const body = handler(name);
+    assert.ok(body.includes('trustableSeat(payload.configDir)'), `${name} checks the directory`);
+    assert.ok(body.indexOf('trustableSeat(') < body.indexOf('trustClaudeWorktree('), `${name} checks before it writes`);
+  }
+});

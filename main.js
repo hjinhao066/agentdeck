@@ -168,6 +168,17 @@ handleMain('task-board:request', (_event, payload) => {
   if (['dispatchNow', 'dispatchNowDelivered', 'nextUp'].includes(payload.op) && !result.ignored) send('task-board:changed', {});
   return result;
 });
+// A page can ask the main process to record a trust answer in a Claude config directory; the directory must be one of
+// the seats the user configured (config.json), never a path the page makes up.
+const TRUST_SEAT_REFUSAL = '席位目录不是已配置的席位';
+function trustableSeat(configDir) {
+  try {
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
+    catch (e) { if (e.code !== 'ENOENT') throw e; }
+    return ClaudeSeatsCore.seatByConfigDir(cfg.claudeSeats, configDir);
+  } catch (_) { return null; }
+}
 handleMain('worktree:prepare', async (_event, payload) => {
   if (!payload || typeof payload !== 'object' || typeof payload.repo !== 'string') throw new Error('Invalid worktree request.');
   const prepared = Worktree.prepare({
@@ -179,6 +190,10 @@ handleMain('worktree:prepare', async (_event, payload) => {
   // A Claude session in the new copy would stop on "trust this folder" (default row: No, exit).
   // Record the answer for this one directory in the seat that will run it, before the session opens.
   if (typeof payload.seatId === 'string' && typeof payload.configDir === 'string' && payload.configDir) {
+    if (!trustableSeat(payload.configDir)) {
+      nlog(`worktree trust not recorded: ${TRUST_SEAT_REFUSAL}`);
+      return { ...prepared, trust: { ok: false, reason: TRUST_SEAT_REFUSAL } };
+    }
     const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
     const trust = await trustClaudeWorktree({ id: payload.seatId, configDir: payload.configDir }, seatHome, prepared.path, { root: Worktree.defaultRoot(HOME), platform: process.platform });
     if (!trust.ok) nlog(`worktree trust not recorded: ${trust.reason}`);
@@ -190,6 +205,7 @@ handleMain('worktree:prepare', async (_event, payload) => {
 // for that seat too, with the same checks (a linked worktree under the copies root, nothing else).
 handleMain('worktree:trust', async (_event, payload) => {
   if (!payload || typeof payload !== 'object' || typeof payload.seatId !== 'string' || typeof payload.configDir !== 'string' || !payload.configDir || typeof payload.path !== 'string') throw new Error('Invalid trust request.');
+  if (!trustableSeat(payload.configDir)) { nlog(`worktree trust not recorded: ${TRUST_SEAT_REFUSAL}`); return { ok: false, reason: TRUST_SEAT_REFUSAL }; }
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const trust = await trustClaudeWorktree({ id: payload.seatId, configDir: payload.configDir }, seatHome, payload.path, { root: Worktree.defaultRoot(HOME), platform: process.platform });
   if (!trust.ok) nlog(`worktree trust not recorded: ${trust.reason}`);

@@ -122,7 +122,16 @@
   // ok / low / unmetered may start a session (ok first); out and error never; unknown (no reading,
   // an old one, a failing query) is never taken for "has quota". Only the last-resort Claude
   // fallback may still use an unknown seat, and says so (`unverified`).
-  const isClaudeCommand = (command) => /^(?:command\s+)?(?:"[^"]*claude"|'[^']*claude'|[^\s]*claude)(?:\s|$)/.test(String(command || '').trim());
+  // The program name comes from quota-core's commandIdentity, the reading `quota` uses for the same command: `claude.exe`,
+  // a quoted or full path to it, `command claude` and NAME=value prefixes are all Claude; `claude-ds` and `node claude` are not.
+  const quotaCore = () => {
+    try { return typeof module === 'object' && module.exports ? require('./quota-core') : globalThis.QuotaCore; } catch (_) { return globalThis.QuotaCore; }
+  };
+  const isClaudeCommand = (command) => {
+    const identity = quotaCore()?.commandIdentity;
+    if (typeof identity === 'function') return identity(command).name === 'claude';
+    return /^(?:command\s+)?(?:"[^"]*claude"|'[^']*claude'|[^\s]*claude)(?:\s|$)/.test(String(command || '').trim());
+  };
   const RANK = { ok: 0, unmetered: 1, low: 2 };
   const WHY = { out: '额度用尽', error: '登录或额度查询出错', unknown: '额度读数过期或没有，不能当作有额度', unmetered: '没有额度读数' };
   // The first Claude seat with room for this command, a seat a new session would use first
@@ -179,7 +188,7 @@
   function pickDispatcher({ candidates = DISPATCHERS, commandOf, seats, stanceOf = () => 'unmetered' }) {
     const seatList = Array.isArray(seats) ? seats : [];
     const why = [];
-    let weak = null, claudeTried = 0, claudeError = 0;
+    let weak = null, claudeTried = 0, claudeError = 0, fallbackSeat = null;
     for (const candidate of candidates) {
       const cmd = commandOf(candidate);
       if (!isClaudeCommand(cmd)) {
@@ -190,14 +199,21 @@
         continue;
       }
       if (!seatList.length) { why.push(`${candidate.label}：没有已登录的 Claude 席位`); continue; }
-      for (const seat of seatList) { claudeTried++; if (stanceOf(cmd, seat.id) === 'error') claudeError++; }
+      for (const seat of seatList) {
+        claudeTried++;
+        if (stanceOf(cmd, seat.id) === 'error') claudeError++;
+        else fallbackSeat = fallbackSeat || seat;
+      }
       const found = pickSeat({ candidate, command: cmd, seats: seatList, stanceOf, why });
       if (found.best) return { candidate, cmd, seat: found.best.seat, stance: found.best.stance, family: candidate.family };
       weak = weak || found.weak;
     }
     if (weak) return { candidate: weak.candidate, cmd: weak.cmd, seat: weak.seat, stance: weak.stance, unverified: true, family: weak.candidate.family };
-    // every Claude seat has a damaged login or a failing query: no Haiku is opened on it, the Captain is told instead
-    return { reason: `没有可用的调度会话（Gemini 与 Claude 额度都用尽或出错）。${why.join('；')}`, allError: claudeTried > 0 && claudeError === claudeTried };
+    // every Claude seat has a damaged login or a failing query: no Haiku is opened on it, the Captain is told instead.
+    // Otherwise nothing is usable now and the Haiku waits for quota; `fallbackSeat` is the first seat that is not
+    // damaged (the active one leads), so the wait and the later start never land on a damaged seat.
+    const allError = claudeTried > 0 && claudeError === claudeTried;
+    return { reason: `没有可用的调度会话（Gemini 与 Claude 额度都用尽或出错）。${why.join('；')}`, allError, fallbackSeat: allError ? null : fallbackSeat };
   }
 
   // A card title often ends with the executor's own make, e.g. "（Opus 5.5 high·066us）". A review

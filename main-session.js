@@ -481,12 +481,17 @@
       return { card, dispatcher: 'captain' };
     }
     const fallback = AV.DISPATCHERS.find((c) => c.command);
-    const choice = picked.cmd ? picked : { candidate: fallback, cmd: fallback.command, seat: null };
+    // Nothing usable now: the Haiku waits on a seat whose login is not damaged (never the active one when that is the
+    // damaged one), and starts there when its quota returns.
+    const choice = picked.cmd ? picked : { candidate: fallback, cmd: fallback.command, seat: picked.fallbackSeat || null };
     const checkedDispatcher = M.checkCommand(choice.cmd);
     if (checkedDispatcher.error) { boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度会话的命令不能用（${checkedDispatcher.error}），请队长安排。`); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
     const cmd = checkedDispatcher.cmd;
     const seatInfo = seatMeta(choice.seat);
-    const plan = quotaPlan(cmd, seatInfo.claudeSeatId);
+    const planned = quotaPlan(cmd, seatInfo.claudeSeatId);
+    // The chooser found every undamaged seat without room: a plan that would open anyway (the general quota reading is
+    // laxer than the chooser's) still waits, as "all exhausted".
+    const plan = !picked.cmd && picked.fallbackSeat && planned.action === 'open' ? { ...planned, action: 'queue', reason: 'out', held: 'out' } : planned;
     if (plan.action === 'queue') {
       const waiting = await boardRequest('dispatchWait', { id, key, message: picked.reason ? `${quotaQueueText(plan, card.title, true)}（${picked.reason}）` : quotaQueueText(plan, card.title, true) });
       if (!waiting.ignored) quotaStarts.set(id, { id, key });
@@ -1609,7 +1614,7 @@
     if (w.gistUnread) return '排队那一刻看板读不到，没法确认这张卡之后有没有被改动';
     if (!w.cardGist) return '';
     let card;
-    try { card = await findCard(id); } catch (_) { return null; }   // null: cannot tell now, the request goes back to the head and is judged on the next turn
+    try { card = await findCard(id); } catch (_) { return null; }   // null: cannot tell now, the request goes back (priority order kept) and is judged on the next turn
     if (!card) return '卡片已经不在看板上了';
     if (card.archived) return '卡片已归档';
     // only a card that was NOT on 需要你 when the Captain queued it and is now: a Captain order given on a card already
@@ -1695,14 +1700,15 @@
           if (!task || state() !== s) return;
           const plan = openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata);
           if (plan.action === 'queue') {
-            s.waitlist.unshift(w);
+            s.waitlist.unshift(w); s.waitlist = M.highFirst(s.waitlist, isHigh);   // back in its own place: ahead of ordinary work only when it is 高优先级
             task.waitReason = quotaQueueText(plan, w.title);
             update(task);
             return;
           }
           const problem = await queuedCardProblem(w);
           if (problem === null) {
-            s.waitlist.unshift(w); deferred.add(w);   // the board could not be read: back to the head, judged again on the next turn
+            s.waitlist.unshift(w); deferred.add(w);   // the board could not be read: put back and judged again on the next turn
+            s.waitlist = M.highFirst(s.waitlist, isHigh);   // not simply to the head: a 高优先级 request that waited ahead stays ahead
             return;
           }
           if (problem) {

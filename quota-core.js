@@ -675,6 +675,6 @@
     });
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, seatHealth, HEALTH_LEVELS, HEALTH_KINDS, commandQuota, commandStance, quotaStance, QUOTA_LOW_PERCENT, QUOTA_TIERS, quotaSwitchNote, quotaFallbackTitle, quotaFallback, text, maskAccount, mobile };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, seatHealth, HEALTH_LEVELS, HEALTH_KINDS, commandQuota, commandStance, commandIdentity, quotaStance, QUOTA_LOW_PERCENT, QUOTA_TIERS, quotaSwitchNote, quotaFallbackTitle, quotaFallback, text, maskAccount, mobile };
 
 });

@@ -259,3 +259,22 @@ test('a request queued while the board could not be read has no record of the ca
   assert.equal(h.columns.length, 1); assert.equal(h.state.waitlist.length, 0);
   assert.match(notices(h).join('\n'), /排队那一刻看板读不到/);
 });
+
+test('a board that cannot be read puts the requests back in priority order: a 高优先级 one is never overtaken by ordinary work', async (t) => {
+  const h = runtime(t), plain = h.add(), urgent = h.add();
+  await h.assign(plain); await h.assign(urgent);
+  assert.equal(h.state.waitlist.length, 2);
+  const marked = h.state.waitlist.find((w) => w.metadata.boardId === urgent.id);
+  marked.metadata.important = true;
+  h.state.waitlist = M.highFirst(h.state.waitlist, (w) => w.metadata?.important === true);
+  assert.equal(h.state.waitlist[0], marked);
+  h.out.clear(); h.listDown = true;
+  await tickAndWait(h);
+  assert.equal(h.columns.length, 1, 'nothing opens while the board is unreadable');
+  assert.deepEqual(h.state.waitlist.map((w) => w.metadata.boardId), [urgent.id, plain.id], 'the marked request is still first');
+  await tickAndWait(h);
+  assert.deepEqual(h.state.waitlist.map((w) => w.metadata.boardId), [urgent.id, plain.id]);
+  h.listDown = false;
+  await tickAndWait(h);
+  assert.equal(h.state.waitlist.length, 0); assert.equal(h.columns.length, 3);
+});

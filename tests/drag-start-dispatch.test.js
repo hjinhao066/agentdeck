@@ -18,6 +18,7 @@ function runtime(t, dispatcher = 'gemini', testInstance = false) {
   const state = { colId: captain.id, tasks: [], pending: [], waitlist: [] };
   const store = new TaskStore(path.join(root, 'tasks'), { sessions: () => columns });
   let quotaOut = false, afterRequest, stanceFn = null, seatList = null, outFn = null;
+  const planSeats = [];   // the seat each quota plan was asked about
   const window = {
     MainCore: M, BoardCore: B, AutoVerifyCore: AV,
     QuotaCore: {
@@ -26,7 +27,7 @@ function runtime(t, dispatcher = 'gemini', testInstance = false) {
       // the passive reading the dispatcher choice asks (QuotaCore.commandStance): every command is out together or has room
       commandStance: (_s, cmd, _seats, seatId) => (stanceFn ? stanceFn(cmd, seatId) : quotaOut ? 'out' : 'ok'),
       // This harness flags every command out together, so there is no same-tier peer to switch to.
-      quotaFallback: (_store, cmd) => (outFn ? outFn(cmd) : quotaOut)
+      quotaFallback: (_store, cmd, _seats, seatId) => (planSeats.push(seatId), outFn ? outFn(cmd) : quotaOut)
         ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' }
         : { action: 'open', cmd, note: '' },
     },
@@ -55,7 +56,7 @@ function runtime(t, dispatcher = 'gemini', testInstance = false) {
   });
   window.MainSession.pauseForSeatSwitch(true);
   return {
-    board: window.TaskBoard, store, state, created, sent, requests,
+    board: window.TaskBoard, store, state, created, sent, requests, planSeats,
     add: (extra = {}) => store.add({ project: '测试项目', title: 'Test', detail: 'Precise instructions.', ...extra }).card,
     setQuota: (value) => { quotaOut = value; },
     setStance: (fn) => { stanceFn = fn; },
@@ -277,4 +278,21 @@ test('Gemini unread and every Claude seat has a damaged login: no Haiku is opene
   r2.setSeats([{ id: 'default', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/.claude-us' }]);
   r2.setStance((cmd, seat) => (/^agy/.test(cmd) ? 'unknown' : seat === 'default' ? 'out' : 'error')); r2.setOut((cmd) => !/^agy/.test(cmd));
   assert.equal((await r2.board.requestStart(card2.id)).queued, true);
+});
+
+test('the active seat has a damaged login and the others are out: the Haiku waits on an undamaged seat and opens only there', async (t) => {
+  const r = runtime(t), card = r.add();
+  r.setSeats([{ id: 'default', name: 'Alice', configDir: '~/.claude' }, { id: 'us', name: 'Bob', configDir: '~/.claude-us' }, { id: 'us2', name: 'Carol', configDir: '~/.claude-us2' }]);
+  const stances = { default: 'error', us: 'out', us2: 'out' };
+  r.setStance((cmd, seatId) => (/^agy/.test(cmd) ? 'unknown' : stances[seatId]));
+  r.setOut(() => false);   // the general reading would open the Haiku; the chooser's judgment holds it
+  const queued = await r.board.requestStart(card.id);
+  assert.equal(queued.queued, true); assert.equal(r.created.length, 0);
+  assert.match(r.store.list()[0].dispatch_wait, /额度用尽/);
+  assert.equal(r.planSeats.at(-1), 'us', 'the wait is judged on the first undamaged seat, not on the damaged active one');
+  // the damaged seat recovers nothing; the second undamaged seat gets its quota back: the Haiku opens there
+  stances.us2 = 'ok';
+  r.tick(); await new Promise(setImmediate); await new Promise(setImmediate);
+  assert.equal(r.created.length, 1); assert.match(r.created[0].cmd, /^claude .*claude-haiku-5-5/);
+  assert.equal(r.created[0].claudeSeatId, 'us2'); assert.equal(r.created[0].claudeConfigDir, '~/.claude-us2');
 });

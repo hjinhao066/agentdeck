@@ -107,6 +107,12 @@
     if (seats.length === 2 && ids.has('cn') && ids.has('us')) seats.push({ ...DEFAULTS[2], email: '' });
     return seats.length ? seats : DEFAULTS.map((s) => ({ ...s, email: '' }));
   }
+  // The configured seat whose directory is exactly `configDir`, or null. A path a page sends to the main process
+  // (to record a trust answer in) is only ever a directory the user set up as a seat.
+  function seatByConfigDir(seats, configDir) {
+    const dir = typeof configDir === 'string' ? configDir.trim() : '';
+    return dir ? normalize(seats).find((s) => s.configDir === dir) || null : null;
+  }
   function active(config) {
     const seats = normalize(config.claudeSeats);
     return seats.find((s) => s.id === config.activeClaudeSeatId) || seats[0];
@@ -187,6 +193,6 @@
     }
     return windows.length ? { at: now, source: 'Claude 会话状态行', windows } : null;
   }
-  return { normalize, cleanEmail, accountCheck, accountName, planName, seatDisplay, seatMapText, resolveSeat, active, bindColumn, claudeLaunch, launchBlock, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
+  return { normalize, seatByConfigDir, cleanEmail, accountCheck, accountName, planName, seatDisplay, seatMapText, resolveSeat, active, bindColumn, claudeLaunch, launchBlock, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
 
 });
