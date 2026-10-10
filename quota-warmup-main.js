@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { seatEnvironment } = require('./claude-seats-main');
+const { cliLaunch } = require('./quota-codex');
 const { validId } = require('./security');
 
 const MODEL = 'claude-sonnet-5-5';
@@ -92,8 +93,10 @@ function createQuotaWarmupRunner({ home = os.homedir(), env = process.env, execF
       signal?.addEventListener('abort', abort, { once: true });
       timer = setTimeout(() => stop('timeout'), deadline);
       try {
-        child = execFileImpl(process.platform === 'win32' ? 'claude.exe' : 'claude', [...ARGS], {
-          cwd, env: childEnv, shell: false, windowsHide: true, encoding: 'utf8', maxBuffer: MAX_OUTPUT,
+        // Windows: npm's claude.cmd is followed to the claude.exe it starts (quota-codex.js cliLaunch).
+        const launch = cliLaunch('claude', [...ARGS], childEnv);
+        child = execFileImpl(launch.file, launch.args, {
+          cwd, env: launch.env, shell: false, windowsHide: true, encoding: 'utf8', maxBuffer: MAX_OUTPUT,
           timeout: deadline, killSignal: 'SIGKILL',
         }, (error, stdout) => {
           if (finished) return;
