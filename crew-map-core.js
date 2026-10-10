@@ -365,16 +365,20 @@
     const targets = workers.length > cols && reviewers.length ? new Set(reviewers.flatMap((n) => n.reviews)) : new Set();
     // Two groups: what still runs or waits on the user on top, what has ended below, the second
     // starting on a row of its own (see GROUP_RANK). A 小队长 stands with its crew's busiest state.
-    const open = (n) => n.status in GROUP_RANK || (crews.get(n.id) || []).some(open);
+    // o.flat: the frame as 智能一页 weighs it (the cards in one flow, as before the groups): the arrangement it
+    // chooses stays the one it always chose, and the frame is then drawn with its groups.
+    const open = o.flat ? () => true : (n) => n.status in GROUP_RANK || (crews.get(n.id) || []).some(open);
     const rank = (n) => (n.status in GROUP_RANK ? GROUP_RANK[n.status] : GROUP_RANK.working);
     const at = new Map(workers.map((n, i) => [n.id, i]));
-    workers = [...workers].sort((a, b) => (open(b) - open(a))
+    if (o.flat) workers = [...workers.filter((n) => !targets.has(n.id)), ...workers.filter((n) => targets.has(n.id))];
+    else workers = [...workers].sort((a, b) => (open(b) - open(a))
       || (open(a) ? rank(a) - rank(b) || (b.important === true) - (a.important === true) : 0)
       || targets.has(a.id) - targets.has(b.id)            // reviewed outputs last in their group, next to the review row
       || crews.has(b.id) - crews.has(a.id)                // a 小队长 and its crew first
       || (open(a) ? (b.activity || b.ts || 0) - (a.activity || a.ts || 0)   // open: the latest activity first
                   : (b.ts || 0) - (a.ts || 0))                         // ended: the newest end first
       || at.get(a.id) - at.get(b.id));
+    if (o.flat) workers = [...workers.filter((n) => crews.has(n.id)), ...workers.filter((n) => !crews.has(n.id))];
     const slots = [], height = new Array(cols).fill(0);
     const put = (n, col, depth) => {
       slots.push({ n, col, row: height[col]++, depth });
@@ -383,7 +387,7 @@
     const first = workers.filter(open), rest = workers.filter((n) => !open(n));
     first.forEach((n) => put(n, height.indexOf(Math.min(...height)), 0));
     // the ended group starts on a fresh row (the last row of the open group may stand short)
-    const split = first.length && (rest.length || hasFold) ? Math.max(...height) : -1;
+    const split = !o.flat && first.length && (rest.length || hasFold) ? Math.max(...height) : -1;
     if (split > 0) height.fill(split);
     [...rest, ...(hasFold ? [null] : [])].forEach((n) => put(n, height.indexOf(Math.min(...height)), 0));
     const workRows = Math.max(...height);
@@ -413,7 +417,7 @@
   // the leftmost column's line runs down the middle of the frame's 1.5px outline: line and outline are one stroke
   const RAIL_EDGE = 0.75;
   // frame() kept in sized (a Map, for one map and one set of options): the many arrangements tried for one window share them
-  const sizedFrame = (sized, p, o, shown, cap) => { const k = cap + '\u0001' + p.key; if (!sized.has(k)) sized.set(k, frame(p, o, shown, cap)); return sized.get(k); };
+  const sizedFrame = (sized, p, o, shown, cap) => { const k = (o.flat ? 'flat' : '') + cap + '\u0001' + p.key; if (!sized.has(k)) sized.set(k, frame(p, o, shown, cap)); return sized.get(k); };
   // headH: the frame's title strip, above its first row of cards; crewIn: how far a crew stands in
   // from its 小队长 (its line runs down the middle of that step), crewPad: and in from its right edge
   const LAYOUT = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, padX: 44, padBottom: 28, pad: 40, headH: 52, fold: false, collapsedProjects: {}, columnsPerProject: Infinity, grid: false, center: false, tray: false, lane: 7, crewIn: 24, crewPad: 8 };

@@ -119,7 +119,9 @@ test('sci-fi crew map: bundled trunk, dispatch lines avoid other projects, motio
   const style = (sel) => page.locator(sel).first().evaluate((n) => { const s = getComputedStyle(n); return { w: parseFloat(s.strokeWidth), anim: s.animationName }; });
   const working = await style('.cm-edge.dispatch.st-working'), done = await style('.cm-edge.dispatch.st-done');
   expect(done.w).toBeLessThan(working.w);
-  expect((await style('.cm-pulse')).anim).not.toBe('none');
+  // (3.1) the light along the working lines is drawn by the worker (crew-fx.js): its clock runs, a path per line
+  await expect.poll(() => page.evaluate(() => window.CrewFx.stats().then((s) => s.running && s.paths > 0))).toBe(true);
+  expect(await page.locator('.cm-edges .cm-pulse').count()).toBe(0);
   // Flat project panes (no backdrop blur: it costs frames on a zoomable canvas); 队长 has no aurora animation.
   const flat = await page.locator('.cm-project').first().evaluate((n) => getComputedStyle(n).backdropFilter + getComputedStyle(n, '::before').backdropFilter);
   expect(flat).not.toContain('blur');
@@ -136,7 +138,7 @@ test('sci-fi crew map: bundled trunk, dispatch lines avoid other projects, motio
     else { expect(c.svg).toBe(true); expect(c.text).toBe(''); }
   }
 
-  // 队长's tally is alive: an icon per status, large coloured numbers, and 干活中 keeps turning.
+  // 队长's tally: an icon per status, large coloured numbers; (3.1) nothing in the map turns by the stylesheet.
   const captain = page.locator('.cm-node.kind-captain');
   await expect(captain.locator('.cm-crest')).toHaveCount(1);
   await expect(captain.locator('.cm-line')).toHaveText('7 干活中 · 2 排队 · 2 失败 · 4 已完成');
@@ -153,11 +155,13 @@ test('sci-fi crew map: bundled trunk, dispatch lines avoid other projects, motio
   expect(tally.fits).toBe(true);
   expect(tally.inside).toBe(true);
   expect(new Set([tally.working, tally.queued, tally.done]).size).toBe(3);
-  expect(tally.spin).toBe('cm-spin');
+  expect(tally.spin).toBe('none');
   expect(tally.still).toBe('none');
-  // Cards and project heads carry the same status icons; a working card's icon spins too.
+  // Cards and project heads carry the same status icons; (3.1) a working card's spinner is drawn by the worker where
+  // its icon stands, the icon's own glyph hidden under it.
   await expect(page.locator('.cm-node:not(.kind-captain) .cm-status .cm-ico')).toHaveCount(crew.length);
-  expect(await page.locator('.cm-node.st-working:not(.kind-captain) .cm-status .cm-ico svg').first().evaluate((n) => getComputedStyle(n).animationName)).toBe('cm-spin');
+  expect(await page.locator('.cm-node.st-working:not(.kind-captain) .cm-status .cm-ico svg').first().evaluate((n) => getComputedStyle(n).visibility)).toBe('hidden');
+  await expect.poll(() => page.evaluate(() => window.CrewFx.stats().then((s) => s.spins))).toBe(await page.locator('.cm-node.st-working:not(.kind-captain)').count());
   await expect(page.locator('.cm-project[data-project="agentdeck"] .cm-project-summary')).toHaveText('3 干活中 · 1 失败 · 2 已完成');
   await expect(page.locator('.cm-legend .cm-ico')).toHaveCount(5);
   // Finished cards step back without going transparent: their text stays readable.
@@ -173,7 +177,7 @@ test('sci-fi crew map: bundled trunk, dispatch lines avoid other projects, motio
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await open(1920, 1080, 'dark');
-  expect((await style('.cm-pulse')).anim).toBe('none');
+  await expect.poll(() => page.evaluate(() => window.CrewFx.stats().then((s) => s.running))).toBe(false);
   expect(await page.locator('.cm-node.st-working').first().evaluate((n) => getComputedStyle(n, '::after').animationName)).toBe('none');
   expect(await page.locator('.cm-count.st-working .cm-ico svg').first().evaluate((n) => getComputedStyle(n).animationName)).toBe('none');
   expect(errors).toEqual([]);

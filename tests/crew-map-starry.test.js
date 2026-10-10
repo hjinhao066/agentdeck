@@ -106,3 +106,18 @@ test('the colour slots are saved with the map and checked on load', () => {
   assert.deepEqual(saved.projectSlots, { agentdeck: 1, health: 2 });
   assert.deepEqual(C.normalizeSaved({}).projectSlots, {});
 });
+
+test('智能一页 weighs a frame with its cards in one flow (flat): the arrangement it chooses stays the one it always chose', () => {
+  // a frame whose open group ends on a short row: grouped it takes one row more, weighed flat it does not
+  const now = 10_000_000;
+  const rows = Array.from({ length: 15 }, (_, i) => ['c' + i, i < 13 ? 'working' : 'done']);
+  const columns = rows.map(([id, st]) => col(id, id, { project: 'P', state: st === 'working' ? 'working' : 'done' }));
+  const tasks = rows.map(([id, st], i) => task('t-' + id, id, st, now - 20000 + i, st === 'done' ? { doneAt: now - 1000 } : { startedAt: now - 5000 }));
+  const map = C.buildCrewMap({ captain, columns, tasks });
+  const flat = C.layout(map, { ...RAILS, caps: { P: 3 }, flat: true }), grouped = C.layout(map, { ...RAILS, caps: { P: 3 } });
+  const rowsOf = (lay) => new Set([...lay.nodes.values()].map((b) => b.y)).size;
+  assert.equal(rowsOf(flat), 5, 'fifteen in three columns, one flow: five rows');
+  assert.equal(rowsOf(grouped), 6, 'thirteen open (five rows, the last one short), two ended on a row of their own');
+  assert.equal(flat.groups[0].split, 0);
+  assert.ok(grouped.groups[0].split > 0);
+});

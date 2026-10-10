@@ -6,7 +6,7 @@
 // animation, no requestAnimationFrame loop — so between the worker's frames the main thread and the compositor rest.
 // What stays on the page costs nothing at rest: a faint dust of stars drawn once per window size, and a spotlight
 // under the pointer (a repaint of the one card it moves over).
-// It stops: the map out of sight (another view, the window minimised, covered or on another desktop) stops the
+// It stops: the map out of sight (another view, the board closed, the window minimised or hidden) stops the
 // worker's clock; the motion switch (data-motion="off" on <html>) and prefers-reduced-motion leave one still frame.
 // crew-map.js tells it what to draw: attach() once, update() after each redraw (and while a card is dragged),
 // view() whenever the map is panned or zoomed.
@@ -26,7 +26,7 @@
     spin: { r: 5.3, width: 1.7, period: 2.2 },
   };
   let mapEl = null, vp = null, canvasEl = null, sky = null, dust = null, layer = null, worker = null, source = null;
-  let shown = false, lastRun = '', origin = null, updT = 0, viewT = 0, dustT = 0, lastView = null, failed = false;
+  let shown = false, windowShown = true, lastRun = '', origin = null, updT = 0, viewT = 0, dustT = 0, lastView = null, failed = false;
 
   const motionOn = () => root.dataset.motion !== 'off' && !reduceMq.matches;
   const light = () => root.dataset.theme === 'light';
@@ -112,7 +112,7 @@
 
   function sync() {
     if (!worker) return;
-    const run = shown && motionOn() && document.visibilityState === 'visible';
+    const run = shown && windowShown && motionOn() && document.visibilityState === 'visible';
     mapEl.classList.toggle('fx-still', !motionOn());
     const key = run + '/' + motionOn();
     if (key === lastRun) return;
@@ -167,6 +167,9 @@
     sendSky();
     window.addEventListener('resize', () => { clearTimeout(dustT); dustT = setTimeout(() => { paintDust(); sendSky(); if (lastView) view(lastView); }, 200); });
     document.addEventListener('visibilitychange', sync);
+    // the window minimized or hidden (the app keeps background throttling off, so the page's visibility never says)
+    const deck = window.deck;
+    if (deck && deck.windowShown) { windowShown = deck.windowShown(); deck.onWindowShown((on) => { windowShown = on; sync(); }); }
     reduceMq.addEventListener('change', sync);
     // the map out of sight (another view, the board closed): the clock stops
     new IntersectionObserver((list) => { shown = list.some((x) => x.isIntersecting); sync(); }).observe(vp);

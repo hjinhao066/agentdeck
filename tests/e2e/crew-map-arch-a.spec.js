@@ -103,9 +103,9 @@ test('night and day: the canvas palette, the grid that shows the whole map, fini
         sock: [...document.querySelectorAll('.cm-node.st-failed:not(.kind-captain)')].map((n) => getComputedStyle(n).backgroundColor),
       };
     });
-    // graphite by night, porcelain by day: the app's own neutral family
-    expect(g.canvas).toBe(theme === 'dark' ? 'rgb(15, 15, 18)' : 'rgb(243, 243, 245)');
-    expect(g.card).toBe(theme === 'dark' ? 'rgb(26, 26, 31)' : 'rgb(255, 255, 255)');
+    // 3.1 (星河流光): a deep indigo night sky and glass cards by night, porcelain by day
+    expect(g.canvas).toBe(theme === 'dark' ? 'rgb(7, 10, 24)' : 'rgb(243, 243, 245)');
+    expect(g.card).toBe(theme === 'dark' ? 'rgb(20, 26, 52)' : 'rgb(255, 255, 255)');
     if (theme === 'light') expect(g.sock[0]).toBe('rgb(255, 241, 244)');
     // eight sessions in one project: 智能一页 makes it four cards wide, two rows, on one page, filling the window
     expect(g.cols).toBe(4);
@@ -203,15 +203,16 @@ test('pipes: hovering a card lights its own path; only the running lines carry a
   // and a detached path reports a blank opacity. The numbers are unchanged.
   await expect.poll(() => page.evaluate(() => {
     const styleOf = (sel) => { const n = document.querySelector(sel); if (!n || !n.isConnected) return null; const s = getComputedStyle(n); return { op: parseFloat(s.opacity), anim: s.animationName, array: s.strokeDasharray, cap: s.strokeLinecap, w: parseFloat(s.strokeWidth) }; };
-    const pulse = styleOf('.cm-edges .cm-pulse'), failed = styleOf('.cm-edges .cm-edge.dispatch.st-failed');
+    const failed = styleOf('.cm-edges .cm-edge.dispatch.st-failed');
     const review = document.querySelector('.cm-legend .cm-edge.review');
     const count = (sel) => document.querySelectorAll('.cm-edges ' + sel).length;
-    const working = count('.cm-edge.dispatch.st-working');
-    // a running line carries one short bright stretch, 14px of every 260, and its faint tail; so does
-    // each stretch of 队长's trunk and bus that leads to running work (the bus leaves the hub sideways
-    // to a project's line down the left of its frame, so there can be more than one)
-    return !!(pulse && failed && review && count('.cm-pulse:not(.core)') === working && count('.cm-trail:not(.core)') === working && count('.cm-pulse.core') >= 1 && count('.cm-trail.core') === count('.cm-pulse.core') && pulse.cap === 'round' && pulse.w >= 3 && pulse.anim === 'cm-flow' && /^14px, 246px$/.test(pulse.array) && failed.op < 1 && failed.anim === 'none' && getComputedStyle(review).strokeDasharray !== 'none');
+    // (3.1) the light on a running line is drawn by the worker (crew-fx.js), no longer by an SVG stretch: none is left;
+    // a failed line keeps its project's colour (the card says 失败) and stands still
+    return !!(failed && review && count('.cm-pulse, .cm-trail') === 0 && failed.anim === 'none' && getComputedStyle(review).strokeDasharray !== 'none');
   })).toBe(true);
+  // every running line and 队长's trunk and bus to it carry the light the worker draws
+  const working = await page.locator('.cm-edges .cm-edge.dispatch.st-working').count();
+  await expect.poll(() => page.evaluate(() => window.CrewFx.stats().then((s) => s.paths))).toBeGreaterThanOrEqual(working + 1);
   await expect(page.locator('.cm-edges.cm-hovering')).toHaveCount(0);
   await expect.poll(async () => {
     await nodes().nth(4).hover();

@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('deck', {
   // Whether the window is in front (focused, not minimized or hidden), and a push when it changes.
   windowInFront: () => ipcRenderer.sendSync('window-front') === true,
   onWindowFront: (cb) => ipcRenderer.on('window:front', (_e, m) => cb(!!(m && m.on))),
+  // Whether the window shows at all (not minimized or hidden), and a push when it changes.
+  windowShown: () => ipcRenderer.sendSync('window-shown') === true,
+  onWindowShown: (cb) => ipcRenderer.on('window:shown', (_e, m) => cb(!!(m && m.on))),
   // The machine going to sleep / waking, with main's own timestamp.
   onPowerSleep: (cb) => ipcRenderer.on('power:sleep', (_e, m) => cb(!!(m && m.asleep), Number.isFinite(m && m.at) ? m.at : Date.now())),
   quotaLocal: () => ipcRenderer.invoke('quota:local'),

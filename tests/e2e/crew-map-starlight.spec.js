@@ -246,8 +246,9 @@ test('项目框横排: frames stand left to right across the window, one or two 
   await size(1920, 1080, 'light'); await settled();
   await shot('map-4projects-1920-light');
 
-  // the look: a dot grid under the canvas that pans and zooms with it (no starry sky on the map), nothing blurs what is
-  // behind it, the cards themselves hold still, and only the status icons of running or asking work move
+  // the look (light theme): a dot grid under the canvas that pans and zooms with it (no starry sky by day), nothing blurs
+  // what is behind it, and nothing on the cards runs as a CSS animation; (3.1) the status icons of running or asking work
+  // move, drawn by the light layer's worker: one spinner per working card, one ping per card asking
   const look = await page.evaluate(() => { const root = document.getElementById('crewMap'), vp = root.querySelector('.cm-viewport'), cs = getComputedStyle(vp), v = CrewMap.view();
     const endless = document.getAnimations().filter((a) => a.effect && root.contains(a.effect.target) && a.effect.getComputedTiming().iterations === Infinity);
     const onCards = endless.filter((a) => a.effect.target.closest('.cm-node:not(.kind-captain)'));
@@ -259,7 +260,9 @@ test('项目框横排: frames stand left to right across the window, one or two 
       movingCards: [...new Set(onCards.map((a) => a.effect.target.closest('.cm-node').dataset.status))].sort(),
       stillCard: document.querySelector('.cm-node.st-done').getAnimations({ subtree: true }).length };
   });
-  expect(look).toEqual({ sky: false, grid: true, blur: 0, cardsThemselves: 0, cardAnimations: ['cm-ping', 'cm-spin'], cardProps: ['opacity', 'transform'], movingCards: ['input', 'working'], stillCard: 0 });
+  expect(look).toEqual({ sky: false, grid: true, blur: 0, cardsThemselves: 0, cardAnimations: [], cardProps: [], movingCards: [], stillCard: 0 });
+  await expect.poll(async () => { const s = await page.evaluate(() => window.CrewFx.stats()), n = await page.evaluate(() => [document.querySelectorAll('.cm-node:not(.archived) .cm-status > .cm-ico.st-working').length, document.querySelectorAll('.cm-node:not(.archived) .cm-status > .cm-ico.st-input').length]);
+    return [s.running, s.spins === n[0] && n[0] > 0, s.pings === n[1] && n[1] > 0]; }).toEqual([true, true, true]);
 
   // narrower windows give lanes up one at a time: the map stays at 100%, is never squeezed and never scrolls sideways
   let lanes = 4;
@@ -611,7 +614,9 @@ test('一键整理: dragged frames and cards go back on the grid in the order th
   expect(await page.evaluate(() => { document.querySelector('[data-cm="relayout"]').click(); return [...document.querySelectorAll('.cm-node, .cm-pane, .cm-project, .cm-edges')].flatMap((n) => n.getAnimations()).length; })).toBe(0);
   // (the zoom the user set above with 缩小 is still theirs: 智能一页 kept it, so the map shows at it, not filling the window)
   assertNeat(await read(), true);
-  expect(await page.evaluate(() => [getComputedStyle(document.querySelector('.cm-trail')).display, getComputedStyle(document.querySelector('.cm-hub-beat')).display])).toEqual(['none', 'none']);
+  // (3.1) no light runs in the page itself; the worker that draws it stands still
+  expect(await page.evaluate(() => document.querySelectorAll('#crewMap .cm-trail, #crewMap .cm-hub-beat, #crewMap .cm-pulse').length)).toBe(0);
+  await expect.poll(() => page.evaluate(() => window.CrewFx.stats().then((s) => s.running))).toBe(false);
   expect(errors).toEqual([]);
 });
 
@@ -646,7 +651,8 @@ test('ten sessions in two projects: side by side at every width that holds them,
   }
   // 动效开关: the toolbar's icon button stills the map (lights on the lines, the spinners, the hub's beat) and brings it back
   const toggle = page.locator('#crewMap [data-motion-toggle]');
-  const moving = () => page.evaluate(() => document.getAnimations().filter((a) => a.effect && a.effect.target && document.getElementById('crewMap').contains(a.effect.target) && a.playState === 'running' && a.effect.getComputedTiming().iterations === Infinity).length);
+  // (3.1) what moves is drawn by the light layer's worker, off the page: moving = it runs (frames counted while it does)
+  const moving = () => page.evaluate(() => window.CrewFx.stats().then((s) => (s.running ? s.frames : 0)));
   await expect(toggle).toHaveAttribute('aria-label', '关闭动效（卡片和连线保持静止）');
   expect((await toggle.textContent()).trim()).toBe('');
   const hit = await toggle.boundingBox();
@@ -655,7 +661,8 @@ test('ten sessions in two projects: side by side at every width that holds them,
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-label', '开启动效（现在是静止的）');
   await expect.poll(moving).toBe(0);
-  expect(await page.evaluate(() => [getComputedStyle(document.querySelector('.cm-pulse')).display, getComputedStyle(document.querySelector('.cm-trail')).display, getComputedStyle(document.querySelector('.cm-hub-beat')).display])).toEqual(['none', 'none', 'none']);
+  expect(await page.evaluate(() => document.querySelectorAll('#crewMap .cm-trail, #crewMap .cm-hub-beat, #crewMap .cm-pulse').length)).toBe(0);
+  expect(await page.evaluate(() => document.getAnimations().filter((a) => a.effect && a.effect.target && document.getElementById('crewMap').contains(a.effect.target) && a.effect.getComputedTiming().iterations === Infinity).length)).toBe(0);
   // 一键整理 lands at once while it is off
   await dragBy(page.locator('.cm-project .cm-project-name').first(), 60, 70);
   expect(await page.evaluate(() => { document.querySelector('[data-cm="relayout"]').click(); return [...document.querySelectorAll('.cm-node, .cm-pane, .cm-project, .cm-edges')].flatMap((n) => n.getAnimations()).length; })).toBe(0);

@@ -373,7 +373,7 @@
       view = m.rect;
       if (lg) { lg.setTransform(1, 0, 0, 1, 0, 0); lg.clearRect(0, 0, lay.width, lay.height); dirty = []; slowDirty = []; tick = 0; if (!running && m.still) still(); }
     } else if (m.type === 'stats') {
-      scope.postMessage({ type: 'stats', frames, running, paths: geo.paths.length, spins: geo.spins.length, maxD: Math.round(maxD) });
+      scope.postMessage({ type: 'stats', frames, running, paths: geo.paths.length, spins: geo.spins.length, pings: geo.pings.length, maxD: Math.round(maxD) });
     }
   };
 })(typeof self !== 'undefined' ? self : globalThis);

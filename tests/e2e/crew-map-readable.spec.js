@@ -213,6 +213,8 @@ test('1x screen: the text is drawn at the scale it shows at: at 140%, on arrival
   const crew = sessionsOf({ alpha: 2, beta: 1 });
   await launch(crew);
   await open(1512, 982, 'dark', crew.length); await settled();
+  // (3.1) the light the worker draws over the cards (a spinner, the waves) moves between two shots: the text is compared
+  await page.addStyleTag({ content: '#crewMap .fx-layer { visibility: hidden !important; }' });
   const card = async () => { await page.mouse.move(2, 2); await settled(); await still(); const b = await page.locator('.cm-node:not(.kind-captain)').first().boundingBox(); return emulateScreen.capture(page, { clip: { x: b.x, y: b.y, width: b.width, height: b.height } }); };
   // drop the canvas's layer for a moment: Chromium rasters it again at the scale it is shown at
   const afresh = async () => {

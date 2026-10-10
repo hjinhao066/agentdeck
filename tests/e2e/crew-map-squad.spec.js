@@ -171,9 +171,12 @@ test('a 小队长 heads its crew: the crew hangs under it a step in, on a pocket
     order.slice(1).forEach((id, i) => expect(b[id].y, id).toBeGreaterThan(b[order[i]].y));
     expect(order.map((id) => b[id].x - lead.x)).toEqual([0, 24, 48, 24, 24]);
     expect(order.map((id) => lead.x + lead.w - (b[id].x + b[id].w))).toEqual([0, 8, 16, 8, 8]);
-    // the rest of the project stands beside it, the 小队长's block first
-    for (const id of ['w1', 'w2', 'w3']) expect(b[id].x, id).toBeGreaterThanOrEqual(lead.x + lead.w);
-    expect(Math.min(...['w1', 'w2', 'w3'].map((id) => b[id].y))).toBe(lead.y);
+    // the rest of the project's open work stands beside it, the 小队长's block first; (3.1) what has ended (w2) stands
+    // below all of it, on a row of its own
+    for (const id of ['w1', 'w3']) expect(b[id].x, id).toBeGreaterThanOrEqual(lead.x + lead.w);
+    expect(Math.min(...['w1', 'w3'].map((id) => b[id].y))).toBe(lead.y);
+    const openBottom = Math.max(...['lead', 'c1mac', 'c4cert', 'c2win', 'c3notes', 'w1', 'w3'].map((id) => b[id].y + b[id].h));
+    expect(b.w2.y, 'w2 has ended: below the open work').toBeGreaterThan(openBottom);
     // no card overlaps another, all inside the frame, all on screen
     const ids = Object.keys(b);
     for (const p of ids) for (const q of ids) if (p < q) expect(b[p].x + b[p].w <= b[q].x || b[q].x + b[q].w <= b[p].x || b[p].y + b[p].h <= b[q].y || b[q].y + b[q].h <= b[p].y, `${p} / ${q}`).toBe(true);

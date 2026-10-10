@@ -41,3 +41,10 @@ test('a rejected clipboard write throws instead of reporting a copy that did not
   assert.throws(() => deck.clipboardWrite('value'), /Clipboard write failed/);
   assert.equal(deck.clipboardRead(), '');
 });
+
+test('whether the window shows at all (not minimized or hidden) is asked of main, and its changes are pushed', () => {
+  const { deck, sent } = loadPreload((channel) => (channel === 'window-shown' ? true : null));
+  assert.equal(deck.windowShown(), true);
+  assert.deepEqual(sent, [['window-shown', undefined]]);
+  assert.equal(typeof deck.onWindowShown, 'function');
+});

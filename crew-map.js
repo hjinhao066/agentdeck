@@ -592,10 +592,12 @@
     if (!hasManual() && saved().plan) { saved().plan = null; host.save(); }   // nothing hand-placed is left to stand on it
     // 智能一页 for this window (CrewMapCore.arrangePage): one row or lanes, the one in use kept while it is nearly as good;
     // at the zoom the user set, if they set one
-    const r = C.arrangePage(map, { w: vw, h: vh }, { ...base, tightly, inset: FIT_INSET, returns: showReturn, dpr: density(), zoom: planZoom }, { plan, planW, dpr: planDpr });
+    // (weighed with every frame in one flow, as before the open and ended groups: the arrangement stays the one it
+    // always chose; it is then drawn with the groups, the ended ones on a row of their own)
+    const r = C.arrangePage(map, { w: vw, h: vh }, { ...base, flat: true, tightly, inset: FIT_INSET, returns: showReturn, dpr: density(), zoom: planZoom }, { plan, planW, dpr: planDpr });
     plan = r.plan; planW = vw; planDpr = density(); pageFits = r.pageFits;
     if (hasManual()) { saved().plan = plan; host.save(); }
-    return r.lay;
+    return build(r.plan);
   }
   // A zoom the user sets is theirs from then on (saved with the map, kept over restarts): 智能一页 arranges the map for it.
   function zoomAt(cx, cy, factor) {

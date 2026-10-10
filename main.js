@@ -248,6 +248,11 @@ function setWindowInFront(on) {
   send('window:front', { on });
 }
 onMain('window-front', (e) => { e.returnValue = windowInFront; });
+// Whether the window shows at all (not minimized, not hidden), and a push when it changes: the 队伍 map's moving
+// light stops while it does not. (backgroundThrottling is off, so the page's own visibility never says so; a window
+// merely covered by others is not reported by Electron.)
+const windowShown = () => !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized());
+onMain('window-shown', (e) => { e.returnValue = windowShown(); });
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app
@@ -984,6 +989,7 @@ function createWindow() {
   windowInFront = !!tudArg;
   win.on('focus', () => setWindowInFront(true));
   for (const away of ['blur', 'minimize', 'hide']) win.on(away, () => setWindowInFront(false));
+  for (const change of ['minimize', 'restore', 'hide', 'show']) win.on(change, () => send('window:shown', { on: windowShown() }));
   if (tudArg) { win.blur = () => win.emit('blur'); win.focus = () => win.emit('focus'); }
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event) => event.preventDefault());
