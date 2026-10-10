@@ -1,10 +1,12 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
-const { execSync } = require('child_process');
+const { execSync, execFile } = require('child_process');
+const { promisify } = require('util');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const M = require('../../main-core');
 const mockApi = require('./fixtures/mock-model-api');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 
 // Opt-in probe, never part of an ordinary run: AgentDeck installed and restarted with a real Claude Code
 // 队长 (10-09, 2.0.3 on the Mac: the restart notice went in while `claude --resume` was still starting,
@@ -58,12 +60,13 @@ test('real claude: after each restart the resumed 队长 takes its restart notic
     'export ANTHROPIC_MODEL=claude-opus-5-5 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1',
     `exec ${JSON.stringify(real)} "$@"`, ''].join('\n'), { mode: 0o700 });
   fs.mkdirSync(path.join(profile, 'seats-home', '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(profile, 'seats-home', '.claude', '.credentials.json'), '{}');
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude', '.credentials.json'), STAND_IN_CREDENTIAL);
   fs.writeFileSync(path.join(profile, '.zshrc'), '');
   const cmd = `"${wrapper}" --dangerously-skip-permissions`;
   // The 队长's own conversation, already there (like the real one): every start resumes it by its id.
   const SESSION = '66666666-6666-4666-8666-666666666666';
-  execSync(`"${wrapper}" -p "first turn" --session-id ${SESSION}`, { cwd: profile, stdio: 'ignore', timeout: 120000 });
+  // Not execSync: the stand-in API runs in this process and has to answer meanwhile.
+  await promisify(execFile)(wrapper, ['-p', 'first turn', '--session-id', SESSION], { cwd: profile, timeout: 120000 });
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, captainTokenSaver: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 1,
     mainSession: { colId: CAPTAIN, cmd, gen: 1, fresh: false, crewMarked: true, tasks: [], pending: [], inflight: [], waitlist: [] },

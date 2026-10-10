@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const M = require('../../main-core');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 
 // 10-09 12:15, AgentDeck 2.0.3 installed on the Mac and restarted. The 队长's restart notice and three crew continue
 // messages were typed while each `claude --resume` was still starting: Claude kept the text in its input box and
@@ -53,7 +54,7 @@ function standIn(profile) {
     ? `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`
     : `#!${process.execPath}\nrequire(${JSON.stringify(script)});\n`, { mode: 0o700 });
   fs.mkdirSync(path.join(profile, 'seats-home', '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(profile, 'seats-home', '.claude', '.credentials.json'), '{}');
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude', '.credentials.json'), STAND_IN_CREDENTIAL);
   return process.platform === 'win32' ? 'claude' : `"${executable}"`;
 }
 const rows = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []);
