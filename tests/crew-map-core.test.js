@@ -196,7 +196,7 @@ test('an archived session a live review still links to stays on the map', () => 
   assert.equal(map.hiddenArchived, 1);
 });
 
-test('projects stay side by side; states do not move workers into another group or layer', () => {
+test('projects stay side by side; a state never moves a worker into another project, only to its own frame\'s ended row', () => {
   const map = C.buildCrewMap({ captain, columns: [
     col('a', 'one', { project: 'A' }), col('b', 'two', { project: 'B', state: 'working' }),
     col('c', 'three', { project: 'A' }), col('d', 'unmarked'),
@@ -204,7 +204,9 @@ test('projects stay side by side; states do not move workers into another group 
   const lay = C.layout(map);
   assert.deepEqual(lay.groups.map((g) => g.name), ['A', 'B', '其他']);
   const a = lay.nodes.get('a'), c = lay.nodes.get('c'), b = lay.nodes.get('b');
-  assert.equal(a.y, c.y);
+  // (3.1) inside a frame what still waits on the user stands on top and what has ended on a row of its own below
+  assert.ok(a.y > c.y, 'the done card stands under the one asking, in the same frame');
+  assert.equal(a.x, c.x);
   assert.ok(b.x > c.x + c.w);
   assert.ok(lay.captain.y < a.y);
   lay.groups.forEach((g) => g.nodes.filter((n) => lay.nodes.has(n.id)).forEach((n) => {
@@ -257,8 +259,8 @@ test('saved positions win over the layout; saved state is checked on load', () =
   assert.equal(box.moved, true);
   assert.deepEqual([lay.captain.x, lay.captain.y], [5, 6]);
   const s = C.normalizeSaved({ projectPositions: {}, mode: 'canvas', positions: { a: { x: 1.4, y: 2 }, b: { x: NaN, y: 1 } }, view: { x: 1, y: 2, scale: 99 } });
-  assert.deepEqual(s, { projectPositions: {}, mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null, zoom: null });
-  assert.deepEqual(C.normalizeSaved(null), { projectPositions: {}, mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null, zoom: null });
+  assert.deepEqual(s, { projectPositions: {}, mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null, zoom: null, projectSlots: {} });
+  assert.deepEqual(C.normalizeSaved(null), { projectPositions: {}, mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null, zoom: null, projectSlots: {} });
   // the user's project order and the arrangement their hand-placed map stands on are kept, checked
   const kept = C.normalizeSaved({ projectOrder: ['B', 'A', 'B', 7, 'x'.repeat(200)], plan: { lanes: [['A'], ['B', 'C']], caps: { A: 3, B: 2, C: 2.5, D: 99 }, tight: 1, junk: true } });
   assert.deepEqual(kept.projectOrder, ['B', 'A']);
@@ -613,7 +615,10 @@ test('rails: every card hangs off a line down the left of its column; no line cr
     for (const r of dispatch) {
       const b = lay.nodes.get(r.to);
       assert.deepEqual(r.points.at(-1), [b.x - 2, b.y + 20], `${w} ${r.to}: enters the card's left edge by its status row`);
-      assert.deepEqual(r.points.at(-2), [b.x - 8, b.y + 20], `${w} ${r.to}: from the rail of its own column`);
+      // (3.1) the leftmost column's line runs down the frame's own left edge; the other columns' in their gaps
+      const g0 = lay.groups.find((x) => x.key === r.project);
+      const leftmost = [...lay.nodes.values()].filter((nb) => nb.project === r.project).every((nb) => nb.x >= b.x - 0.5);
+      assert.deepEqual(r.points.at(-2), [leftmost ? g0.x + C.RAIL_EDGE : b.x - 8, b.y + 20], `${w} ${r.to}: from the rail of its own column`);
       assert.deepEqual(r.branch.at(-1), r.points.at(-1));
       // inside its frame's title strip only the left rail runs, straight down
       const g = lay.groups.find((x) => x.key === r.project), strip = [g.y + 1, g.y + 64 - 8 - 1];

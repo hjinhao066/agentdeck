@@ -86,6 +86,12 @@
   // view itself, null while none is set (智能一页 picks the zoom). A zoom the user is still setting, the view theirs,
   // leaves the arrangement alone until the map places the view again.
   let planZoom = null;
+  // each project's colour slot (CrewMapCore.assignSlots, kept in config.crewMap.projectSlots); a project's colour
+  // is var(--pc-N) from the stylesheet
+  let slots = {};
+  const pc = (key) => C.projectColor(key, slots);
+  // what the moving light (crew-fx.js) follows: the working lines as drawn ({ d, color, core }) and 队长's hub
+  let fxLines = [], fxHub = null;
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -165,7 +171,7 @@
     n.dataset.nodeId = node.id;
     n.dataset.status = node.status;
     // the card wears its project's colour where it touches the project's line (its stop, its live dot, its rim on hover)
-    if (!captain) n.style.setProperty('--project-hue', String(C.projectHue(node.project)));
+    if (!captain) { n.style.setProperty('--project-hue', String(C.projectHue(node.project))); n.style.setProperty('--pc', pc(node.project)); }
     place(n, box);
     const top = el('div', 'cm-top');
     const st = el('span', 'cm-status');
@@ -229,8 +235,11 @@
           guard(look, () => togglePop(node.id));
           foot.append(look);
         } else {
-          const clock = el('span', 'cm-time', ago(node.ts));
-          if (node.ts) clock.title = (node.status === 'working' ? '开始于 ' : '最后更新 ') + new Date(node.ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          // a working card shows its latest progress (what it is sorted by), the start in the hover text
+          const at = (t) => new Date(t).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          const shown = node.status === 'working' ? node.activity || node.ts : node.ts;
+          const clock = el('span', 'cm-time', ago(shown));
+          if (shown) clock.title = node.status === 'working' ? `最近进展 ${at(shown)}` + (node.ts && node.ts !== shown ? `，开始于 ${at(node.ts)}` : '') : '最后更新 ' + at(shown);
           foot.append(clock);
         }
       }
@@ -370,12 +379,13 @@
     edgesEl.innerHTML = '<defs>' + Object.values(MARK).filter((v, i, a) => a.indexOf(v) === i).map((id) =>
       `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>`).join('') + '</defs>';
     const list = routeList = C.routes(lastMap, lay, dims);
+    fxLines = []; fxHub = null;
     const layer = (cls) => svg('g', { class: cls });
     // under every line: the ground each 小队长's crew stands on
     const ground = layer('cm-pockets');
-    C.pockets(lay).forEach((p) => svg('rect', { class: 'cm-pocket', x: p.x, y: p.y, width: p.w, height: p.h, rx: 12, style: `--project-hue: ${C.projectHue(p.project)}`, 'data-lead': p.id }, ground));
+    C.pockets(lay).forEach((p) => svg('rect', { class: 'cm-pocket', x: p.x, y: p.y, width: p.w, height: p.h, rx: 12, style: `--project-hue: ${C.projectHue(p.project)}; --pc: ${pc(p.project)}`, 'data-lead': p.id }, ground));
     const returns = layer('cm-returns'), reviews = layer('cm-reviews');
-    const halos = layer('cm-halos'), lines = layer('cm-lines'), pulses = layer('cm-pulses'), core = layer('cm-spine'), dots = layer('cm-dots');
+    const halos = layer('cm-halos'), lines = layer('cm-lines'), core = layer('cm-spine'), dots = layer('cm-dots');
     layer('cm-lit');   // the hovered card's own path, on top of everything else
     list.filter((r) => r.type === 'return').forEach((r) => {
       svg('path', { class: 'cm-edge ' + r.cls + (showReturn ? ' show' : ''), d: rounded(r.points), 'marker-end': `url(#${MARK[r.kind]})`, 'data-from': r.from, 'data-to': r.to }, returns);
@@ -386,12 +396,12 @@
     });
     // 队长's lines to the sessions it sent, and each 小队长's to its crew
     list.filter((r) => r.type === 'dispatch' || r.type === 'squad').sort((a, b) => RANK[stOf(a)] - RANK[stOf(b)]).forEach((r) => {
-      const d = rounded(r.branch), style = `--project-hue: ${C.projectHue(r.project)}`;
+      const d = rounded(r.branch), style = `--project-hue: ${C.projectHue(r.project)}; --pc: ${pc(r.project)}`;
       const live = stOf(r) === 'working' && !/\barchived\b/.test(r.cls);
       if (live) svg('path', { class: 'cm-halo', d, style }, halos);
       svg('path', { class: 'cm-edge ' + r.cls, d, style, 'data-from': r.from, 'data-to': r.to }, lines);
-      // a light travelling the line: a bright head with a faint tail behind it
-      if (live) { svg('path', { class: 'cm-trail', d, style }, pulses); svg('path', { class: 'cm-pulse', d, style }, pulses); }
+      // the light pushed out along a working line is drawn by crew-fx.js (the artery), not by the stylesheet
+      if (live) fxLines.push({ d, color: pc(r.project) });
       const [x, y] = r.points[r.points.length - 1];
       svg('circle', { class: 'cm-socket ' + r.cls, cx: x, cy: y, r: 3, style }, dots);
     });
@@ -402,14 +412,14 @@
       const d = rounded(pts);
       if (active) svg('path', { class: 'cm-halo core', d }, halos);
       svg('path', { class: `cm-bus ${cls}${active ? ' active' : ''}`, d }, core);
-      if (active) { svg('path', { class: 'cm-trail core', d }, core); svg('path', { class: 'cm-pulse core', d }, core); }
+      if (active) fxLines.push({ d, core: true });
     };
     bus(sp.trunk, 'trunk', sp.active);
     if (sp.left) bus(sp.left.points, 'arm', sp.left.active);
     if (sp.right) bus(sp.right.points, 'arm', sp.right.active);
     sp.takeoffs.forEach(([x, y]) => svg('circle', { class: 'cm-joint', cx: x, cy: y, r: 2.6 }, dots));
-    // while the crew works, the hub under 队长 beats: a ring that widens and fades
-    if (sp.active) svg('circle', { class: 'cm-hub-beat', cx: sp.hub[0], cy: sp.hub[1], r: 9 }, dots);
+    // while the crew works, the hub under 队长 rings with each beat (crew-fx.js)
+    if (sp.active) fxHub = sp.hub;
     svg('circle', { class: 'cm-hub-ring' + (sp.active ? ' active' : ''), cx: sp.hub[0], cy: sp.hub[1], r: 9 }, dots);
     svg('circle', { class: 'cm-hub' + (sp.active ? ' active' : ''), cx: sp.hub[0], cy: sp.hub[1], r: 4.5 }, dots);
     hover(hoverId);
@@ -427,7 +437,7 @@
     for (let p = hoverId; p; p = ((lastMap && lastMap.nodes.find((n) => n.id === p)) || {}).parent) up.add(p);
     const handed = (r) => (r.type === 'dispatch' || r.type === 'squad') && up.has(r.to);
     const mine = routeList.filter((r) => (r.from === hoverId || r.to === hoverId || handed(r)) && (r.type !== 'return' || showReturn));
-    mine.forEach((r) => svg('path', { class: 'cm-hl-path ' + r.type, d: rounded(r.points), ...(r.type === 'dispatch' || r.type === 'squad' ? { style: `--project-hue: ${C.projectHue(r.project)}` } : {}) }, lit));
+    mine.forEach((r) => svg('path', { class: 'cm-hl-path ' + r.type, d: rounded(r.points), ...(r.type === 'dispatch' || r.type === 'squad' ? { style: `--project-hue: ${C.projectHue(r.project)}; --pc: ${pc(r.project)}` } : {}) }, lit));
     edgesEl.querySelectorAll('.cm-edge').forEach((p) => { if (p.dataset.from === hoverId || p.dataset.to === hoverId || (/\b(dispatch|squad)\b/.test(p.getAttribute('class')) && up.has(p.dataset.to))) p.classList.add('hl'); });
   }
   function redrawEdges() { if (lay) drawEdges(); }
@@ -442,11 +452,15 @@
       const pane = el('div', 'cm-pane' + (g.collapsed ? ' collapsed' : ''));
       pane.dataset.project = g.key;
       pane.style.setProperty('--project-hue', hue);
+      pane.style.setProperty('--pc', pc(g.key));
       place(pane, g);
+      // the hairline between a frame's open cards (on top) and its ended ones (below)
+      if (g.split) { const cut = el('i', 'cm-split'); cut.style.top = g.split + 'px'; pane.appendChild(cut); }
       zonesEl.appendChild(pane);
       const group = el('section', 'cm-project' + (g.collapsed ? ' collapsed' : ''));
       group.dataset.project = g.key;
       group.style.setProperty('--project-hue', hue);
+      group.style.setProperty('--pc', pc(g.key));
       group.setAttribute('aria-label', g.name);
       place(group, g);
       const head = el('div', 'cm-project-head');
@@ -480,6 +494,7 @@
   // ---- canvas view ----
   function applyView() {
     canvasEl.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+    if (window.CrewFx) window.CrewFx.view(view);
     // the dot grid under the map moves and scales with it
     vpEl.style.setProperty('--cm-grid', GRAIN * view.scale + 'px');
     vpEl.style.setProperty('--cm-gx', view.x + 'px');
@@ -637,12 +652,14 @@
       lay.nodes.forEach((b, id) => { if (b.project === drag.group.key) place(nodesEl.querySelector(`[data-node-id="${CSS.escape(id)}"]`), b); });
       if (lay.fold && lay.fold.project === drag.group.key) place(nodesEl.querySelector('.cm-fold'), lay.fold);
       drawEdges();
+      if (window.CrewFx) window.CrewFx.updateSoon();
       return;
     }
     drag.n.classList.add('dragging');
     Object.assign(drag.box, C.constrainPosition(lay, drag.box, { x: Math.round(drag.x0 + dx / view.scale), y: Math.round(drag.y0 + dy / view.scale) }));
     place(drag.n, drag.box);
     drawEdges();
+    if (window.CrewFx) window.CrewFx.updateSoon();
   }
   function onUp(e) {
     if (!drag || e.pointerId !== drag.id) return;
@@ -719,7 +736,7 @@
       const chip = el('button', 'cm-chip' + (p.failed ? ' failed' : ''));
       chip.type = 'button';
       chip.dataset.project = p.key;
-      chip.style.setProperty('--project-hue', String(C.projectHue(p.key)));
+      chip.style.setProperty('--project-hue', String(C.projectHue(p.key))); chip.style.setProperty('--pc', pc(p.key));
       chip.setAttribute('aria-pressed', String(p.expanded));
       chip.title = p.expanded ? `收回到底部：${p.name}` : `展开到画布：${p.name}`;
       chip.setAttribute('aria-label', chip.title);
@@ -802,6 +819,9 @@
     const map = collect();
     lastMap = map;
     lastSig = C.signature(map) + '|' + showArchived;
+    // every project on the map a colour slot it keeps (saved, so it keeps it over restarts)
+    slots = C.assignSlots(map.projects.map((p) => p.key), saved().projectSlots);
+    if (JSON.stringify(slots) !== JSON.stringify(saved().projectSlots || {})) { saved().projectSlots = slots; host.save(); }
     // new activity in a folded project brings it back; the view is not touched
     const re = C.reopenOnActivity(prevActive, map.projects, saved().collapsedProjects);
     prevActive = re.active;
@@ -849,6 +869,8 @@
     if (before) settle(before);
     if (popId) { fillPop(); placePop(); }
     syncFit();
+    // the moving light follows the map as now drawn
+    if (window.CrewFx) window.CrewFx.update();
   }
 
   // ---- 一键整理, 智能一页, 撤销 ----
@@ -1012,6 +1034,8 @@
     trayEl = rootEl.querySelector('.cm-tray');
     popEl = rootEl.querySelector('.cm-pop');
     returnBtn.setAttribute('aria-pressed', String(showReturn));
+    // the moving light: a worker draws it on two canvases (crew-fx.js); it reads the map as drawn after each render
+    if (window.CrewFx) window.CrewFx.attach({ root: rootEl, viewport: vpEl, canvas: canvasEl, source: () => lay && { width: lay.width, height: lay.height, lines: fxLines, hub: fxHub } });
     const on = (name, fn) => rootEl.querySelector(`[data-cm="${name}"]`).addEventListener('click', fn);
     on('archived', () => setShowArchived(!showArchived));
     on('out', () => view && zoomCenter(C.zoomStep(view.scale, -1) / view.scale));

@@ -2823,15 +2823,11 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-ico { position: relative; flex: 0 0 auto; display: inline-grid; place-items: center; width: 14px; height: 14px; color: var(--cm-wait); }
 .cm-ico svg { width: 100%; height: 100%; display: block; overflow: visible; }
 .cm-ico.st-working { color: var(--cm-work); }
-.cm-ico.st-working svg { animation: cm-spin 1.5s linear infinite; will-change: transform; }
 .cm-ico.st-input { color: var(--cm-need); }
-.cm-ico.st-input::after { content: ""; position: absolute; inset: 1px; border-radius: 999px; background: var(--cm-need); opacity: 0; z-index: -1; animation: cm-ping 1.8s ease-out infinite; will-change: transform, opacity; }
 .cm-ico.st-done { color: var(--cm-done); }
 .cm-ico.st-failed { color: var(--cm-fail); }
 .cm-ico.st-stopped { color: color-mix(in srgb, var(--cm-done) 45%, var(--cm-wait)); }
 .cm-ico.st-idle { color: var(--cm-core); }
-@keyframes cm-spin { to { transform: rotate(360deg); } }
-@keyframes cm-ping { 0% { transform: scale(0.7); opacity: 0.45; } 80%, 100% { transform: scale(2.1); opacity: 0; } }
 
 /* Counts: icon + number + label. Compact in a project head, full size on 队长. */
 .cm-count { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
@@ -2882,7 +2878,6 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-project-head.compact .cm-count { position: relative; gap: 4px; }
 .cm-project-head.compact .cm-count-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .cm-project-summary .cm-count .cm-ico { width: 13px; height: 13px; }
-.cm-project-summary .cm-ico svg, .cm-project-summary .cm-ico::after, .cm-legend .cm-ico svg, .cm-legend .cm-ico::after { animation: none; }
 .cm-project-summary .cm-count b { font-size: 13px; }
 .cm-project-summary .cm-count.st-working b { color: var(--cm-work); }
 .cm-project-summary .cm-count.st-input b { color: var(--cm-need); }
@@ -2897,7 +2892,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
    own colour, down the left of its cards, a stop where it enters each card. A line whose session
    is working is brighter, sits in a soft glow of its colour and carries a short light that travels
    it; a finished line is thinner, dimmer and still. */
-.cm-edges .cm-edge, .cm-halo, .cm-pulse, .cm-bus, .cm-hl-path { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.cm-edges .cm-edge, .cm-halo, .cm-bus, .cm-hl-path { fill: none; stroke-linejoin: round; stroke-linecap: round; }
 .cm-edge:is(.dispatch, .squad) { stroke: hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)); stroke-width: 1.5; opacity: 0.5; }
 .cm-edge:is(.dispatch, .squad).st-working { stroke-width: 2; opacity: 0.95; }
 .cm-edge:is(.dispatch, .squad).st-input { stroke: var(--cm-need); stroke-width: 1.8; opacity: 0.9; }
@@ -2915,16 +2910,6 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-halo { stroke: hsl(var(--project-hue) 90% 70%); stroke-width: 8; }
 .cm-halo.core { stroke: var(--cm-wire-hi); stroke-width: 10; }
 :root[data-theme="light"] .cm-halo { stroke: hsl(var(--project-hue) 85% 58%); }
-/* a short stretch of light, one lap in about six seconds */
-.cm-pulse { stroke: var(--cm-spark); stroke-width: 3; stroke-dasharray: 14 246; animation: cm-flow 6s linear infinite; }
-.cm-pulse.core { stroke-width: 3.4; stroke-dasharray: 18 242; }
-:root[data-theme="light"] .cm-pulse:not(.core) { stroke: hsl(var(--project-hue) 88% 34%); }
-@keyframes cm-flow { to { stroke-dashoffset: -260; } }
-/* its tail: the same light, fainter, reaching back 32px from the head */
-.cm-trail { fill: none; stroke-linecap: round; stroke: var(--cm-spark); stroke-width: 2.2; stroke-dasharray: 46 214; opacity: .26; animation: cm-trail 6s linear infinite; }
-.cm-trail.core { stroke-width: 2.6; stroke-dasharray: 50 210; }
-:root[data-theme="light"] .cm-trail:not(.core) { stroke: hsl(var(--project-hue) 88% 34%); }
-@keyframes cm-trail { from { stroke-dashoffset: 32; } to { stroke-dashoffset: -228; } }
 .cm-bus { stroke: var(--cm-wire); stroke-width: 1.6; opacity: 0.8; }
 .cm-bus.active { stroke: var(--cm-wire-hi); stroke-width: 2; opacity: 0.62; }
 .cm-hub { fill: var(--cm-space); stroke: var(--cm-wire-hi); stroke-width: 1.8; }
@@ -2932,8 +2917,6 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-hub-ring { fill: color-mix(in srgb, var(--cm-wire-hi) 6%, transparent); stroke: color-mix(in srgb, var(--cm-wire-hi) 30%, transparent); stroke-width: 1; }
 .cm-hub-ring.active { fill: color-mix(in srgb, var(--cm-wire-hi) 12%, transparent); stroke: color-mix(in srgb, var(--cm-wire-hi) 55%, transparent); }
 /* the crew at work: the hub beats, a ring widening and fading every few seconds */
-.cm-hub-beat { fill: none; stroke: var(--cm-wire-hi); stroke-width: 1.2; vector-effect: non-scaling-stroke; opacity: 0; transform-box: fill-box; transform-origin: center; animation: cm-beat 3.2s cubic-bezier(.2, .7, .3, 1) infinite; }
-@keyframes cm-beat { 0% { opacity: .6; transform: scale(1); } 100% { opacity: 0; transform: scale(2.8); } }
 .cm-joint { fill: var(--cm-wire-hi); stroke: var(--cm-space); stroke-width: 1.5; }
 /* a stop: where a project's line enters its card; it turns the colour of a card that needs you */
 .cm-socket { fill: hsl(var(--project-hue) var(--cm-line-s) var(--cm-line-l)); stroke: var(--cm-space); stroke-width: 1.6; opacity: 0.75; }
@@ -2944,12 +2927,11 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-socket.archived { opacity: 0.3; }
 /* review: violet dashes; they flow only while the reviewer is working */
 .cm-edge.review { stroke: var(--cm-review); stroke-width: 1.5; stroke-dasharray: 5 6; opacity: 0.55; }
-.cm-edge.review.st-working { opacity: 1; animation: cm-flow-review 2.8s linear infinite; }
-@keyframes cm-flow-review { to { stroke-dashoffset: -22; } }
+.cm-edge.review.st-working { opacity: 1; }
 .cm-edge.return { stroke: color-mix(in srgb, var(--cm-back) 70%, var(--cm-space)); stroke-width: 1.4; display: none; }
 .cm-edge.return.show { display: initial; }
 .cm-edge.return.question, .cm-edge.return.failed { stroke: color-mix(in srgb, var(--cm-back-bad) 75%, var(--cm-space)); }
-.cm-edge.archived { opacity: 0.3; animation: none; }
+.cm-edge.archived { opacity: 0.3; }
 .cm-chevron { fill: none; stroke: var(--cm-back); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .cm-chevron.question, .cm-chevron.failed { stroke: var(--cm-back-bad); }
 .cm-chevron.archived { opacity: 0.3; }
@@ -2958,7 +2940,9 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #cmArrowBackBad path { fill: var(--cm-back-bad); }
 /* hovering a card: its own path stands out, the rest steps back */
 .cm-edges.cm-hovering .cm-edge:not(.hl), .cm-edges.cm-hovering .cm-bus, .cm-edges.cm-hovering .cm-socket, .cm-edges.cm-hovering .cm-chevron { opacity: 0.14; }
-.cm-edges.cm-hovering .cm-halos, .cm-edges.cm-hovering .cm-pulses { opacity: 0.1; }
+.cm-edges.cm-hovering .cm-halos { opacity: 0.1; }
+/* (the moving light dims with the wiring while a card is hovered) */
+.cm-edges.cm-hovering ~ .fx-layer { opacity: 0.3; }
 .cm-hl-path { stroke: var(--cm-wire-hi); stroke-width: 2.6; }
 .cm-hl-path:is(.dispatch, .squad) { stroke: hsl(var(--project-hue) 95% 76%); }
 :root[data-theme="light"] .cm-hl-path:is(.dispatch, .squad) { stroke: hsl(var(--project-hue) 85% 38%); }
@@ -3089,7 +3073,6 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .st-input > .cm-top .cm-status { color: var(--cm-need); }
 .st-done > .cm-top .cm-status { color: var(--cm-done); }
 .st-failed > .cm-top .cm-status { color: var(--cm-fail); }
-.cm-node.archived .cm-ico svg, .cm-node.archived .cm-ico::after { animation: none; }
 /* model and account: quiet text, the provider's mark in the same ink, then the account behind the seat
    as a small tag (its short name: the sign-in address up to the @, or the seat's code while that is not
    known). The status beside them is always whole; the account gives way first, down to a few letters
@@ -3260,15 +3243,213 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 }
 .cm-sep { width: 1px; height: 18px; margin: 0 3px; background: var(--cm-rim-hi); }
 @media (max-width: 1100px) { .cm-legend-keys > span:nth-child(-n+5) { display: none; } }
+/* Nothing in the map is animated by the stylesheet: the moving light is drawn by a worker (crew-fx.js), which leaves
+   one still frame under reduced motion or the motion switch. Only the glides of a rearrangement are transitions. */
 @media (prefers-reduced-motion: reduce) {
-  .cm-pulse, .cm-trail, .cm-hub-beat, .cm-edge.review, #crewMap .cm-ico svg, #crewMap .cm-ico::after, #crewMap .cm-node::before, #crewMap .cm-node::after { animation: none; }
-  .cm-pulse, .cm-trail, .cm-hub-beat, #crewMap .cm-ico::after { display: none; }
   .cm-node, .cm-canvas.cm-smooth, .cm-viewport.cm-smooth, .cm-tray-arrow svg { transition: none; }
 }
-/* the same stillness when motion is switched off from the toolbar */
-:root[data-motion="off"] :is(.cm-pulse, .cm-trail, .cm-hub-beat, .cm-edge.review), :root[data-motion="off"] #crewMap .cm-ico svg, :root[data-motion="off"] #crewMap .cm-ico::after, :root[data-motion="off"] #crewMap .cm-node::before, :root[data-motion="off"] #crewMap .cm-node::after { animation: none; }
-:root[data-motion="off"] :is(.cm-pulse, .cm-trail, .cm-hub-beat), :root[data-motion="off"] #crewMap .cm-ico::after { display: none; }
 :root[data-motion="off"] :is(.cm-node, .cm-canvas.cm-smooth, .cm-viewport.cm-smooth, .cm-tray-arrow svg) { transition: none; }
+
+/* ===== 队伍 map 3.1 · 星河流光 (the user's pick, 2026-10-10) =====
+   By night a deep indigo sky — no nebula — whose stars drift each its own way, meteors at random, now and then a
+   shower; glass frames with a crisp rim of the project's own colour, its glow outside the edge; cards of glass,
+   working ones marked by a still amber rim and glow (nothing runs round them); from 队长 a heartbeat pushes waves of
+   light out along every working line. All the motion is drawn by crew-fx.js on two canvases (.fx-sky behind the map,
+   .fx-layer over it); this sheet is only what stands still. By day the map keeps its porcelain look, with the same
+   six project colours (darker, for white) and the waves on its lines, and no sky. */
+
+/* the six project colours: change these lines to recolour every project (frames, lines, dots, the waves). A
+   project keeps its slot (config.crewMap.projectSlots); a seventh at once wears the first colour again. */
+#crewMap {
+  --pc-0: #8b93b0;
+  --pc-1: #19e3ff;   /* 青 */
+  --pc-2: #e040ff;   /* 电光紫 */
+  --pc-3: #b6f23a;   /* 黄绿 */
+  --pc-4: #229dff;   /* 天蓝 */
+  --pc-5: #eef2ff;   /* 冰白 */
+  --pc-6: #6a5cff;   /* 靛紫 */
+  /* what the worker draws besides the lines' own colours */
+  --fx-spin: var(--cm-work);
+  --fx-ping: var(--cm-need);
+  --fx-hub: var(--cm-wire-hi);
+  --fx-core: #c9d3ff;
+}
+:root[data-theme="light"] #crewMap {
+  --pc-0: #6b7280;
+  --pc-1: #0891b2;
+  --pc-2: #a21caf;
+  --pc-3: #4d7c0f;
+  --pc-4: #2563eb;
+  --pc-5: #475569;
+  --pc-6: #5b21b6;
+  --fx-core: #4f5bd5;
+}
+:root:not([data-theme="light"]) #crewMap {
+  --cm-space: #070a18;
+  --cm-zone: #0c1126;
+  --cm-pane: #10152c;
+  --cm-card: #141a34;
+  --cm-card-hi: #19203c;
+  --cm-card-done: #0f1429;
+  --cm-rim: #262e4f;
+  --cm-rim-hi: #39436d;
+  --cm-text: #eef1fb;
+  --cm-text-2: #b9c1db;
+  --cm-text-dim: #929bb9;
+  --cm-work: #f7c456;
+  --cm-done: #4fdea2;
+  --cm-fail: #ff6262;
+  --cm-fail-bg: #23121b;
+  --cm-need: #ffa066;
+  --cm-need-bg: #231a14;
+  --cm-wait: #959ebb;
+  --cm-cap: #dfe5ff;
+  --cm-core: #a9b8ff;
+  --cm-wire: #8fa2ff;
+  --cm-wire-hi: #dfe5ff;
+  --cm-review: #c3cbe6;   /* a 审查 line belongs to no project: neutral silver, never mistaken for one's colour */
+  --cm-sheen: rgba(200, 210, 255, .07);
+  --cm-shadow: 0 14px 28px -16px rgba(0, 0, 0, .95);
+  --cm-shadow-up: 0 20px 36px -18px rgba(0, 0, 0, .95);
+}
+
+/* ---- the moving light's canvases; the sky only by night ---- */
+#crewMap .fx-sky { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+#crewMap .fx-sky > canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#crewMap .fx-layer { position: absolute; z-index: 4; pointer-events: none; transition: opacity .15s ease; }
+:root[data-theme="light"] #crewMap .fx-sky { display: none; }
+/* the spinner of a working card and the ping of a card that asks are drawn by the worker where their icons stand */
+#crewMap.fx-on .cm-node .cm-status > .cm-ico.st-working svg { visibility: hidden; }
+
+/* ---- every place a project's colour shows takes its slot's colour (both themes) ---- */
+#crewMap :is(.cm-pane, .cm-project, .cm-chip, .cm-node) { --project-color: var(--pc, var(--pc-0)); }
+#crewMap .cm-edge:is(.dispatch, .squad),
+#crewMap .cm-edge:is(.dispatch, .squad):is(.st-input, .st-failed, .st-queued, .st-done, .st-stopped, .st-idle, .st-working) { stroke: var(--pc, var(--pc-0)); stroke-dasharray: none; }
+#crewMap .cm-edge:is(.dispatch, .squad).st-queued { stroke-dasharray: 2 6; }
+#crewMap .cm-halo:not(.core) { stroke: var(--pc, var(--pc-0)); }
+#crewMap .cm-socket, #crewMap .cm-socket:is(.st-working, .st-input, .st-failed) { fill: var(--pc, var(--pc-0)); }
+#crewMap .cm-hl-path:is(.dispatch, .squad) { stroke: var(--pc, var(--pc-0)); }
+#crewMap .cm-line.k-live::before { background: var(--pc, var(--pc-0)); }
+#crewMap .cm-lead { background: color-mix(in srgb, var(--pc) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc) 50%, transparent); }
+#crewMap .cm-lead svg { color: var(--pc); }
+#crewMap .cm-pocket { fill: color-mix(in srgb, var(--pc) 7%, var(--cm-zone)); stroke: color-mix(in srgb, var(--pc) 45%, transparent); }
+/* 高优: a white tag, its words and flag in deep blue, so no project's colour can pass for it */
+#crewMap .cm-prio { background: #eef3ff; color: #1f4fd6; box-shadow: 0 1px 6px -2px rgba(150, 175, 255, .5); }
+#crewMap .cm-node:is(.st-done, .st-stopped, .st-idle) .cm-prio { background: rgba(255, 255, 255, .1); color: #e6ebff; box-shadow: none; }
+:root[data-theme="light"] #crewMap .cm-prio { background: #1f4fd6; color: #fff; box-shadow: none; }
+:root[data-theme="light"] #crewMap .cm-node:is(.st-done, .st-stopped, .st-idle) .cm-prio { background: #e3e8f7; color: #1f4fd6; }
+/* the frame hangs off its line: the line comes down the frame's left edge, so that corner is square */
+#crewMap .cm-pane:not(.collapsed) { border-top-left-radius: 3px; }
+/* the hairline between a frame's open cards (on top) and its ended ones (below), in the gap between them */
+#crewMap .cm-split { position: absolute; left: 22px; right: 22px; height: 1.5px; border-radius: 1px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--pc) 70%, transparent) 14%, color-mix(in srgb, var(--pc) 70%, transparent) 86%, transparent); }
+/* a spotlight of the project's colour where the pointer is (a repaint of that one card while the pointer moves) */
+#crewMap .cm-node:not(.kind-captain):not(.archived)::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity .2s ease;
+  background: radial-gradient(200px circle at var(--mx, 50%) var(--my, 0%), color-mix(in srgb, var(--pc) 22%, transparent), transparent 72%);
+}
+#crewMap .cm-node:not(.kind-captain):not(.archived):hover::after { opacity: 1; }
+:root[data-theme="light"] #crewMap .cm-node:not(.kind-captain)::after { background: radial-gradient(200px circle at var(--mx, 50%) var(--my, 0%), color-mix(in srgb, var(--pc) 10%, transparent), transparent 72%); }
+
+/* ---- by night: the sky, glass frames and cards ---- */
+:root:not([data-theme="light"]) #crewMap .cm-viewport { background-color: var(--cm-space); background-image: none; }
+:root:not([data-theme="light"]) #crewMap .cm-viewport::before { background: none; }
+:root:not([data-theme="light"]) #crewMap .fx-sky { background: linear-gradient(180deg, #0b1027 0%, #080b1d 55%, #070918 100%); }
+:root:not([data-theme="light"]) #crewMap .cm-pane {
+  border-radius: 18px; border: 0;
+  background-color: color-mix(in srgb, var(--pc) 4%, rgba(13, 18, 40, .80));
+  background-image: radial-gradient(70% 130px at 20% 0, color-mix(in srgb, var(--pc) 13%, transparent), transparent), linear-gradient(180deg, var(--cm-sheen), transparent 60px);
+  box-shadow: 0 0 22px -6px color-mix(in srgb, var(--pc) 42%, transparent), 0 30px 60px -36px rgba(0, 0, 0, .95);
+}
+:root:not([data-theme="light"]) #crewMap .cm-pane::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px; pointer-events: none; background: var(--pc);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+}
+:root:not([data-theme="light"]) #crewMap .cm-project-name::before {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--pc);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pc) 20%, transparent), 0 0 10px 1px color-mix(in srgb, var(--pc) 70%, transparent);
+}
+:root:not([data-theme="light"]) #crewMap .cm-project-summary .cm-count.st-done b { color: var(--cm-done); }
+:root:not([data-theme="light"]) #crewMap .cm-edge:is(.dispatch, .squad) { stroke-width: 1.6; opacity: 1; }
+:root:not([data-theme="light"]) #crewMap .cm-edge:is(.dispatch, .squad).st-working { stroke-width: 2.3; }
+:root:not([data-theme="light"]) #crewMap .cm-edge:is(.dispatch, .squad):is(.st-done, .st-stopped, .st-idle) { stroke-width: 1.4; }
+:root:not([data-theme="light"]) #crewMap .cm-halos { opacity: .6; filter: blur(2.5px); }
+:root:not([data-theme="light"]) #crewMap .cm-halo { stroke-width: 6; }
+:root:not([data-theme="light"]) #crewMap .cm-halo.core { stroke: #9fb2ff; stroke-width: 8; }
+:root:not([data-theme="light"]) #crewMap .cm-bus { stroke: var(--cm-wire); stroke-width: 2.6; opacity: 1; }
+:root:not([data-theme="light"]) #crewMap .cm-bus.active { stroke: #c9d3ff; stroke-width: 3; }
+:root:not([data-theme="light"]) #crewMap .cm-hub { fill: #ffffff; stroke: var(--cm-wire-hi); stroke-width: 2; }
+:root:not([data-theme="light"]) #crewMap .cm-hub-ring { fill: rgba(190, 200, 255, .14); stroke: rgba(226, 231, 255, .55); }
+:root:not([data-theme="light"]) #crewMap .cm-joint { fill: var(--cm-wire-hi); stroke: var(--cm-space); }
+:root:not([data-theme="light"]) #crewMap .cm-socket { stroke: var(--cm-space); stroke-width: 1.8; opacity: 1; }
+/* cards: glass on the sky, its rim brighter at the top; the state lights the rim and the top edge */
+:root:not([data-theme="light"]) #crewMap .cm-node:not(.kind-captain):not(.kind-waiting):not(.archived):not(.st-queued) {
+  --surface: var(--cm-card); --lit: 0%; --rim-top: rgba(214, 222, 255, .22); --rim-bot: rgba(214, 222, 255, .07);
+  border: 1px solid transparent; border-radius: 13px;
+  background-color: var(--surface);
+  background-image:
+    radial-gradient(82% 62px at 50% 0, color-mix(in srgb, var(--st-c) var(--lit), transparent), transparent),
+    linear-gradient(180deg, rgba(255, 255, 255, .045), transparent 44%),
+    linear-gradient(var(--surface), var(--surface)),
+    linear-gradient(180deg, var(--rim-top), var(--rim-bot) 72%);
+  background-clip: padding-box, padding-box, padding-box, border-box; background-origin: border-box;
+  box-shadow: var(--cm-shadow);
+}
+/* working: a still amber rim, brighter at the top, and a steady glow round the card */
+:root:not([data-theme="light"]) #crewMap .cm-node.st-working:not(.kind-captain):not(.archived) {
+  --lit: 20%; --rim-top: var(--cm-work); --rim-bot: color-mix(in srgb, var(--cm-work) 42%, transparent);
+  box-shadow: var(--cm-shadow), 0 0 0 1px color-mix(in srgb, var(--cm-work) 22%, transparent), 0 0 30px -8px color-mix(in srgb, var(--cm-work) 85%, transparent);
+}
+:root:not([data-theme="light"]) #crewMap .cm-node.st-input:not(.kind-captain):not(.archived) {
+  --lit: 14%; --surface: var(--cm-need-bg); --rim-top: var(--cm-need); --rim-bot: color-mix(in srgb, var(--cm-need) 35%, transparent);
+  box-shadow: var(--cm-shadow), 0 0 26px -12px color-mix(in srgb, var(--cm-need) 85%, transparent);
+}
+:root:not([data-theme="light"]) #crewMap .cm-node.st-failed:not(.kind-captain):not(.archived) {
+  --lit: 15%; --surface: var(--cm-fail-bg); --rim-top: var(--cm-fail); --rim-bot: color-mix(in srgb, var(--cm-fail) 35%, transparent);
+  box-shadow: var(--cm-shadow), 0 0 26px -12px color-mix(in srgb, var(--cm-fail) 85%, transparent);
+}
+/* a review session keeps its silver mark down its left edge */
+:root:not([data-theme="light"]) #crewMap .cm-node.review:not(.kind-captain):not(.archived):not(.st-queued) { box-shadow: inset 2px 0 0 var(--cm-review), var(--cm-shadow); }
+/* finished work steps back and holds still */
+:root:not([data-theme="light"]) #crewMap .cm-node:is(.st-done, .st-stopped, .st-idle):not(.kind-captain):not(.archived) {
+  --surface: var(--cm-card-done); --rim-top: rgba(214, 222, 255, .13); --rim-bot: rgba(214, 222, 255, .04);
+  box-shadow: 0 10px 22px -18px rgba(0, 0, 0, .9);
+}
+:root:not([data-theme="light"]) #crewMap .cm-node:not(.kind-captain):not(.archived):hover {
+  --rim-top: var(--pc); --rim-bot: color-mix(in srgb, var(--pc) 40%, transparent);
+  box-shadow: var(--cm-shadow-up), 0 0 0 1px color-mix(in srgb, var(--pc) 50%, transparent), 0 0 26px -6px color-mix(in srgb, var(--pc) 70%, transparent);
+}
+:root:not([data-theme="light"]) #crewMap .cm-title { font-weight: 640; }
+:root:not([data-theme="light"]) #crewMap .cm-agent .cn-badge {
+  height: 20px; box-sizing: border-box; padding: 0 6px 0 5px; gap: 4px; align-items: center;
+  border-radius: 999px; background: rgba(5, 7, 18, .42); border: 1px solid rgba(214, 222, 255, .12);
+}
+:root:not([data-theme="light"]) #crewMap .cm-agent .agent-provider-icon[data-icon-provider] { color: #e8936f; }
+:root:not([data-theme="light"]) #crewMap .cm-agent .cn-badge .agent-model-label { color: var(--cm-text); font-weight: 600; }
+/* 队长: starlight silver; a white crest that glows, the live tally as lit pills */
+:root:not([data-theme="light"]) #crewMap .cm-node.kind-captain {
+  background-color: #141a37;
+  background-image: radial-gradient(60% 120% at 0 0, rgba(200, 210, 255, .16), transparent 70%), radial-gradient(50% 120% at 100% 100%, rgba(120, 140, 255, .12), transparent 70%), linear-gradient(180deg, var(--cm-sheen), transparent 46%);
+  border: 1.5px solid rgba(223, 229, 255, .55); border-radius: 18px;
+  box-shadow: 0 0 0 4px rgba(200, 210, 255, .06), 0 0 46px -12px rgba(190, 202, 255, .7), 0 14px 30px -16px rgba(0, 0, 0, .8);
+}
+:root:not([data-theme="light"]) #crewMap .cm-crest { color: #1a2150; background: linear-gradient(150deg, #ffffff, #d9e0ff 55%, #aebbf5); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), 0 0 26px -2px rgba(200, 212, 255, .6); }
+:root:not([data-theme="light"]) #crewMap .cm-node.kind-captain .cm-count { background: rgba(214, 222, 255, .05); border: 1px solid var(--cm-rim); }
+:root:not([data-theme="light"]) #crewMap .cm-node.kind-captain .cm-count.st-working { background: color-mix(in srgb, var(--cm-work) 11%, transparent); border-color: color-mix(in srgb, var(--cm-work) 34%, transparent); }
+:root:not([data-theme="light"]) #crewMap .cm-node.kind-captain .cm-count.st-input { background: color-mix(in srgb, var(--cm-need) 11%, transparent); border-color: color-mix(in srgb, var(--cm-need) 34%, transparent); }
+:root:not([data-theme="light"]) #crewMap .cm-node.kind-captain .cm-count.st-failed { background: color-mix(in srgb, var(--cm-fail) 10%, transparent); border-color: color-mix(in srgb, var(--cm-fail) 32%, transparent); }
+:root:not([data-theme="light"]) #crewMap .cm-node.kind-captain .cm-count.st-done { background: color-mix(in srgb, var(--cm-done) 8%, transparent); border-color: color-mix(in srgb, var(--cm-done) 26%, transparent); }
+:root:not([data-theme="light"]) #crewMap .cm-node.kind-captain .cm-count b { text-shadow: 0 0 14px color-mix(in srgb, var(--n) 62%, transparent); }
+:root:not([data-theme="light"]) #crewMap .cm-fleet { background: rgba(214, 222, 255, .07); }
+/* model and account: one compact capsule, the account in the reading face so it keeps more of its name */
+#crewMap .cm-agent { max-width: 178px; }
+#crewMap .cm-agent .cn-badge { max-width: 100%; }
+#crewMap .cm-agent .agent-seat-label { font-family: inherit !important; letter-spacing: 0 !important; max-width: 104px; }
+/* 队长's tally reads as separate pills, its name always in full white */
+#crewMap .cm-node.kind-captain .cm-count-sep { display: none; }
+#crewMap .cm-nodes .cm-node.kind-captain .cm-title { color: var(--cm-text); }
+/* by day: the porcelain frame wears its project's colour on its rim */
+:root[data-theme="light"] #crewMap .cm-pane { border-color: color-mix(in srgb, var(--pc) 45%, var(--cm-zone-rim)); }
 .cm-controls [aria-disabled="true"], .tbv-icon[aria-disabled="true"] { opacity: .45; cursor: default; }
 [data-motion-toggle] svg { width: 16px; height: 16px; stroke-width: 1.8; }
 /* Claude seats: account switching stays local to the Captain. */

@@ -159,6 +159,8 @@
         important: !isArchived && col.important === true,
         firstSentAt: sent.length ? Math.min(...sent) : 0,
         lastSentAt: sent.length ? Math.max(...sent) : 0,
+        // 最近动静: the last progress report (board-cli progress) or, before any, the start; not the terminal's output
+        activity: latest ? latest.progressAt || latest.startedAt || latest.sentAt || 0 : 0,
         ts: Math.max(latest ? latest.doneAt || latest.startedAt || latest.sentAt || 0 : 0, col.archivedAt || 0),
         files: latest && latest.receipt && Array.isArray(latest.receipt.files) ? latest.receipt.files.map(String) : [],
         returned: returnKind(latest || remembered, col.lastReceipt),
@@ -360,33 +362,56 @@
     const cols = Math.max(1, Math.min(count, cap));
     // Reviewed outputs sit next to the review row, avoiding cables through
     // intervening cards when the worker grid wraps.
-    if (workers.length > cols && reviewers.length) {
-      const targets = new Set(reviewers.flatMap((n) => n.reviews));
-      workers = [...workers.filter((n) => !targets.has(n.id)), ...workers.filter((n) => targets.has(n.id))];
-    }
-    workers = [...workers.filter((n) => crews.has(n.id)), ...workers.filter((n) => !crews.has(n.id))];
+    const targets = workers.length > cols && reviewers.length ? new Set(reviewers.flatMap((n) => n.reviews)) : new Set();
+    // Two groups: what still runs or waits on the user on top, what has ended below, the second
+    // starting on a row of its own (see GROUP_RANK). A 小队长 stands with its crew's busiest state.
+    const open = (n) => n.status in GROUP_RANK || (crews.get(n.id) || []).some(open);
+    const rank = (n) => (n.status in GROUP_RANK ? GROUP_RANK[n.status] : GROUP_RANK.working);
+    const at = new Map(workers.map((n, i) => [n.id, i]));
+    workers = [...workers].sort((a, b) => (open(b) - open(a))
+      || (open(a) ? rank(a) - rank(b) || (b.important === true) - (a.important === true) : 0)
+      || targets.has(a.id) - targets.has(b.id)            // reviewed outputs last in their group, next to the review row
+      || crews.has(b.id) - crews.has(a.id)                // a 小队长 and its crew first
+      || (open(a) ? (b.activity || b.ts || 0) - (a.activity || a.ts || 0)   // open: the latest activity first
+                  : (b.ts || 0) - (a.ts || 0))                         // ended: the newest end first
+      || at.get(a.id) - at.get(b.id));
     const slots = [], height = new Array(cols).fill(0);
     const put = (n, col, depth) => {
       slots.push({ n, col, row: height[col]++, depth });
       if (n) (crews.get(n.id) || []).forEach((k) => put(k, col, depth + 1));
     };
-    [...workers, ...(hasFold ? [null] : [])].forEach((n) => put(n, height.indexOf(Math.min(...height)), 0));
+    const first = workers.filter(open), rest = workers.filter((n) => !open(n));
+    first.forEach((n) => put(n, height.indexOf(Math.min(...height)), 0));
+    // the ended group starts on a fresh row (the last row of the open group may stand short)
+    const split = first.length && (rest.length || hasFold) ? Math.max(...height) : -1;
+    if (split > 0) height.fill(split);
+    [...rest, ...(hasFold ? [null] : [])].forEach((n) => put(n, height.indexOf(Math.min(...height)), 0));
     const workRows = Math.max(...height);
     reviewers.forEach((n, i) => slots.push({ n, col: i % cols, row: workRows + Math.floor(i / cols), depth: 0 }));
     const rowGap = Number.isFinite(o.rowGap) ? o.rowGap : o.gapY, reviewGap = Number.isFinite(o.reviewGap) ? o.reviewGap : o.gapY;
-    // a review row sits a little lower: the review lines turn in that gap
+    const groupGap = Number.isFinite(o.groupGap) ? o.groupGap : rowGap + 18;
+    // a review row sits a little lower: the review lines turn in that gap; the ended group a little
+    // lower again, a hairline across the frame in the middle of its gap
     const rows = [];
-    let top = 0;
+    let top = 0, splitY = 0;
     for (let r = 0; r < workRows + Math.ceil(reviewers.length / cols); r++) {
-      if (r) top += o.nodeH + (r >= workRows ? reviewGap : rowGap);
+      if (r) top += o.nodeH + (r >= workRows ? reviewGap : r === split ? groupGap : rowGap);
+      if (r === split) splitY = top - groupGap / 2;
       rows.push({ top, review: r >= workRows });
     }
     // A frame is never narrower than its own header (o.headW: what the project's whole name and its
     // tally need); the cards then stand centred in it, `inset` in from where they would start.
     const cardsW = cols * o.nodeW + (cols - 1) * o.gapX + 2 * o.padX;
     const w = Math.max(collapsed ? 320 : cardsW, Math.ceil((o.headW && o.headW[p.key]) || 0));
-    return { p, collapsed, cols, count, rows, slots, w, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), h: collapsed ? o.headH + 4 : o.headH + top + o.nodeH + o.padBottom };
+    return { p, collapsed, cols, count, rows, slots, w, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), split: split > 0 && !collapsed ? o.headH + splitY : 0, h: collapsed ? o.headH + 4 : o.headH + top + o.nodeH + o.padBottom };
   }
+  // Inside a frame, the open group in this order: waiting on an answer, working (高优 first, then the latest
+  // progress report), queued, failed (red enough to be seen at the foot of the group, never above live work);
+  // the ended group (done, stopped, idle) by when it ended, newest first. Not by a terminal's last output:
+  // a working one prints every second and the cards would never stand still.
+  const GROUP_RANK = { input: 0, working: 1, queued: 2, failed: 3 };
+  // the leftmost column's line runs down the middle of the frame's 1.5px outline: line and outline are one stroke
+  const RAIL_EDGE = 0.75;
   // frame() kept in sized (a Map, for one map and one set of options): the many arrangements tried for one window share them
   const sizedFrame = (sized, p, o, shown, cap) => { const k = cap + '\u0001' + p.key; if (!sized.has(k)) sized.set(k, frame(p, o, shown, cap)); return sized.get(k); };
   // headH: the frame's title strip, above its first row of cards; crewIn: how far a crew stands in
@@ -442,7 +467,7 @@
       lefts.push(x);
       let y = top;
       lane.forEach((f) => {
-        const g = { ...f.p, x, y, w: f.w, h: f.h, collapsed: f.collapsed, lane: li };
+        const g = { ...f.p, x, y, w: f.w, h: f.h, collapsed: f.collapsed, lane: li, split: f.split };
         groups.push(g);
         if (!f.collapsed) {
           // (off the grid a row stands centred in its frame; a frame with a crew keeps to its columns)
@@ -971,11 +996,19 @@
     // project's bus. Lines of a tree share their trunk and buses on purpose.
     const laneUse = new Map();
     const rails = lay.rails;
+    // each frame's leftmost card x (its first column)
+    const leftCard = new Map();
+    lay.nodes.forEach((nb) => { if (nb.project != null && (!leftCard.has(nb.project) || nb.x < leftCard.get(nb.project))) leftCard.set(nb.project, nb.x); });
     const items = map.edges.filter((e) => e.type === 'dispatch' && box(e.to)).map((e) => {
       const b = box(e.to);
       const n = status.get(e.to);
-      // with rails every card is entered from the line down the left of its column, the first row too
-      if (rails) return { e, b, n, side: true, rail: true, lx: b.x - rails.x, hx: b.x - rails.x };
+      // with rails every card is entered from the line down the left of its column, the first row too: the leftmost
+      // column's line runs down the frame's own left edge (line and outline one stroke), the others' in the gaps
+      if (rails) {
+        const g = lay.groups.find((x) => x.key === b.project);
+        const lx = g && Math.abs(b.x - leftCard.get(g.key)) < 0.5 ? g.x + RAIL_EDGE : b.x - rails.x;
+        return { e, b, n, side: true, rail: true, lx, hx: lx };
+      }
       const side = n.review || b.row > 1;
       // a review session is entered from the left, down the gap left of what it reviews
       const targets = n.review ? (reviewOf.get(e.to) || []).map(box) : [];
@@ -1128,7 +1161,9 @@
     const plan = pl && pl.lanes.length <= 50 && pl.lanes.every((l) => Array.isArray(l) && l.length <= 500 && l.every(key))
       ? { lanes: pl.lanes.map((l) => l.slice()), caps: Object.fromEntries(Object.entries(pl.caps || {}).filter(([k, v]) => key(k) && Number.isInteger(v) && v >= 1 && v <= 12)), tight: !!pl.tight, page: !!pl.page } : null;
     const zoom = Number.isFinite(s.zoom) && s.zoom > 0 ? Math.min(MAX_SCALE, Math.max(MIN_SCALE, s.zoom)) : null;
-    return { projectPositions, mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view, collapsedProjects, showReturn: !!s.showReturn, projectOrder, plan, zoom };
+    // each project's colour slot (assignSlots), kept so a project keeps its colour over restarts
+    const projectSlots = Object.fromEntries(Object.entries(s.projectSlots || {}).slice(0, SLOT_MEMORY).filter(([k, v]) => key(k) && Number.isInteger(v) && v >= 1 && v <= 99));
+    return { projectPositions, mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view, collapsedProjects, showReturn: !!s.showReturn, projectOrder, plan, zoom, projectSlots };
   }
   // The map's own zoom. Its 100% is BASE_SCALE of the canvas's drawn size (cards are drawn 280px wide
   // and shown 196px wide at 100%); the canvas, the saved view and every position stay in drawn units,
@@ -1155,6 +1190,35 @@
   // step keyed by the project name, so one project keeps one colour in every
   // view no matter which other projects are on screen. Case and surrounding
   // spaces do not count (AgentDeck = agentdeck). '' (其他) is the base hue.
+  // Colour slots: each project wears one of six fixed colours (--pc-1 … --pc-6 in the stylesheet), handed out the
+  // first time it shows and kept (config.crewMap.projectSlots), so a project never changes colour while it is on the
+  // map. assignSlots(keys on the map now, the remembered table) → the table to remember: a project keeps its slot; a
+  // newcomer takes the smallest slot neither on the map nor remembered by a project off it, else the smallest not on
+  // the map (that memory is let go); a seventh project at once takes slot 7, which wears the first colour again.
+  const SLOT_COLOURS = 6, SLOT_MEMORY = 24;
+  const slotKey = (key) => String(key == null ? '' : key).trim().toLowerCase();
+  function assignSlots(keys, prior) {
+    const table = { ...(prior || {}) }, shown = [...new Set((keys || []).map(slotKey))];
+    const held = new Map();   // slot -> the key on the map holding it
+    shown.forEach((k) => { const s = table[k]; if (Number.isInteger(s) && s > 0 && !held.has(s)) held.set(s, k); else delete table[k]; });
+    shown.filter((k) => !(k in table)).forEach((k) => {
+      const remembered = new Set(Object.entries(table).filter(([q]) => !shown.includes(q)).map(([, s]) => s));
+      let s = 1;
+      while (s <= SLOT_COLOURS && (held.has(s) || remembered.has(s))) s++;
+      if (s > SLOT_COLOURS) { s = 1; while (held.has(s)) s++; }
+      Object.keys(table).forEach((q) => { if (table[q] === s && !shown.includes(q)) delete table[q]; });
+      table[k] = s; held.set(s, k);
+    });
+    // the ones on the map last (most recent), and at most SLOT_MEMORY remembered: the longest unseen go first
+    const off = Object.keys(table).filter((q) => !shown.includes(q)), keep = {};
+    off.slice(Math.max(0, off.length + shown.length - SLOT_MEMORY)).forEach((q) => { keep[q] = table[q]; });
+    shown.forEach((k) => { keep[k] = table[k]; });
+    return keep;
+  }
+  function projectColor(key, table) {
+    const s = table && table[slotKey(key)];
+    return `var(--pc-${s ? ((s - 1) % SLOT_COLOURS) + 1 : 0})`;
+  }
   function projectHue(key) {
     const name = String(key == null ? '' : key).trim().toLowerCase();
     if (!name) return 210;
@@ -1163,5 +1227,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, PAGE_COLUMNS, PAGE_MIN_SCALE, PAGE_MAX_SCALE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, pockets, planPage, planAcross, arrangePage, fitBounds, fitLimits, readableScale, scalesFor, WRAP_GAIN, WRAP_KEEP, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, PAGE_COLUMNS, PAGE_MIN_SCALE, PAGE_MAX_SCALE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, assignSlots, projectColor, RAIL_EDGE, GROUP_RANK, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, pockets, planPage, planAcross, arrangePage, fitBounds, fitLimits, readableScale, scalesFor, WRAP_GAIN, WRAP_KEEP, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
 });
