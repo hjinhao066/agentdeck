@@ -848,7 +848,7 @@
       box.rows = 3; box.placeholder = '写下你的答案…'; box.setAttribute('aria-label', '你的答案');
       box.value = drafts.get(c.id) || '';
       const send = el('button', 'tbv-send', '发送答案');
-      send.type = 'button'; send.title = '把答案发给队长 (⌘/Ctrl+Enter)';
+      send.type = 'button'; send.title = `把答案发给队长 (${window.AppShortcutsCore.mod(host.platform === 'darwin')}Enter)`;
       box.oninput = () => { drafts.set(c.id, box.value); };
       box.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendAnswer(c, box, send); } });
       send.onclick = () => sendAnswer(c, box, send);

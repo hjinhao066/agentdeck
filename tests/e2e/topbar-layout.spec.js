@@ -96,7 +96,7 @@ test('top bar keeps only the core controls, the free layout is an icon and quota
     expect(await b.getAttribute('title')).toBeTruthy();
   }
   const g = await expectTidy();
-  expect(g.ids).toEqual(['boardViewBtn', 'navCollapseBtn', '新对话 (Cmd+N)', '0', '2', '3', '4', '5', 'globalViewToggle', 'sideToggleBtn']);
+  expect(g.ids).toEqual(['boardViewBtn', 'navCollapseBtn', `新对话 (${process.platform === 'darwin' ? '⌘N' : 'Ctrl+Shift+T'})`, '0', '2', '3', '4', '5', 'globalViewToggle', 'sideToggleBtn']);
   await expect(page.locator('#broadcastBtn')).toBeVisible(); // moved to the sidebar footer
   await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-name')).toHaveText('cn');   // the account behind the seat (cn@example.test)
   await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-captain svg')).toBeVisible();

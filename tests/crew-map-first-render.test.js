@@ -20,7 +20,7 @@ assert.ok(tail.includes('TaskBoardUI.init(') && tail.includes('showView(config.a
 function start(initMap) {
   const done = { taskBoard: false, tabs: [], view: null, logged: [] };
   const context = vm.createContext({
-    config: { activeView: 'board', archived: [] }, terms: new Map(), columns: [], activeView: 'board',
+    config: { activeView: 'board', archived: [] }, terms: new Map(), columns: [], activeView: 'board', env: { platform: 'win32' },
     columnLabel: (c) => c.id, lastActivityLine: () => '', saveConfig() {}, renderBoardGraph() {}, restoreBoardTerminal() {},
     restoreArchived() {}, whenMounted() {}, jumpToColumn() {}, showToast() {}, syncChromeState() {},
     MainSession: {}, ClaudeSeats: { described: () => [] }, Pages: { hide() {} }, Sidebar: { markPage() {} },

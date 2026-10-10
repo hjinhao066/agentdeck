@@ -254,7 +254,7 @@
     ui.status = el('span', 'sk-status');
     tools.append(ui.dirty, ui.status, el('span', 'tb-spacer'), btn('重新载入', reload));
     ui.save = btn('保存', save, 'primary');
-    ui.save.title = '保存 (⌘S)';
+    ui.save.title = `保存 (${window.AppShortcutsCore.mod(host.platform === 'darwin')}S)`;
     tools.appendChild(ui.save);
     box.appendChild(tools);
 

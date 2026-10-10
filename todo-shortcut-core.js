@@ -28,8 +28,12 @@
   };
   // On Windows a plain Ctrl+letter belongs to the terminal (Ctrl+C stops a
   // program, Ctrl+R searches history…), so a shortcut needs Shift or Alt too.
+  // AgentDeck's own Ctrl+Shift letters (app-shortcuts-core.js) are taken as well.
   const WIN_TAKEN = {
     'Shift+C': '终端复制', 'Shift+V': '终端粘贴',
+    'Shift+T': '新对话', 'Shift+W': '关闭当前列', 'Shift+F': '列内搜索', 'Shift+B': '广播输入',
+    'Shift+M': '终端架构图', 'Shift+J': '跳到等你回复的列', 'Shift+R': '重新载入界面', 'Shift+K': '搜索全部对话',
+    'Alt+F': '列内搜索',
   };
 
   function normalize(value) { return typeof value === 'string' && SHAPE.test(value) ? value : DEFAULT; }

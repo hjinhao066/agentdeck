@@ -24,6 +24,8 @@
     if (text != null) n.textContent = text;
     return n;
   }
+  // 新对话's shortcut as this platform writes it: ⌘N on a Mac, Ctrl+Shift+T on Windows.
+  function newKey() { return window.AppShortcutsCore.label('newColumn', host.platform === 'darwin'); }
   // Visually one line; the tooltip and accessible name keep the full title.
   function sessionLabel(text) {
     const label = el('span', 'cn-label', text);
@@ -102,7 +104,7 @@
     setTodoCount(todoOpen);
     todo.title = todoTitle();
     topEl.append(
-      navRow('new', 'newChat', '新对话', '⌘N', () => host.addAndFocusColumn()),
+      navRow('new', 'newChat', '新对话', newKey(), () => host.addAndFocusColumn()),
       captain,
       attention,
       tasks,
@@ -171,7 +173,7 @@
     listEl.appendChild(sectionHead('folders', '文件夹', null, [iconButton('folderPlus', '新建文件夹', () => createFolder(true))]));
     groups.forEach((g) => listEl.appendChild(folderBlock(g)));
 
-    listEl.appendChild(sectionHead('loose', '对话', loose.length || null, [iconButton('plus', '新对话 (⌘N)', () => host.addAndFocusColumn())]));
+    listEl.appendChild(sectionHead('loose', '对话', loose.length || null, [iconButton('plus', `新对话 (${newKey()})`, () => host.addAndFocusColumn())]));
     const looseBox = el('div', 'nav-group');
     looseBox.dataset.group = '';
     loose.forEach((col) => looseBox.appendChild(sessionRow(col)));

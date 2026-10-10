@@ -1713,7 +1713,7 @@
     const input = el('input');
     input.id = 'navSearch'; input.type = 'text'; input.placeholder = '搜索';
     input.autocomplete = 'off'; input.spellcheck = false;
-    const hint = el('span', 'nav-row-hint', '⌘K');
+    const hint = el('span', 'nav-row-hint', window.AppShortcutsCore.label('searchAll', host.platform === 'darwin'));
     const clear = el('button', 'ns-clear', '✕');
     clear.type = 'button'; clear.hidden = true; clear.title = '清除 (Esc)';
     wrap.append(ico, input, hint, clear);
@@ -1822,9 +1822,10 @@
   // ---- keyboard ----
   function initKeys() {
     document.addEventListener('keydown', (e) => {
-      if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (e.key === 'k' || e.key === 'K') { focusSearch(); }
-      else if (e.key === '\\') { window.SidePane.toggle(); }
+      // ⌘K / ⌘\ on a Mac, Ctrl+Shift+K / Ctrl+Shift+\ on Windows (AppShortcutsCore).
+      const hit = window.AppShortcutsCore.match(e, host.platform === 'darwin');
+      if (hit && hit.action === 'searchAll') focusSearch();
+      else if (hit && hit.action === 'sidePane') window.SidePane.toggle();
       else return;
       e.preventDefault(); e.stopPropagation();
     }, true);
