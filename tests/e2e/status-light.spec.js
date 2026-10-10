@@ -154,16 +154,21 @@ test('Claude background shell and monitor footer keeps the turn open and protect
     await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state), { timeout: 15000 }).toBe('done');
     await expect.poll(() => page.evaluate(() => ChatUI.turnsOf('silent-worker').at(-1)?.done), { timeout: 15000 }).toBe(true);
     expect(await page.evaluate(() => config.mainSession.tasks.at(-1).status)).toBe('working');
-    const fallback = await page.evaluate(() => {
-      const entry = terms.get('silent-worker'), task = config.mainSession.tasks.at(-1), now = Date.now();
-      task.endedAt = entry.lastOutputAt = now - 179000;
+    const beforeDeadline = await page.evaluate(() => {
+      const entry = terms.get('silent-worker'), task = config.mainSession.tasks.at(-1);
+      task.endedAt = entry.lastOutputAt = Date.now() - 179000;
       MainSession.onTick('silent-worker', entry);
-      const beforeDeadline = task.status;
-      task.endedAt = entry.lastOutputAt = now - 181000;
-      MainSession.onTick('silent-worker', entry);
-      return { beforeDeadline, status: task.status, source: task.receipt?.source, summary: task.receipt?.summary };
+      return task.status;
     });
-    expect(fallback).toEqual({ beforeDeadline: 'working', status: 'stopped', source: 'fallback', summary: '已结束，未提交回执' });
+    // Past the deadline the fallback also asks the process table whether a command Claude started is still
+    // running under the terminal; that answer comes back a moment later, so the ticks go on until it has.
+    await expect.poll(() => page.evaluate(() => {
+      const entry = terms.get('silent-worker'), task = config.mainSession.tasks.at(-1);
+      if (task.status === 'working') { task.endedAt = entry.lastOutputAt = Date.now() - 181000; MainSession.onTick('silent-worker', entry); }
+      return task.status;
+    }), { timeout: 15000 }).toBe('stopped');
+    const fallback = await page.evaluate(() => { const task = config.mainSession.tasks.at(-1); return { status: task.status, source: task.receipt?.source, summary: task.receipt?.summary }; });
+    expect({ beforeDeadline, ...fallback }).toEqual({ beforeDeadline: 'working', status: 'stopped', source: 'fallback', summary: '已结束，未提交回执' });
   } finally {
     await page.evaluate((cmd) => { const col = columns.find((c) => c.id === 'silent-worker'); if (col) col.cmd = cmd; }, statusAgent);
   }
