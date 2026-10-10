@@ -1739,10 +1739,10 @@ app.whenReady().then(async () => {
     backups: tudArg ? [] : [path.join(HOME, 'Library/Caches/AgentDeck-install-backups')],
   });
   // Prune replays for columns that no longer exist in the saved layout.
+  // Nothing is pruned while config.json or archived.json cannot be read.
   try {
-    const cfg = ArchiveRecovery.withArchive(JSON.parse(fs.readFileSync(configPath, 'utf-8')), archivePath);
-    const ids = new Set([...((cfg && cfg.columns) || []), ...((cfg && cfg.archived) || [])].map((c) => c && c.id));
-    for (const f of fs.readdirSync(SESS_DIR)) {
+    const ids = ArchiveRecovery.replayIdsToKeep({ configPath, archivePath });
+    if (ids) for (const f of fs.readdirSync(SESS_DIR)) {
       if (!ids.has(f.replace(/\.txt$/, ''))) fs.unlinkSync(path.join(SESS_DIR, f));
     }
   } catch (_) {}

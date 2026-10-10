@@ -121,6 +121,9 @@ function createArchiveWriter({ configPath, archivePath = archivePathFor(configPa
       delete cfg.archived;
       if (!disk) {
         const stored = readArchive(archivePath);
+        // A file that is there but cannot be read is copied aside before anything is written over it:
+        // the page then holds no archive and its first save would replace it with an empty list.
+        if (!stored && fs.existsSync(archivePath)) { try { fs.copyFileSync(archivePath, `${archivePath}.unreadable-${Date.now()}`); } catch (_) {} }
         disk = stored ? { text: JSON.stringify(stored), ids: idsOf(stored) } : { text: null, ids: new Set() };
       }
       if (text !== null && text !== disk.text && text !== pending?.text) {
@@ -142,6 +145,17 @@ function createArchiveWriter({ configPath, archivePath = archivePathFor(configPa
       writeConfig({ ...cfg, archived: pending.list });
     },
   };
+}
+
+// The ids whose saved terminal output the launch prune keeps: the open columns and the archive.
+// null (prune nothing) when config.json or an existing archived.json cannot be read: an archive
+// taken for empty would delete every archived session's replay.
+function replayIdsToKeep({ configPath, archivePath = archivePathFor(configPath) }) {
+  const config = readJson(configPath);
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
+  if (fs.existsSync(archivePath) && readArchive(archivePath) === null) return null;
+  const cfg = withArchive(config, archivePath);
+  return new Set([...(cfg.columns || []), ...(cfg.archived || [])].filter(hasId).map((c) => c.id));
 }
 
 // Older copies of config.json, newest first: the ones left beside it (config.json.bak-…,
@@ -242,4 +256,4 @@ function recover({ configPath, archivePath, chatDir, backups, now }) {
   } catch (_) { return { added: 0 }; }
 }
 
-module.exports = { scan, recover, oldConfigs, recordsFrom, ARCHIVE_FILE, archivePathFor, readArchive, mergeArchive, withArchive, migrate, createArchiveWriter };
+module.exports = { scan, recover, oldConfigs, recordsFrom, ARCHIVE_FILE, archivePathFor, readArchive, mergeArchive, withArchive, migrate, createArchiveWriter, replayIdsToKeep };
