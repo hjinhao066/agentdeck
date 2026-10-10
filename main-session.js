@@ -2119,7 +2119,8 @@
             restartWatch?.sent(col.id, Date.now(), resumeText + M.RECEIPT_CONTRACT, !!host.terms.get(col.id)?.promptSettledAt);
             resumeManifest.claims[col.id] = { phase: 'sent', runId: resumeRun, taskId: task.id, mode: entry.mode, at: Date.now() };
             for (const t of state().tasks) {
-              if (t.colId !== col.id || !R.shouldResume(t) || t === task) continue;
+              // only its unsent supplements went in with this message; an older task that ran and ended stays as it was
+              if (t.colId !== col.id || !R.shouldResume(t) || R.provisionalStop(t) || t === task) continue;
               t.instructionSent = true;
               t.status = 'done';
               t.doneAt = Date.now();
