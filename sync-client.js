@@ -7,6 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
 const { MUTABLE_KEYS, isDeviceId, isSessionId, stripSecrets, LEASE_MS } = require('./shared-store');
+const FleetUsage = require('./fleet-usage-core');
 
 const SYNC_MS = 10_000;
 const HEARTBEAT_MS = 15_000;
@@ -20,6 +21,11 @@ const FLUSH_BATCH = 50;
 const PLAIN_MAX = 1_900_000;
 const PART_CHARS = 256 * 1024;
 const TOO_BIG = '同步失败：这段对话超过 2 MB，同步服务版本太旧传不了，升级同步服务后会自动补上';
+// This machine's Token 用量 summary goes up at most this often (each upload leaves the
+// hub a ~200-byte receipt for 30 days).
+const USAGE_EVERY_MS = 15 * 60_000;
+const USAGE_DELAY_MS = 2 * 60_000;
+const USAGE_SCAN_MS = 30 * 60_000;
 const turnHash = (turn) => crypto.createHash('sha256').update(JSON.stringify(turn)).digest('hex');
 
 function clip(value, max) {
@@ -83,7 +89,13 @@ function readFleetSettings({ env = {}, fleetFile } = {}) {
   const pathname = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
   const delay = Number(env.AGENTDECK_FLEET_START_DELAY_MS);
   const startDelayMs = env.AGENTDECK_FLEET_START_DELAY_MS !== undefined && Number.isInteger(delay) && delay >= 0 && delay <= 600_000 ? delay : START_DELAY_MS;
-  return { baseUrl: url.origin + pathname, tokenFile, syncMs: clampMs(env.AGENTDECK_FLEET_SYNC_MS, SYNC_MS), startDelayMs };
+  // Token 用量: the first scan for the other machine, then one every half hour, and how
+  // often a changed summary may go up. Tests shorten them.
+  const ms = (name, fallback) => { const n = Number(env[name]); return env[name] !== undefined && Number.isInteger(n) && n >= 0 && n <= 86_400_000 ? n : fallback; };
+  return {
+    baseUrl: url.origin + pathname, tokenFile, syncMs: clampMs(env.AGENTDECK_FLEET_SYNC_MS, SYNC_MS), startDelayMs,
+    usageDelayMs: ms('AGENTDECK_FLEET_USAGE_DELAY_MS', USAGE_DELAY_MS), usageScanMs: Math.max(1000, ms('AGENTDECK_FLEET_USAGE_SCAN_MS', USAGE_SCAN_MS)), usageEveryMs: ms('AGENTDECK_FLEET_USAGE_MS', USAGE_EVERY_MS),
+  };
 }
 function loadDevice(file) {
   try {
@@ -103,7 +115,7 @@ function summaryOf(turns) {
 }
 
 class FleetClient {
-  constructor({ baseUrl, tokenFile, device, taskStore, historyDir, stateFile, sessions = () => [], version = '', syncMs = SYNC_MS, fetchImpl = globalThis.fetch, onChange = () => {} } = {}) {
+  constructor({ baseUrl, tokenFile, device, taskStore, historyDir, stateFile, sessions = () => [], version = '', syncMs = SYNC_MS, fetchImpl = globalThis.fetch, onChange = () => {}, usageFile = null, usageEveryMs = USAGE_EVERY_MS, now = () => Date.now() } = {}) {
     if (!baseUrl || !tokenFile || !device || !isDeviceId(device.id) || !taskStore || !historyDir || !stateFile) throw new Error('Fleet client is missing its data directories.');
     this.baseUrl = String(baseUrl).replace(/\/$/, '');
     this.tokenFile = tokenFile;
@@ -136,6 +148,18 @@ class FleetClient {
     this.keptHistory = new Set();
     this.unmigrated = [];
     this.savedSyncAt = null;
+    // Token 用量: the other machines' summaries by device (kept in their own file so
+    // an offline machine's last numbers survive a restart), and this machine's
+    // latest summary waiting for its turn to go up.
+    this.usageFile = usageFile || path.join(path.dirname(stateFile), path.basename(stateFile, '.json') + '-usage.json');
+    this.usageEveryMs = usageEveryMs;
+    this.now = now;
+    this.usage = new Map();
+    this.usageStamps = new Map();
+    this.usageItem = null;
+    this.usageSentAt = -Infinity;
+    this.usageSentHash = null;
+    this._loadUsage();
     this._load();
     this._seedTasks();
   }
@@ -264,6 +288,75 @@ class FleetClient {
       startedAt: times.length ? new Date(Math.min(...times)).toISOString() : null,
       endedAt: times.length ? new Date(Math.max(...times)).toISOString() : null,
     });
+  }
+  // This machine's Token 用量 summary (FleetUsage.summarize of its own scan). The
+  // newest one waits for its turn; an unchanged one is not sent again.
+  noteUsage(summary) {
+    if (!summary || typeof summary !== 'object') return;
+    const turns = stripSecrets(FleetUsage.turnsOf(summary));
+    const contentHash = crypto.createHash('sha256').update(JSON.stringify(turns)).digest('hex');
+    if (contentHash === this.usageSentHash || contentHash === this.usageItem?.contentHash) return;
+    this.usageItem = {
+      opId: 'op-' + crypto.randomUUID(), sessionId: FleetUsage.USAGE_SESSION, contentHash, turns,
+      summary: FleetUsage.LABEL, startedAt: FleetUsage.EPOCH, endedAt: FleetUsage.EPOCH,
+    };
+  }
+  async _flushUsage(token) {
+    const item = this.usageItem;
+    if (!item || this.now() - this.usageSentAt < this.usageEveryMs) return null;
+    try {
+      await this._uploadHistory(token, item);
+      this.usageSentAt = this.now();
+      this.usageSentHash = item.contentHash;
+      if (this.usageItem === item) this.usageItem = null;
+      return null;
+    } catch (err) { return err; }
+  }
+  _loadUsage() {
+    try {
+      const saved = JSON.parse(fs.readFileSync(this.usageFile, 'utf8'));
+      for (const [id, u] of Object.entries((saved && saved.devices) || {})) {
+        const summary = isDeviceId(id) && u ? FleetUsage.clean(u.summary) : null;
+        if (summary) this.usage.set(id, { summary, updatedAt: typeof u.updatedAt === 'string' ? u.updatedAt : null, contentHash: String(u.contentHash || '') });
+      }
+    } catch (_) {}
+  }
+  _saveUsage() {
+    const devices = {};
+    for (const [id, u] of this.usage) devices[id] = u;
+    try { atomicWrite(this.usageFile, JSON.stringify({ devices }) + '\n'); } catch (_) {}
+  }
+  // The other machines' summaries the hub names: each fetched only when its hash or
+  // time changed; one the hub no longer has goes.
+  async _readUsage(token, heads) {
+    let changed = false;
+    const listed = new Set();
+    for (const head of heads) {
+      if (!isDeviceId(head.deviceId)) continue;
+      // this machine's own copy: what the hub has needs no second upload
+      if (head.deviceId === this.device.id) {
+        this.usageSentHash = head.contentHash;
+        if (this.usageItem && this.usageItem.contentHash === head.contentHash) this.usageItem = null;
+        continue;
+      }
+      listed.add(head.deviceId);
+      const stamp = head.contentHash + '|' + (head.updatedAt || '');
+      const known = this.usage.get(head.deviceId);
+      if (this.usageStamps.get(head.deviceId) === stamp) continue;
+      if (known && known.contentHash + '|' + (known.updatedAt || '') === stamp) { this.usageStamps.set(head.deviceId, stamp); continue; }
+      let record = Array.isArray(head.turns) ? head : null;
+      if (!record) {
+        const query = new URLSearchParams({ sessionId: head.sessionId, deviceId: head.deviceId });
+        record = (await this._send(token, 'GET', '/v1/history?' + query)).body.record;
+      }
+      const summary = record && record.deviceId === head.deviceId ? FleetUsage.fromRecord(record) : null;
+      this.usageStamps.set(head.deviceId, stamp);
+      if (!summary) { if (this.usage.delete(head.deviceId)) changed = true; continue; }
+      this.usage.set(head.deviceId, { summary, updatedAt: head.updatedAt || null, contentHash: head.contentHash });
+      changed = true;
+    }
+    for (const id of [...this.usage.keys()]) if (!listed.has(id)) { this.usage.delete(id); this.usageStamps.delete(id); changed = true; }
+    if (changed) this._saveUsage();
   }
   _safeError(err, token) {
     let message = err && err.message ? String(err.message) : '同步失败';
@@ -424,8 +517,11 @@ class FleetClient {
     fs.mkdirSync(this.historyDir, { recursive: true, mode: 0o700 });
     const keep = new Set();
     const summaries = [];
+    const usage = [];
     for (let record of records) {
       if (!record || !isSessionId(record.sessionId) || !isDeviceId(record.deviceId)) continue;
+      // Token 用量 summaries ride the same channel; they are not 队长记录.
+      if (record.sessionId === FleetUsage.USAGE_SESSION) { usage.push(record); continue; }
       const name = record.sessionId + '--' + record.deviceId + '.json';
       keep.add(name);
       const head = record;
@@ -454,6 +550,7 @@ class FleetClient {
       if (!keep.has(name) && name.endsWith('.json')) { fs.unlinkSync(path.join(this.historyDir, name)); this.writtenHistory.delete(name); this.historyStamps.delete(name); }
     }
     if (!same(this.history, summaries)) { this.history = summaries; this.dirty = true; }
+    await this._readUsage(token, usage);
   }
   async _pull(token) {
     // Transcripts come named by hash; only changed ones are fetched (an older hub
@@ -500,8 +597,9 @@ class FleetClient {
       this.devices = beat.body.devices || this.devices;
       const taskFailure = await this._flushTasks(token);
       const historyFailure = await this._flushHistory(token);
+      const usageFailure = await this._flushUsage(token);
       await this._pull(token);
-      const failure = taskFailure || historyFailure;
+      const failure = taskFailure || historyFailure || usageFailure;
       this.error = failure ? this._safeError(failure, token) : null;
       if (!failure) this.lastSyncAt = new Date().toISOString();
     } catch (err) {
@@ -543,6 +641,12 @@ class FleetClient {
     } catch (_) {}
     return { configured: true, selfId: this.device.id, devices: this.devices, error: this.error, lastSyncAt: this.lastSyncAt, history: this.history, conflictCount };
   }
+  // What the Token 用量 chart needs to show another machine (FleetUsage.machine).
+  usageSnapshot() {
+    const usage = {};
+    for (const [id, u] of this.usage) usage[id] = { summary: u.summary, updatedAt: u.updatedAt };
+    return { configured: true, selfId: this.device.id, devices: this.devices, error: this.error, lastSyncAt: this.lastSyncAt, usage };
+  }
 }
 
-module.exports = { FleetClient, readFleetSettings, loadDevice, readToken, SYNC_MS, HEARTBEAT_MS, LEASE_MS, START_DELAY_MS };
+module.exports = { FleetClient, readFleetSettings, loadDevice, readToken, SYNC_MS, HEARTBEAT_MS, LEASE_MS, START_DELAY_MS, USAGE_EVERY_MS };

@@ -4510,6 +4510,40 @@ dialog .todo-quick-input, dialog .todo-quick-input:focus { height: 100%; padding
 .tu-legend-item { display: inline-flex; align-items: center; gap: 7px; min-height: 24px; font-size: 12.5px; color: var(--tbv-ink-2); cursor: default; white-space: nowrap; }
 .tu-legend-name { color: var(--tbv-ink); }
 .tu-legend-num { color: var(--tbv-ink-3); font-variant-numeric: tabular-nums; }
+/* The chart's head: the legend, and at its right the small Mac | Windows switch with
+   how old the other machine's numbers are. The dot on the other machine's button:
+   blue glow has numbers, grey old numbers or none yet, amber cannot have any yet. */
+.tu-chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px 14px; margin: 0 4px 6px; }
+.tu-chart-head .tu-legend { flex: 1 1 auto; min-width: 0; margin: 0; }
+.tu-machine-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.tu-machine-note { font-size: 11.5px; color: var(--tbv-ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; cursor: default; }
+.tu-machine-note:empty { display: none; }
+.tu-range.tu-machine { padding: 2px; border-radius: 8px; }
+.tu-range.tu-machine[hidden] { display: none; }
+.tu-machine button { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 6px; font-size: 11.5px; letter-spacing: .01em; }
+.tu-machine button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tu-machine-dot { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.5px var(--tbv-ink-3); }
+.tu-machine-dot[data-state="self"] { display: none; }
+.tu-machine-dot[data-state="ok"] { background: var(--tbv-wire-hi); box-shadow: 0 0 6px color-mix(in srgb, var(--tbv-wire-hi) var(--tbv-glow), transparent); }
+.tu-machine-dot[data-state="stale"] { background: var(--tbv-ink-3); box-shadow: none; }
+.tu-machine-dot[data-state="warn"] { background: var(--tbv-doing-lit); box-shadow: 0 0 6px color-mix(in srgb, var(--tbv-doing-lit) var(--tbv-glow), transparent); }
+/* Another machine without numbers: why, in the chart's place (never empty columns). */
+.tu-off {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; height: 300px; padding: 0 28px;
+  border-radius: 10px; background: var(--tbv-chip); box-shadow: inset 0 0 0 1px var(--tbv-line); text-align: center;
+}
+.tu-off[hidden], .tu-view.off .tu-chart, .tu-day[hidden] { display: none; }
+.tu-off-icon {
+  display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 4px; border-radius: 50%;
+  color: var(--tbv-ink-2); background: var(--tbv-glass); box-shadow: inset 0 0 0 1px var(--tbv-rim);
+}
+.tu-off-icon svg { width: 19px; height: 19px; }
+.tu-off:is([data-state="old"], [data-state="missing"], [data-state="unconfigured"]) .tu-off-icon {
+  color: var(--tbv-doing); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tbv-doing-lit) 45%, transparent), 0 0 18px -4px color-mix(in srgb, var(--tbv-doing-lit) var(--tbv-glow), transparent);
+}
+.tu-off[data-state="error"] .tu-off-icon { color: var(--tbv-fail); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tbv-fail-lit) 45%, transparent); }
+.tu-off-title { font-size: 14px; font-weight: 650; color: var(--tbv-ink); }
+.tu-off-detail { max-width: 460px; font-size: 12.5px; line-height: 1.55; color: var(--tbv-ink-3); overflow-wrap: anywhere; }
 .tu-swatch { flex: 0 0 10px; width: 10px; height: 10px; border-radius: 3px; background: var(--tu-other); }
 .tu-swatch[data-slot="sky"] { background: var(--tu-sky); } .tu-swatch[data-slot="deep"] { background: var(--tu-deep); }
 .tu-swatch[data-slot="rust"] { background: var(--tu-rust); } .tu-swatch[data-slot="amber"] { background: var(--tu-amber); }
@@ -4606,5 +4640,7 @@ dialog .todo-quick-input, dialog .todo-quick-input:focus { height: 100%; padding
   .tu-provider-num { font-size: 18px; }
   .tu-value-row { grid-template-columns: minmax(0, 1fr); }
   .tu-value-cycle { justify-content: flex-start; }
-  .tu-chart { height: 260px; }
+  .tu-chart, .tu-off { height: 260px; }
+  .tu-chart-head { flex-wrap: wrap; }
+  .tu-machine-bar { order: -1; width: 100%; justify-content: flex-end; }
 }

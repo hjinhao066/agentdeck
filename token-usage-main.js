@@ -9,13 +9,15 @@ const path = require('path');
 const MAX_AGE = 60 * 1000;          // a scan younger than this answers a plain get
 const SCAN_TIMEOUT = 3 * 60 * 1000; // a first scan of a busy machine takes ~10 s
 
-function createTokenUsage({ run, now = () => Date.now(), maxAge = MAX_AGE }) {
+// onResult: every new scan, also handed to the two-machine sync (fleet-usage-core.js).
+function createTokenUsage({ run, now = () => Date.now(), maxAge = MAX_AGE, onResult = () => {} }) {
   let last = null, lastAt = 0, pending = null;
   function get({ fresh = false } = {}) {
     if (!fresh && last && now() - lastAt < maxAge) return Promise.resolve(last);
     if (pending) return pending;
     pending = Promise.resolve().then(run).then((result) => {
       last = result; lastAt = now();
+      try { onResult(result); } catch (_) {}
       return result;
     }).finally(() => { pending = null; });
     return pending;
@@ -57,8 +59,9 @@ function seatList(seats, home, test = false) {
 }
 
 // A test profile reads only <userData>/usage-home and never the real seats.
-function registerTokenUsageIpc({ handleMain, home, userData, getSeats = () => [], test = false, run = forkScan }) {
+function registerTokenUsageIpc({ handleMain, home, userData, getSeats = () => [], test = false, run = forkScan, onResult }) {
   const usage = createTokenUsage({
+    onResult,
     run: () => run({ home, cacheFile: path.join(userData, 'token-usage-cache.json'), extraClaude: test ? [] : seatDirs(getSeats(), home), seats: seatList(getSeats(), home, test) }),
   });
   handleMain('token-usage:get', (_e, payload) => usage.get({ fresh: payload?.fresh === true }));

@@ -132,6 +132,7 @@
       "token-usage-worker.js",
       "token-usage-main.js",
       "token-usage-ui.js",
+      "fleet-usage-core.js",
       "token-prices.json",
       "release-notes.json",
       "release-notes-ui.js",

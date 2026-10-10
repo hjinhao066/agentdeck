@@ -108,7 +108,9 @@ async function launch(config = {}) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-token-usage-'));
   fixture = seed(path.join(profile, 'usage-home'));
   seedSeats(path.join(profile, 'seats-home'), fixture.today);
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', columns: [], ...config }));
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark',
+    // never an empty column list: that falls back to the default agents (agy, Grok and their sign-in pages)
+    columns: [{ id: 'col-shell', title: '终端', cmd: '', cwd: profile, width: 460, role: 'manual' }], ...config }));
   const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
   application = await electron.launch({
