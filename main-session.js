@@ -1288,7 +1288,7 @@
       return Bat() ? Bat().withTaskNote(joined, Bat().shared.active()) : joined;
     }, {
       cancelled: () => batch.cancelled || batch.items.every((i) => i.task.status === 'stopped' || i.task.status === 'failed'),
-      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, requireIdle: true, timeout: 30 * 60_000, keepWaiting: true,
+      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, requireIdle: true, timeout: supplement ? SUPPLEMENT_NOTICE : 30 * 60_000, keepWaiting: true,
       onSent: (turn) => {
         if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
         if (batch.cancelled || sentItems.every((i) => i.task.status === 'stopped' || i.task.status === 'failed')) return;
@@ -1315,12 +1315,26 @@
       },
       onWaiting: (reason) => {
         const task = batch.items.find((i) => i.task.status === 'queued')?.task;
-        const why = reason || '会话还没准备好接收指令';
-        if (task) { push(task, { summary: `补充指令等待超过 30 分钟，仍在排队：${why}`, source: 'queue' }); save(); }
+        if (!task) return;
+        const summary = supplement
+          ? `补充指令等了 ${SUPPLEMENT_NOTICE / 60_000} 分钟还没送到，仍在排队：${supplementWait(col, reason)}。它停下后会合并送达；急事用 tell --now。`
+          : `补充指令等待超过 30 分钟，仍在排队：${reason || '会话还没准备好接收指令'}`;
+        push(task, { summary, source: 'queue' }); save();
       },
       onDeferred: () => { batch.sending = false; },
     });
     return task;
+  }
+  // An addition waits for the worker's turn to end; after this long the Captain hears why, once.
+  const SUPPLEMENT_NOTICE = 5 * 60_000;
+  function supplementWait(col, reason) {
+    const entry = host.terms.get(col.id);
+    const why = reason || '会话还没准备好接收指令';
+    if (!(entry && (M.workingForSend(entry) || M.terminalActivity(entry.lastScreen, col.cmd) === 'working'))) return why;
+    const running = state().tasks.findLast((t) => t.colId === col.id && t.status === 'working' && t.startedAt);
+    if (!running) return why + '，队员这一轮还在跑';
+    const said = window.BoardCore.cleanText(running.progress, 200).replace(/\s+/g, ' ').trim();
+    return `${why}，队员这一轮已跑 ${Math.max(1, Math.round((Date.now() - running.startedAt) / 60_000))} 分钟${said ? `，最后进度：${said}` : ''}`;
   }
   function cancelSupplement(colId) {
     const batch = dispatches.get(colId);

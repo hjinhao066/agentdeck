@@ -116,7 +116,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   (`archiveColumn` shows a notice and stops). The automatic archive reads the terminal itself one more time
   before it ends one. The Captain's explicit capability-checked
   `archive --id` command can end and archive a busy worker without confirmation;
-  `stop --id` only sends Esc and cancels unsent supplements. Quota waits stay open
+  `stop --id` only sends Esc and cancels unsent supplements. A `tell` to a worker still in
+  its turn waits for the turn to end (never typed over it); after 5 minutes the 队长 is told
+  why, once. Urgent: `tell --now`. Quota waits stay open
   and block automatic delivery; assigned tasks receive failure receipts with the
   provider reason. Work that cannot go in because the
   session sits on a startup dialog is reported to the 队长 once, never typed into it.

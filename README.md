@@ -669,8 +669,11 @@ again with the current provider, model and effort instructions.
   does not connect them. Claude's existing listener channel is unchanged.
   An instruction added to a session that is still busy
   shows as 待补充 and goes in when the session frees up.
-  It does not expire while waiting: after 30 minutes the Captain receives a
-  single 仍在排队 reminder, and delivery continues waiting for an idle prompt.
+  It does not expire while waiting: after 5 minutes the Captain receives a
+  single reminder saying why (the worker's turn is still running, for how long,
+  with its last progress; or a confirmation prompt, a quota wait, a draft in its
+  box), and delivery continues waiting for an idle prompt. For something urgent
+  use `tell --now`.
   If the session exits or becomes unavailable, its failure card keeps the full
   unsent instruction. The receipt includes `read --id <task-id>` to retrieve it
   even after the worker has gone; unsent text is not in the worker's chat history.
