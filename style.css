@@ -3333,11 +3333,6 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #crewMap .cm-lead { background: color-mix(in srgb, var(--pc) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc) 50%, transparent); }
 #crewMap .cm-lead svg { color: var(--pc); }
 #crewMap .cm-pocket { fill: color-mix(in srgb, var(--pc) 7%, var(--cm-zone)); stroke: color-mix(in srgb, var(--pc) 45%, transparent); }
-/* 高优: a white tag, its words and flag in deep blue, so no project's colour can pass for it */
-#crewMap .cm-prio { background: #eef3ff; color: #1f4fd6; box-shadow: 0 1px 6px -2px rgba(150, 175, 255, .5); }
-#crewMap .cm-node:is(.st-done, .st-stopped, .st-idle) .cm-prio { background: rgba(255, 255, 255, .1); color: #e6ebff; box-shadow: none; }
-:root[data-theme="light"] #crewMap .cm-prio { background: #1f4fd6; color: #fff; box-shadow: none; }
-:root[data-theme="light"] #crewMap .cm-node:is(.st-done, .st-stopped, .st-idle) .cm-prio { background: #e3e8f7; color: #1f4fd6; }
 /* the frame hangs off its line: the line comes down the frame's left edge, so that corner is square */
 #crewMap .cm-pane:not(.collapsed) { border-top-left-radius: 3px; }
 /* the hairline between a frame's open cards (on top) and its ended ones (below), in the gap between them */
