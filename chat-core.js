@@ -553,6 +553,16 @@
     return new TextDecoder('utf-8').decode(b);
   }
 
+  // A path typed into a terminal: bare when it is plain, else single-quoted for the
+  // column's shell. PowerShell (Windows columns) doubles a quote inside and also ends
+  // the string at ‘ ’ ‚ ‛; a POSIX shell closes the string, escapes it and reopens.
+  function shellQuote(p, platform) {
+    const s = String(p);
+    if (/^[A-Za-z0-9_./:@%+,=-]+$/.test(s)) return s;
+    if (platform === 'win32') return "'" + s.replace(/['‘’‚‛]/g, '$&$&') + "'";
+    return "'" + s.replace(/'/g, "'\\''") + "'";
+  }
+
   // ---- deliveries: the files the crew listed in their receipts, by project ----
   // One file per path. A Windows path ignores case and slash direction, "~" is
   // the home folder, and a trailing ":line" or slash does not make a new file.
@@ -649,7 +659,7 @@
   }
 
   return {
-    normalizeViewMode, toggleGlobalView, RENDER_STEP, passesInputHold, visibleWidth, collectArtifacts, artifactName, pathKey, decodeText, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, promptLeftInBox, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, passesInputHold, visibleWidth, collectArtifacts, artifactName, pathKey, decodeText, shellQuote, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, promptLeftInBox, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
     // the reply as the chat view shows it

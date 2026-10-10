@@ -2578,12 +2578,8 @@ function openLink(m, event, colId, cont) {
   SidePane.openLink(m, event, colId, cont);
 }
 
-// Quote a path for the shell: leave simple paths bare, single-quote anything
-// with spaces or special characters (escaping embedded single quotes).
-function shellQuote(p) {
-  if (/^[A-Za-z0-9_./:@%+,=-]+$/.test(p)) return p;
-  return "'" + p.replace(/'/g, "'\\''") + "'";
-}
+// Quote a path for the column's shell (PowerShell on Windows): ChatCore.shellQuote.
+function shellQuote(p) { return ChatCore.shellQuote(p, env.platform); }
 
 // ---- Resize handle ----
 function attachResize(handle, wrap, col) {
