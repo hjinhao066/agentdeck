@@ -27,7 +27,8 @@ function fixture(t, sessions = () => []) {
 }
 
 // ---- who may review: a fresh Claude session, by the quota reading; never another provider ----
-const SEATS = [{ id: 'cn', label: 'CN' }, { id: 'us', label: 'US' }, { id: 'us2', label: 'US2' }];
+// a seat is named by the account signed in behind it (the part of the e-mail before the @), never CN / US / US2
+const SEATS = [{ id: 'cn', label: 'hjinhao066' }, { id: 'us', label: 'jinhao.h.sub' }, { id: 'us2', label: 'hjinhao066us' }];
 // stanceOf over a table: { cn: 'out', ... } by seat id for Claude commands; anything else 'ok'.
 const bySeat = (table) => (cmd, seatId) => (/^claude/.test(cmd) ? table[seatId] || 'ok' : 'ok');
 test('a card that is not simple is reviewed by Opus 5.5, a simple one by Sonnet 5.5, in a new Claude session', () => {
@@ -63,7 +64,7 @@ test('a Claude seat that is out is skipped, the first one with room is taken, an
   // every seat out or broken: nobody, with a reason that names each
   const none = pick({ cn: 'out', us: 'out', us2: 'error' });
   assert.equal(none.cmd, undefined); assert.match(none.reason, /^没有可用的审查者/);
-  assert.match(none.reason, /Claude Opus 5\.5（CN）：额度用尽/); assert.match(none.reason, /（US2）：登录或额度查询出错/);
+  assert.match(none.reason, /Claude Opus 5\.5（hjinhao066）：额度用尽/); assert.match(none.reason, /（hjinhao066us）：登录或额度查询出错/);
 });
 test('Gemini, agy and Codex quota never matter to the reviewer, and a stand-in candidate table is judged by the same reading', () => {
   // exhausted Gemini and stale Codex change nothing

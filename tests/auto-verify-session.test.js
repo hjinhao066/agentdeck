@@ -888,6 +888,33 @@ test('a seat with a damaged credential reads as error and is never the unverifie
   await app2.scan();
   assert.equal(app2.reviewers(card2).length, 0); assert.match(app2.card(card2.id).review_block.reason, /登录或额度查询出错/);
 });
+// A seat goes by its account in what the Captain reads (the user's rule of 2026-10-08): the part of the e-mail before the @,
+// no flag, no CN / US / US2; a directory nobody is known to be signed in at reads 未登录. `--seat us` stays in commands.
+test('every seat out: the review reason, review_block and the notice to the Captain name the accounts, not CN / US or a flag', async (t) => {
+  const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();
+  w.seatInfos = [{ id: 'cn', loggedIn: true, loginEmail: 'hjinhao066@gmail.com' }, { id: 'us', loggedIn: true, loginEmail: 'jinhao.h.sub@gmail.com' }];
+  const card = await newCard(app, { important: true });
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  reading(w, 'cn', 0, 60); reading(w, 'us', 0, 60);
+  await app.scan();
+  assert.equal(app.reviewers(card).length, 0);
+  const reason = app.card(card.id).review_block.reason;
+  assert.match(reason, /Claude Opus 5\.5（hjinhao066）：额度用尽/); assert.match(reason, /Claude Opus 5\.5（jinhao\.h\.sub）：额度用尽/);
+  const notice = app.notices().find((n) => n.includes('不能自动开审查会话'));
+  assert.ok(notice && notice.includes('hjinhao066'));
+  for (const text of [reason, notice]) { assert.doesNotMatch(text, /\p{Regional_Indicator}/u); assert.doesNotMatch(text, /(?:CN|US2?)/i); }
+});
+test('a seat directory nobody is known to be signed in at reads 未登录 in the reason', async (t) => {
+  const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();
+  w.seatInfos = [];   // the seat list could not be read and no account is remembered for either directory
+  const card = await newCard(app, { important: true });
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  reading(w, 'cn', 0, 60); reading(w, 'us', 0, 60);
+  await app.scan();
+  const reason = app.card(card.id).review_block.reason;
+  assert.match(reason, /Claude Opus 5\.5（未登录）：额度用尽/);
+  assert.doesNotMatch(reason, /\p{Regional_Indicator}/u); assert.doesNotMatch(reason, /(?:CN|US2?)/i);
+});
 test('no signed-in Claude seat at all: nobody is picked and the reason says so (the default seat is not brought back)', async (t) => {
   const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();
   const card = await newCard(app, { important: true });
