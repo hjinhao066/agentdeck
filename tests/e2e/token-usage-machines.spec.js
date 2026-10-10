@@ -18,6 +18,7 @@ test.describe.configure({ timeout: 180000 });
 const TOKEN = 'e2e-usage-machines';
 const SELF = process.platform;
 const OTHER = SELF === 'darwin' ? 'win32' : 'darwin';
+const NO_DIALOGS = path.join(__dirname, 'fixtures', 'no-dialogs.js');
 const selfLabel = F.platformLabel(SELF), otherLabel = F.platformLabel(OTHER);
 let application, page, root, server, beat;
 const errors = [];
@@ -70,8 +71,6 @@ async function launch({ fleet }) {
   const env = { ...process.env, ZDOTDIR: profile };
   delete env.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
-  // no native dialog can open on the desktop, whatever goes wrong
-  env.NODE_OPTIONS = [env.NODE_OPTIONS, `--require "${path.join(__dirname, 'fixtures', 'no-dialogs.js')}"`].filter(Boolean).join(' ');
   if (fleet) {
     const tokenFile = path.join(root, 'token');
     fs.writeFileSync(tokenFile, TOKEN + '\n', { mode: 0o600 });
@@ -80,8 +79,11 @@ async function launch({ fleet }) {
   }
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
-    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
+    // no native dialog can open on the desktop, whatever goes wrong: Electron's own -r loads the
+    // guard into the main process before main.js (Playwright drops NODE_OPTIONS from the env)
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : ['-r', NO_DIALOGS, path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
+  if (!process.env.AGENTDECK_TEST_EXECUTABLE) expect(await application.evaluate(({ dialog }) => [dialog.showErrorBox, dialog.showMessageBox, dialog.showMessageBoxSync, dialog.showOpenDialog].every((f) => f.noDialogs === true))).toBe(true);
   page = await application.firstWindow(); errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
   await page.setViewportSize({ width: 1440, height: 900 });
