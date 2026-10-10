@@ -2533,13 +2533,21 @@
       if (!task.processEnded && entry.alive && turn?.interrupted) { task.endedAt = 0; continue; }
       const ended = task.endedAt || (turn?.done && !turn.interrupted && entry.state === 'done' ? (task.endedAt = Date.now()) : 0);
       if (!ended || turn && !turn.done && !task.processEnded) continue;
+      // A command Claude started still running in the terminal's process tree (a Bash call waiting in the machine's
+      // E2E queue, a long test run, a background shell) means the turn is not over, however still the screen is;
+      // the three minutes count from when it is gone. No answer yet is no verdict; a listing that failed (null)
+      // leaves it to the screen.
+      const claude = /\bclaude\b/i.test(col?.cmd || '');
+      const work = claude && !task.processEnded && entry.alive && host.ptyBackgroundWork ? host.ptyBackgroundWork(col) : null;
+      if (work === true) { task.endedAt = 0; continue; }
       const anchor = entry.state === 'done' ? ended : Math.max(ended, entry.lastOutputAt || 0);
       if (Date.now() - anchor < STOP_QUIET) continue;
+      if (work === undefined) continue;
       // Last look before calling a Claude turn over: its full-screen rows as they are, one per row (the status
       // light reads them with soft wraps joined). A spinner or a scrolled-up view there means it is still at it.
       // On Windows a PowerShell prompt at the bottom means Claude has exited (or crashed): whatever it drew
       // above the prompt is history, as for the status light, and must not hold the task open.
-      if (/\bclaude\b/i.test(col?.cmd || '') && entry.term && host.dumpScreen && host.screenState) {
+      if (claude && entry.term && host.dumpScreen && host.screenState) {
         let rows = host.dumpScreen(entry.term, 40);
         if (host.platform === 'win32' && M.isWindowsShellPrompt(rows)) rows = M.windowsAgentOutput(rows);
         if (host.screenState(rows, { ...entry, state: 'working' }, col.cmd) === 'working') {
