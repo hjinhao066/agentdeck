@@ -73,6 +73,15 @@ function createQueue(options = {}) {
     catch { return null; }
   }
 
+  // The run limit is kept by the wrapper. A wrapper killed with SIGKILL leaves its test process
+  // running in its own process group with nobody to end it: once past the deadline it recorded
+  // (limit + grace), a waiter ends that group, and a later look reclaims the slot.
+  function overdue(owner) {
+    return process.platform !== 'win32' && Number.isFinite(owner.deadline) && clock() > owner.deadline && !owner.young
+      && !pidAlive(owner.pid, owner.identity) && Number.isInteger(owner.childPid) && owner.childPid > 0
+      && pidAlive(owner.childPid, owner.childIdentity);
+  }
+
   // Remove a slot whose holder is gone. Done under a mutex and re-checked, so two
   // waiters cannot both decide and one of them delete a slot someone just took.
   function reclaimDead() {
@@ -88,6 +97,10 @@ function createQueue(options = {}) {
         if (owner && !owner.young && (owner.orphan || !alive(owner))) {
           log(`回收失效的锁：第 ${name} 组，持有者 pid ${owner.pid}${owner.label ? `（${owner.label}）` : ''} 已不在`);
           fs.rmSync(slotDir(name), { recursive: true, force: true });
+        } else if (owner && overdue(owner)) {
+          log(`第 ${name} 组的包装进程已不在，测试进程 pid ${owner.childPid} 超过运行上限仍在跑：结束它，之后回收锁`);
+          try { process.kill(-owner.childPid, 'SIGKILL'); } catch {}
+          try { process.kill(owner.childPid, 'SIGKILL'); } catch {}
         }
       }
     } finally { try { fs.rmdirSync(mutex); } catch {} }
@@ -152,11 +165,12 @@ function createQueue(options = {}) {
     return {
       slot: n,
       waitedMs,
-      // Record the test process so a killed wrapper does not hide a still-running Electron.
-      setChild(childPid) {
+      // Record the test process so a killed wrapper does not hide a still-running Electron, and
+      // the time by which the run must be over (see overdue).
+      setChild(childPid, { deadline } = {}) {
         const current = readJson(ownerFile);
         if (current && current.pid === pid) {
-          fs.writeFileSync(ownerFile, JSON.stringify({ ...current, childPid, childIdentity: identityOf(childPid) }));
+          fs.writeFileSync(ownerFile, JSON.stringify({ ...current, childPid, childIdentity: identityOf(childPid), ...(Number.isFinite(deadline) ? { deadline } : {}) }));
         }
       },
       release() {
