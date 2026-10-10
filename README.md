@@ -1241,7 +1241,7 @@ node scripts/e2e-queue.js --queue-status                                  # 看�
 - 锁目录在 `/tmp/agentdeck-e2e-queue/`（Windows 是系统临时目录下同名目录）：`slots/<n>/owner.json` 是正在跑的组，`queue/` 是排队票。**不需要手动清理**：持锁进程（包括它启动的 Electron）都不在了，下一个排队者会自动回收并打印 `回收失效的锁`；进程号被别的程序复用也认得出（对比进程启动时间）。
 - 超时：排队最多等 120 分钟（退出码 75），单组最多跑 45 分钟（超时先发终止信号，宽限 10 秒后强杀，包括不听 SIGTERM 的后代和已脱离进程组的后代；**整棵进程树都退出后才释放锁**，退出码 124）。正常跑完时也会清掉遗留的辅助进程再放行下一组：运行期间每秒记录一次进程树，并给每次运行的所有子孙进程打上环境变量标记 `AGENTDECK_E2E_RUN_TAG`，所以连「已脱离进程组、父进程又立刻退出」的常驻辅助进程也能按标记找到并结束（Mac/Linux；Windows 靠 `taskkill /T`，不做这一步）。主动清掉环境变量并脱离进程组的进程无法识别。可调：`--queue-wait-timeout 分钟`、`--queue-run-timeout 分钟`、`--queue-slots N`（并发上限，默认 1），或环境变量 `AGENTDECK_E2E_WAIT_MINUTES`、`AGENTDECK_E2E_RUN_MINUTES`、`AGENTDECK_E2E_SLOTS`。机器空闲时可以 `AGENTDECK_E2E_SLOTS=2` 放宽；`--queue-` 开头的参数由入口吃掉，其余原样交给 Playwright。
 - 也可以包一条任意命令：`node scripts/e2e-queue.js -- <命令 参数…>`。已经在排队入口里面的命令（如 `release.js` 跑冒烟）不会再等自己。
-- `release.js` 的冒烟走 `npm run test:smoke`，所以自动排队；`/tmp/agentdeck-test.lock` 仍只管单测和发版。
+- `release.js` 的冒烟走 `npm run test:smoke`，所以自动排队；整个 `release.js` 也可以包在排队入口里跑（`node scripts/e2e-queue.js -- node scripts/release.js …`），它给子进程清掉 `AGENTDECK_*` 时保留排队器自己的 `AGENTDECK_E2E_QUEUE_HELD`，冒烟不会排在自己后面干等；`/tmp/agentdeck-test.lock` 仍只管单测和发版。
 
 **把测试派到 Windows**（Mac 忙时，或要看 Windows 上的表现）：
 

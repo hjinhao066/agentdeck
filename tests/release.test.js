@@ -149,6 +149,14 @@ test('isolation strips app routing only from child environment', () => {
   assert.equal(env.AGENTDECK_RECEIPT_TOKEN, 'private');
 });
 
+// release.js run through the machine queue (e2e-queue.js -- node scripts/release.js …): its smoke step runs
+// `npm run test:smoke`, which queues again. Without the queue's own marker it waits for the slot its parent
+// holds until the run limit kills both (2.0.4 package run: smoke 43 minutes, exit 124).
+test('isolation keeps the machine queue markers, so smoke inside a queued release does not wait for itself', () => {
+  const env = { PATH: 'fixture', AGENTDECK_CONTROL_TOKEN: 'private', AGENTDECK_E2E_QUEUE_HELD: '1', AGENTDECK_E2E_RUN_TAG: 'tag-1' };
+  assert.deepEqual(isolatedEnv(env), { PATH: 'fixture', AGENTDECK_E2E_QUEUE_HELD: '1', AGENTDECK_E2E_RUN_TAG: 'tag-1' });
+});
+
 test('package-only is pinned in the plan and dry-run lists deferred work without writing files', async (t) => {
   const { repo, root, options } = fixture(t);
   const packageOptions = { ...options, ...parseArgs(['--package-only', '--dry-run']), worktree: options.worktree, output: options.output };

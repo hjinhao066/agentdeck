@@ -110,8 +110,11 @@ function checkReleaseNotes(directory, version) {
   if (gap) throw new Error(gap);
 }
 
+// The machine queue's own markers stay: inside a queued release (e2e-queue.js -- node scripts/release.js …)
+// the smoke step's `npm run test:smoke` must know it already holds the slot, or it waits for itself.
+const QUEUE_MARKERS = new Set(['AGENTDECK_E2E_QUEUE_HELD', 'AGENTDECK_E2E_RUN_TAG']);
 function isolatedEnv(env = process.env) {
-  return Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith('AGENTDECK_') && key !== 'ELECTRON_RUN_AS_NODE'));
+  return Object.fromEntries(Object.entries(env).filter(([key]) => (QUEUE_MARKERS.has(key) || !key.startsWith('AGENTDECK_')) && key !== 'ELECTRON_RUN_AS_NODE'));
 }
 
 function run(command, args, cwd, log, env = process.env) {
