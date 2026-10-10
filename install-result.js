@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const MAX_PENDING_MS = 30 * 60 * 1000;
+const UNCLAIMED_RETRY_MS = 30 * 1000;
 function readResult(file, runtime, now = Date.now()) {
   let r;
   try {
@@ -55,12 +56,14 @@ function notificationLease(result) {
 function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
   const ackFile = file + '.ack.json';
   let busy = false;
+  // A result with no 队长 to take it is looked at again only after a pause: each look parses config.json.
+  let unclaimed = { id: '', until: 0 };
   return async function poll() {
     if (busy) return;
     busy = true;
     try {
       const r = readResult(file, runtime());
-      if (!r) return;
+      if (!r || unclaimed.id === r.id && Date.now() < unclaimed.until) return;
       let ack = {};
       try { ack = JSON.parse(fs.readFileSync(ackFile, 'utf8')); } catch (_) {}
       if (ack.id !== r.id) ack = { id: r.id };
@@ -76,10 +79,14 @@ function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
       const config = getConfig();
       const task = config.mainSession?.tasks?.find((t) => t.pendingInstall?.id === r.id || t.installResultId === r.id);
       const captain = config.columns?.find((c) => c.isMain);
-      if (!captain || !task && (r.taskId || r.columnId)) return;
+      if (!captain) { unclaimed = { id: r.id, until: Date.now() + UNCLAIMED_RETRY_MS }; return; }
       if (task) {
         if (r.taskId && r.taskId !== task.id || r.columnId && r.columnId !== task.colId) return;
         r.taskId = task.id; r.columnId = task.colId;
+      } else {
+        // Its task is gone (its 队长 was closed or replaced): no card can take the receipt, so it
+        // reaches the 队长 as a notice, which also acknowledges it for the next install.
+        delete r.taskId; delete r.columnId;
       }
       const saveAck = () => {
         fs.writeFileSync(ackFile + '.tmp', JSON.stringify(ack), { mode: 0o600 });
