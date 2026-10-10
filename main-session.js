@@ -633,6 +633,7 @@
     const notice = !!kept && holdsBriefing(col);
     const text = notice ? M.restartNotice(host.platform, state()?.seatCheckpoint || '', state()?.legacyReceiptInjection === true) : briefingText(note);
     const sent = () => {
+      restartWatch?.sent(id, Date.now(), text, !!host.terms.get(id)?.promptSettledAt);
       const s = state(), attempt = s?.relayStartup?.attempt?.colId === id;
       if (attempt) {
         s.relayStartup.attempt.promptSent = true;
@@ -1583,6 +1584,7 @@
   const CLOSED = ['done', 'failed', 'stopped', 'asking'];
   function settle(task, receipt, boardRecorded = false) {
     if (CLOSED.includes(task.status) || task.pendingInstall) return;
+    watchSettled(task, receipt);
     if (receipt.failed) Promise.resolve(window.deck.seatAuthFailure?.({ colId: task.colId, message: receipt.failed })).catch(() => {});
     if (receipt.failed && task.instructionSent === false && task.instruction) {
       receipt = { ...receipt, undeliveredInstruction: task.instruction, undeliveredTaskId: task.id };
@@ -1756,6 +1758,7 @@
   async function submit(message, caller) {
     const s = state();
     if (!s || isMain(caller)) return null;
+    if (['complete', 'ask', 'progress'].includes(message.action) && !message.nativeWeb) restartWatch?.confirm(caller.id, Date.now());
     const task = s.tasks.findLast((t) => t.colId === caller.id && t.status !== 'waiting' && (t.startedAt || message.action === 'session-exit' && t.restartHold) && (caller.executor !== 'chatgpt-web' || !message.taskId || t.id === message.taskId));
     if (caller.executor === 'chatgpt-web' && (!message.taskId || !task || CLOSED.includes(task.status))) return { done: true, result: 'Submission ignored: web task is no longer active.' };
     const response = { done: true, result: 'Submission recorded.' };
@@ -1866,6 +1869,7 @@
       delete task.resumeFailed;
       delete task.resumeDeadline;
     }
+    beginRestartWatch();
   }
   function saveResumeManifest() {
     try { window.deck.restartManifestSave(resumeManifest); } catch (_) {}
@@ -1881,7 +1885,8 @@
     const R = window.RestartResume;
     if (!R || !col || !task || col.executor === 'chatgpt-web') return;
     const prior = resumeManifest.entries.find((e) => e.colId === col.id);
-    const receipt = task.progress || (task.receipt && !task.receipt.checkpoint ? task.receipt.summary || task.receipt.failed || task.receipt.question : '');
+    // 已结束，未提交回执 (the fallback) is no receipt: the session's own progress, if any, is its last word.
+    const receipt = task.progress || (task.receipt && !task.receipt.checkpoint && task.receipt.source !== 'fallback' ? task.receipt.summary || task.receipt.failed || task.receipt.question : '');
     const entry = R.manifestEntry({
       colId: col.id, cmd: col.cmd, cwd: col.cwd || '', sessionId: col.modelSessionId,
       title: task.title, detail: col.captainTaskPrompt || prior?.task || col.taskPrompt || task.instruction || '',
@@ -1911,6 +1916,7 @@
     delete task.resumeDeadline;
     resumeWaiting.delete(col.id);
     const failed = window.RestartResume.failureNote(reason);
+    restartWatch?.fail(col.id, failed);
     resumeManifest.claims[col.id] = { phase: 'failed', runId: resumeRun, taskId: task.id, at: Date.now() };
     saveResumeManifest();
     settle(task, { summary: '', files: [], images: [], failed, explicit: true, source: 'resume' });
@@ -1939,6 +1945,7 @@
   function notePtySurvived(col) {
     if (!col) return;
     captainRelaunched(col, true);
+    if (!isMain(col)) restartWatch?.drop(col.id);
     coldTasks.delete(col.id);
     resumeWaiting.delete(col.id);
     const task = latestTask(col.id);
@@ -2080,6 +2087,7 @@
         if (released) return;
         if (!entry || !activeResume(col, task, op)) { op.release(); return; }
         if (entry.blocked) {
+          restartWatch?.drop(col.id);
           task.resumeSubmission = true;
           delete task.restartHold;
           delete task.resumeDeadline;
@@ -2098,11 +2106,13 @@
           task, title: entry.title, detail: entry.task, receipt: entry.receipt, pendingText: entry.pendingText }));
         resumeManifest.claims[col.id] = { phase: 'armed', runId: resumeRun, taskId: task.id, mode: entry.mode, at: Date.now() };
         saveResumeManifest();
-        host.sendWhenReady(col, R.resumeMessage(entry), {
+        const resumeText = R.resumeMessage(entry);
+        host.sendWhenReady(col, resumeText, {
           silent: true, force: true, guardUserInput: true, timeout: RESUME_SEND_TIMEOUT, suffix: M.RECEIPT_CONTRACT,
           cancelled: () => released || !activeResume(col, task, op),
           onSent: (turn) => {
             if (released || !activeResume(col, task, op)) { op.release(); return; }
+            restartWatch?.sent(col.id, Date.now(), resumeText + M.RECEIPT_CONTRACT, !!host.terms.get(col.id)?.promptSettledAt);
             resumeManifest.claims[col.id] = { phase: 'sent', runId: resumeRun, taskId: task.id, mode: entry.mode, at: Date.now() };
             for (const t of state().tasks) {
               if (t.colId !== col.id || !R.shouldResume(t) || t === task) continue;
@@ -2159,6 +2169,8 @@
       if (!task || !col || col.executor === 'chatgpt-web') continue;
       // Snapshot full queued bodies and the prior receipt BEFORE changing status.
       persistResumeEntry(col, task);
+      // Closed only by 已结束，未提交回执: that notice is not what happened any more (the restart continues it).
+      if (plan.idle) dropReceipts(s, (p) => p.taskId === task.id && p.source === 'fallback');
       const batch = dispatches.get(col.id);
       if (batch) batch.cancelled = true;
       task.status = 'paused';
@@ -2168,7 +2180,8 @@
       task.receipt = { summary: R.checkpointSummary(), files: [], images: [], failed: '', explicit: true, checkpoint: true, source: 'restart' };
       col.lastReceipt = { ...task.receipt, ts: Date.now() };
       const term = host.terms.get(col.id);
-      if (term?.alive) {
+      // An idle one already stopped where it is: a message now would only start a turn the quit cuts off.
+      if (term?.alive && !plan.idle) {
         parking.push(new Promise((resolve) => {
           const timer = setTimeout(resolve, 800);
           const finish = () => { clearTimeout(timer); resolve(); };
@@ -2184,6 +2197,117 @@
     save();
     try { window.deck.saveConfigSync(host.config); } catch (_) {}
     return Promise.all(parking);
+  }
+
+  // ---- restart watch: after a start, is everyone back? ----
+  // RestartResume.createRestartWatch keeps the clock: the 队长 within a minute of the start, each crew task this
+  // run continues within 90 s of its message going in (three minutes when it never went in). Back means the
+  // agent itself did something after its message: its screen showed it working, it ran an AgentDeck command,
+  // its task settled, or (its prompt had settled before the send) it drew something new and our text is not
+  // left in its box. On 10-09 none of that happened for four hours and nobody was told. What is not back is
+  // reported once: an urgent 待我处理 item (the sidebar and the phone), the local alert and critical Bark
+  // (main.js restart:alarm) and a toast; crew sessions also go to the 队长 as a notice. A recovery ticks it off.
+  let restartWatch = null;
+  let restartAlarms = [];     // { id: 待我处理 item, cols: column ids still out, resolved }
+  let restartCheckedAt = 0;
+  function beginRestartWatch() {
+    const R = window.RestartResume;
+    restartWatch = null;
+    restartAlarms = [];
+    if (!R?.createRestartWatch || !state()) return;
+    const now = Date.now(), ms = host.restartWatchMs || 0;
+    restartWatch = R.createRestartWatch({ startedAt: now, ...(ms ? { captainLimit: ms, crewLimit: ms, crewStartLimit: 2 * ms } : {}) });
+    const cap = mainCol();
+    // A Relay still starting a new 队长 has its own watchdog (relayStartup); a bare shell gets no prompt.
+    if (cap?.cmd && !state().relayStartup?.attempt) restartWatch.expect(cap.id, 'captain', '队长', now);
+    if (!R.resumeEnabled(host.config)) return;
+    for (const [colId, taskId] of coldTasks) {
+      const col = host.columns().find((c) => c.id === colId);
+      if (!col || col.executor === 'chatgpt-web') continue;
+      restartWatch.expect(colId, 'crew', state().tasks.find((t) => t.id === taskId)?.title || col.title || colId, now);
+    }
+  }
+  function leftInBox(entry, text) {
+    if (!entry?.term || !text || !window.ChatCore || !host.dumpScreen) return false;
+    return window.ChatCore.promptLeftInBox(host.dumpScreen(entry.term, 80), text);
+  }
+  function restartEvidence(id, entry) {
+    const it = restartWatch.item(id);
+    if (!it?.sentAt || !entry?.alive) return;
+    const now = Date.now();
+    if (entry.state === 'working' && !entry.backgroundOnly) { restartWatch.confirm(id, now); return; }
+    const col = host.columns().find((c) => c.id === id);
+    if (!it.ready || !col || now - it.sentAt < 1500 || (entry.lastOutputAt || 0) <= it.sentAt) return;
+    if (!M.agentPromptDrawn(entry.lastScreen, col.cmd) || leftInBox(entry, it.text)) return;
+    restartWatch.confirm(id, now);
+  }
+  function watchSettled(task, receipt) {
+    if (!restartWatch?.pending(task.colId)) return;
+    if (receipt.source === 'restart') { restartWatch.drop(task.colId); return; }
+    if (receipt.source === 'resume') return;   // noteResumeFailure has reported it
+    if (receipt.failed && !restartWatch.item(task.colId)?.sentAt) { restartWatch.fail(task.colId, receipt.failed); return; }
+    restartWatch.confirm(task.colId, Date.now());
+  }
+  function restartReason(d) {
+    const col = host.columns().find((c) => c.id === d.id), entry = host.terms.get(d.id);
+    const who = d.kind === 'captain' ? '队长' : '它', what = d.kind === 'captain' ? '重启提示' : '续接指令';
+    if (d.reason) return d.reason;
+    if (!col || !entry) return `${who}这一列没有起来`;
+    if (!entry.alive) return `${who}的终端已经退出` + (entry.exitReason ? `（${entry.exitReason}）` : '');
+    if (entry.seatBlock) return `${who}的席位不能用：${entry.seatBlock}`;
+    const it = restartWatch.item(d.id);
+    if (!it?.sentAt) return entry.state === 'input' ? `${who}停在一个确认提示上，${what}送不进去` : `${who}的界面一直没准备好，${what}还没送进去`;
+    if (leftInBox(entry, it.text)) return `${what}停在${who}的输入框里没发出去`;
+    return `${what}已送进去，但${who}一直没开始干活`;
+  }
+  function restartAlarm(list) {
+    const s = state();
+    const captain = list[0].kind === 'captain';
+    const rows = list.map((d) => ({ ...d, why: restartReason(d) }));
+    const span = (ms) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} 分钟` : `${Math.round(ms / 1000)} 秒`);
+    const title = captain ? '重启后队长没接上' : `重启后 ${rows.length} 个队员没接上`;
+    const ask = captain
+      ? `AgentDeck 启动已超过 ${span(restartWatch.limits.captain)}，队长还没开始干活：回执没人收，活都停着。请打开 AgentDeck 看队长那一列，输入框里有字就按回车，停在提示框就处理掉。`
+      : '这些队员重启后没接上原来的活。请打开 AgentDeck 看一眼（输入框里有字就按回车），或让队长用 tell 叫醒它们。';
+    const detail = rows.map((r) => `「${r.title}」（${r.id}）：${r.why}`).join('\n');
+    const item = window.AttentionUI?.alarm({ title, ask, detail, session: rows[0].id, sessionTitle: rows[0].title });
+    restartAlarms.push({ id: item?.id || '', cols: new Set(rows.map((r) => r.id)), resolved: false });
+    const message = (title + '：' + rows.map((r) => `「${r.title}」${r.why}`).join('；')).slice(0, 1000);
+    const key = 'restart-' + String(resumeRun).toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40) + '-' + restartAlarms.length;
+    Promise.resolve(window.deck.restartAlarm?.(message, key))
+      .then((r) => { if (r && r.ok === false) host.showToast('重启报警没能推到手机：' + (r.message || 'Bark 发送失败')); })
+      .catch(() => host.showToast('重启报警没能推到手机，请检查 Bark 设置。'));
+    host.showToast(message.slice(0, 300));
+    // The 队长 (when it is back) can wake them itself.
+    if (!captain && s) for (const r of rows) {
+      const task = latestTask(r.id);
+      if (task) push(task, { summary: `重启后续接没接上：${r.why}。用 tell 叫醒它，或 peek 看它停在哪。`, source: 'restart-watch' });
+    }
+    if (!captain) save();
+  }
+  function restartCheck() {
+    const now = Date.now();
+    if (now - restartCheckedAt < 1000) return;
+    restartCheckedAt = now;
+    // Not ours to report any more: a 队长 replaced since (a Relay, a cleared context) or one a Relay is still
+    // starting (relayStartup has its own watchdog), a crew column that is gone.
+    const s = state();
+    const due = restartWatch.due(now).filter((d) => d.kind === 'captain'
+      ? s?.colId === d.id && !!mainCol() && !s.relayStartup?.attempt
+      : host.columns().some((c) => c.id === d.id));
+    for (const kind of ['captain', 'crew']) {
+      const list = due.filter((d) => d.kind === kind);
+      if (list.length) restartAlarm(list);
+    }
+    const back = restartWatch.recovered().map((b) => b.id);
+    if (!back.length) return;
+    for (const alarm of restartAlarms) {
+      for (const id of back) alarm.cols.delete(id);
+      if (alarm.cols.size || alarm.resolved) continue;
+      alarm.resolved = true;
+      if (alarm.id) window.AttentionUI?.resolveAlarm(alarm.id, '已接上，自动勾掉');
+    }
+    host.showToast(back.includes(state()?.colId) ? '队长已接上' : `${back.length} 个队员已接上`);
   }
 
   // ---- heartbeat: called for every column on the 1.5s status loop ----
@@ -2396,6 +2520,7 @@
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
+    if (restartWatch) { restartEvidence(id, entry); restartCheck(); }
     if (id === s.colId) {
       const busy = entry.alive && (entry.state === 'working' || M.terminalActivity(entry.lastScreen, mainCol()?.cmd) === 'working');
       // Only a receipt taken before a stretch began was in front of the model for all of it.
@@ -2924,6 +3049,8 @@
       if (!SUB_ACTIONS.includes(message.action)) throw new Error('小队长只能用 create-child、receipts、ledger、tell、peek、read、answer、stop、archive，以及 complete/ask/progress 向总队长汇报；其余命令只有队长能用。');
       if (['main-tell', 'main-peek', 'main-read', 'main-answer', 'main-stop', 'main-archive'].includes(message.action)) ownChild(sub, message.to);
     } else if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
+    // Run from its own terminal (not one the program files on its behalf): it is back at work.
+    if (!message.nativeWeb && !message.automation) restartWatch?.confirm(caller.id, Date.now());
     if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id &&
         !['main-receipt-listener-status', 'main-install-result'].includes(message.action)) {
       s.relayStartup.attempt.output = true; save();

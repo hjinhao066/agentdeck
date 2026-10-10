@@ -476,7 +476,12 @@ function userComposing(id, ownText) {
   const t = entry.typing;
   if (Date.now() - t.lastKeyAt < INPUT_QUIET || t.draft) return true;
   const box = visibleInputBox(entry);
-  if (box && typeof ownText === 'string' && (flatBox(ownText).includes(flatBox(box)) || /^(?:\[Pastedtext#\d+(?:\+\d+lines?)?\])+$/i.test(flatBox(box)))) return t.unknown;
+  // The text AgentDeck typed itself: the caller's (ownText), or else this column's last automatic send as long
+  // as the user has not pressed a key since (entry.autoSent). Left in the box with its Enter lost it is not the
+  // user's draft; read as one, it held back every later automatic send (10-09: the 队长's restart notice blocked
+  // its receipts for four hours).
+  const own = typeof ownText === 'string' ? ownText : entry.autoSent && t.lastKeyAt < entry.autoSent.at ? entry.autoSent.text : null;
+  if (box && typeof own === 'string' && (flatBox(own).includes(flatBox(box)) || /^(?:\[Pastedtext#\d+(?:\+\d+lines?)?\])+$/i.test(flatBox(box)))) return t.unknown;
   if (box) return true;
   if (box === '') t.unknown = false;
   return t.unknown;
@@ -1754,7 +1759,7 @@ function whenTerminalReady(col, callback, waitingLabel, initialDelay) {
     // A raw shell is ready as soon as its PTY exists. Agent TUIs must expose a
     // recognizable idle prompt; permission/trust input never receives a task.
     const ready = entry && entry.alive && (!col.cmd || terminalIdle(col, entry));
-    if (ready) {
+    if (ready && (!col.cmd || promptSettled(entry, col))) {
       promptQueueIds.delete(queueId);
       callback();
       return;
@@ -2977,6 +2982,8 @@ function sendWhenReady(col, text, opts) {
       // 1000 bytes. Never type into it; a caller that can report it is told once the limit
       // for a silent start has passed (see MainCore.startupLimit).
       const silent = MainCore.launchEchoOnly(entry.lastScreen);
+      // Launched in this run: not before the agent has drawn its own prompt and held still (promptSettleTick).
+      const fresh = !col.cmd || promptSettled(entry, col);
       // outputSince: what was sent before has to have reached the agent, shown by anything it
       // drew after that time; after a minute without that, send anyway.
       const caughtUp = !o.outputSince || (entry.lastOutputAt || 0) > o.outputSince || Date.now() - o.outputSince > 60_000;
@@ -2992,7 +2999,7 @@ function sendWhenReady(col, text, opts) {
           return;
         }
       }
-      if (!silent && idle && ready && settled && caughtUp && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
+      if (!silent && fresh && idle && ready && settled && caughtUp && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
         if (o.cancelled && o.cancelled()) return;
         // A draft blocks this attempt, but must not skip the timeout below.
         if (!(o.guardUserInput && userComposing(col.id))) {
@@ -3023,6 +3030,27 @@ function sendWhenReady(col, text, opts) {
     setTimeout(check, 500);
   };
   check();
+}
+// A command line AgentDeck launched in this run (entry.launchedAt) takes automatic input only once the agent it
+// started has drawn its own prompt (MainCore.agentPromptDrawn) and stayed idle for FRESH_SETTLE. The screen alone
+// was not enough: right after a restart it still showed the last run's idle prompt, and the shell had handed the
+// terminal to `claude` long before Claude Code was up; keys typed then kept their text in its box and lost their
+// Enter (10-09: the 队长's restart notice and three crew continue messages, for hours). Claude, Codex, Cursor,
+// Antigravity, Gemini and Grok draw a prompt we know; any other command settles once it has drawn something and
+// then been quiet for FRESH_QUIET. Worked out on each status tick and on each delivery check.
+const FRESH_SETTLE = 1500, FRESH_QUIET = 10_000;
+function promptSettled(entry, col) {
+  if (!entry?.launchedAt || entry.promptSettledAt) return true;
+  if (col) promptSettleTick(col, entry);
+  return !!entry.promptSettledAt;
+}
+function promptSettleTick(col, entry) {
+  const now = Date.now();
+  if ((entry.lastOutputAt || 0) < entry.launchedAt || MainCore.launchEchoOnly(entry.lastScreen)) { entry.promptSeenAt = 0; return; }
+  if (terminalIdle(col, entry) && MainCore.agentPromptDrawn(entry.lastScreen, col.cmd)) entry.promptSeenAt ||= now;
+  else entry.promptSeenAt = 0;
+  const known = !!window.RestartResume?.providerOf(col.cmd);
+  if ((entry.promptSeenAt && now - entry.promptSeenAt >= FRESH_SETTLE) || (!known && now - (entry.lastOutputAt || 0) >= FRESH_QUIET)) entry.promptSettledAt = now;
 }
 function addColumn(c) {
   const col = BoardCore.normalizeColumn({
@@ -4039,6 +4067,7 @@ const deckHost = {
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
   createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, ptyBackgroundWork,
+  restartWatchMs: env.testRestartWatchMs || 0,   // test profiles only (main.js): shorter restart watch limits
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), ClaudeSeats.described(config.claudeSeats), claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
@@ -4522,7 +4551,7 @@ battery.every('statusTick', () => {
     // 40-line window this is a no-op.
     text = MainCore.afterReplay(text, env.platform);
     const cmd = columns.find((c) => c.id === id)?.cmd;
-    const liveText = env.platform === 'win32' ? MainCore.afterReplay(statusScreen(entry.term), env.platform) : statusScreen(entry.term);
+    const liveText = MainCore.afterReplay(statusScreen(entry.term), env.platform);
     // Cursor activity/readiness must share the live screen with its status dot;
     // the bounded reply tail can reach into old scrollback after a TUI clear.
     const cursorScreen = /\bcursor-agent\b/i.test(cmd || '') ? liveText : text;
@@ -4570,6 +4599,7 @@ battery.every('statusTick', () => {
       }
       entry.state = st;
       entry.backgroundOnly = backgroundOnlyState(st, isMainCol, liveText, entry, cmd);
+      if (entry.launchedAt && !entry.promptSettledAt) promptSettled(entry, columns.find((c) => c.id === id));
       setDot(entry, st);
       maybeNotifyState(id, entry, st);
       if (st === 'input' && columns.find((c) => c.id === id)?.isMain) attn++;

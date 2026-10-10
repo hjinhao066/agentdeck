@@ -1421,6 +1421,8 @@
         || (Date.now() - pastedAt < PASTE_READ_MAX && C.pasteBusy(host.dumpScreen(entry.term, 6)))));
       if (!o.silent && window.MainSession) window.MainSession.onContextCommandSent(col, text);
       window.deck.ptyInput(col.id, '\r');
+      // what AgentDeck itself typed here, so the box holding it is never read as the user's draft
+      entry.autoSent = { text, at: Date.now() };
       watchSubmission(col, entry, text);
       host.manualPromptSent(col.id, turn, o.userInitiated === true);
       entry.state = 'working';
