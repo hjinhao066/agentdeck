@@ -829,3 +829,27 @@ test('a crowded compressed handoff retains every unfinished discussion ID and ex
   assert.ok(!result.text.includes(secret));
   assert.equal(result.over, true, 'over-budget state is explicit rather than dropping discussion IDs');
 });
+
+// 2026-10-09: the Windows handoff called 12 cards 矛盾「卡片仍绑定 X，但它已结束·会话已不存在」; many of
+// those sessions were running on the Mac. A card names the machine of its session (session_host);
+// this machine sees only its own terminals, so another machine's session is out of sight, not gone.
+test('a card bound to a session on the other machine is not called gone or a contradiction', (t) => {
+  const f = fixture(t);
+  const away = f.add({ title: '在另一台机器上跑的' });
+  f.bind(away.id, 'a1', 's-mac'); f.event(away.id, 'started', '', 'a1', 's-mac');
+  const lost = f.add({ title: '本机会话没了的' });
+  f.bind(lost.id, 'b1', 's-gone'); f.event(lost.id, 'started', '', 'b1', 's-gone');
+  const here = os.hostname();
+  // the cards were bound on `here`; read them from a machine with another name
+  const elsewhere = build({ cards: f.cards(), host: 'other-' + here, sessions: [], dispatches: [] });
+  const card = elsewhere.state.cards.find((c) => c.id === away.id);
+  assert.equal(card.code, 'doing');
+  assert.ok(card.label.startsWith('执行中（在另一台机器 ' + here.slice(0, 40) + ' 上'), card.label);
+  assert.deepEqual(card.conflicts, []);
+  assert.doesNotMatch(elsewhere.text, /s-mac，但它已结束·会话已不存在/);
+  // on the machine that owns the session, a missing terminal is still reported
+  const local = build({ cards: f.cards(), host: here, sessions: [], dispatches: [] });
+  const gone = local.state.cards.find((c) => c.id === lost.id);
+  assert.equal(gone.code, 'orphan');
+  assert.match(gone.conflicts[0], /卡片仍绑定 s-gone，但它已结束·会话已不存在/);
+});
