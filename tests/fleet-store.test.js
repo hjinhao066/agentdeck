@@ -83,9 +83,11 @@ test('captain history ignores a duplicate upload and strips credential fields', 
   const { hub } = store(t);
   const turns = [{ prompt: '继续看板', token: 'must-not-land', nested: { apiKey: 'nope', note: '留着' } }];
   const first = hub.pushHistory({ opId: 'op-hist-0001', sessionId: 'cap-mac', deviceId: 'dev-mac', contentHash: 'a'.repeat(64), summary: '继续看板', turns });
-  assert.equal(first.body.record.turns[0].token, undefined);
-  assert.equal(first.body.record.turns[0].nested.apiKey, undefined);
-  assert.equal(first.body.record.turns[0].nested.note, '留着');
+  assert.equal(first.status, 200);
+  const saved = hub.snapshot().history[0];
+  assert.equal(saved.turns[0].token, undefined);
+  assert.equal(saved.turns[0].nested.apiKey, undefined);
+  assert.equal(saved.turns[0].nested.note, '留着');
   const again = hub.pushHistory({ opId: 'op-hist-0002', sessionId: 'cap-mac', deviceId: 'dev-mac', contentHash: 'a'.repeat(64), summary: '继续看板', turns });
   assert.equal(again.body.duplicate, true);
   assert.equal(hub.snapshot().history.length, 1);
@@ -145,7 +147,7 @@ test('older captain uploads cannot shorten history and divergent saves retain bo
   push('op-history-diverged', 'c', [{ ...first, reply: 'different' }]);
   const record = hub.snapshot().history[0];
   assert.equal(record.turns[0].reply, 'different');
-  assert.deepEqual(record.alternatives[0].turns, [first, second]);
+  assert.deepEqual(record.alternatives[0].changed, [{ index: 0, turn: first }, { index: 1, turn: second }]);
 });
 
 test('a late operation replay remains idempotent after more than two thousand other operations', (t) => {
@@ -156,7 +158,9 @@ test('a late operation replay remains idempotent after more than two thousand ot
   for (let i = 0; i < 2000; i++) hub.data.ops['op-other-' + i] = { status: 200, body: {} };
   hub.pushTask({ opId: 'op-next-change', cardId: 'card-1', expectedRevision: 1, deviceId: 'dev-win', set: { title: 'newer' } });
   const reloaded = new SharedStore({ file: hub.file });
-  assert.deepEqual(reloaded.pushTask(input), first);
+  const again = reloaded.pushTask(input);
+  assert.equal(again.status, first.status);
+  assert.equal(again.body.card.revision, 2, 'answered with the card as the hub has it now, not applied again');
   assert.equal(reloaded.snapshot().cards[0].title, 'newer');
   assert.equal(reloaded.snapshot().cards[0].revision, 2);
   assert.deepEqual(reloaded.snapshot().cards[0].conflicts, []);

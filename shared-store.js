@@ -8,6 +8,9 @@ const crypto = require('crypto');
 
 const LEASE_MS = 45_000;
 const TRAIL_CAP = 100;
+// A retried operation is answered from its receipt for this long; a client
+// offline longer resends work whose answer it never got, and that is applied again.
+const RECEIPT_KEEP_MS = 30 * 24 * 60 * 60_000;
 const DEVICE_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const SESSION_ID = /^[A-Za-z0-9._-]{1,160}$/;
 // Fields a client may try to change. `updated` is omitted on purpose: every
@@ -66,14 +69,64 @@ function stripSecrets(value, depth = 0) {
   return out;
 }
 
-function turnExtends(next, previous) {
+// moving: a dispatch card's state (doing, review, done) is updated in place as its
+// worker runs. That is the same turn moving on, not a divergent save to keep a copy of.
+function turnExtends(next, previous, moving = false) {
   if (!next || !previous) return same(next, previous);
   return Object.entries(previous).every(([key, value]) => {
     if (key === 'reply' && typeof value === 'string' && typeof next[key] === 'string') return next[key].startsWith(value);
     if (key === 'done' && value === false && next[key] === true) return true;
     if (key === 'end' && value == null) return true;
+    if (moving && key === 'task') return true;
     return same(next[key], value);
   });
+}
+// An earlier version a save rewrote: its identity, its length and only the turns
+// that save rewrote or dropped, each with its index. (A whole copy per rewrite of a
+// long captain chat grew the hub by the whole chat each time.)
+function rewrittenVersion(previous, laterTurns) {
+  const { turns, alternatives, ...head } = previous;
+  const later = Array.isArray(laterTurns) ? laterTurns : [];
+  const changed = [];
+  turns.forEach((turn, index) => { if (!turnExtends(later[index], turn, true)) changed.push({ index, turn }); });
+  return { ...head, turnCount: turns.length, changed };
+}
+// What an older hub kept as whole copies: a copy kept only because card states
+// moved is dropped (the version after it carries it on); one a later save rewrote
+// keeps only the turns that save rewrote. Already-reduced versions stay as they are.
+function compactHistory(record) {
+  const alternatives = Array.isArray(record.alternatives) ? record.alternatives : [];
+  if (!alternatives.some((alt) => alt && Array.isArray(alt.turns))) return record;
+  const chain = [...alternatives, record];
+  const kept = [];
+  alternatives.forEach((alt, i) => {
+    if (!alt || !Array.isArray(alt.turns)) { kept.push(alt); return; }
+    const later = (chain.slice(i + 1).find((version) => Array.isArray(version && version.turns)) || {}).turns || [];
+    if (alt.turns.every((turn, j) => turnExtends(later[j], turn, true))) return;
+    kept.push(rewrittenVersion(alt, later));
+  });
+  return { ...record, alternatives: kept };
+}
+
+// The answer kept for a replayed transcript upload names the record, it does not
+// copy it: a copy per save of a growing chat made the file grow with the square of
+// its saves (608 MB on the live hub, 2026-10-09).
+function historyReceipt(record, duplicate) {
+  return { sessionId: record.sessionId, deviceId: record.deviceId, contentHash: record.contentHash, updatedAt: record.updatedAt || null, duplicate: !!duplicate };
+}
+// A receipt as this hub keeps it, from one an older hub kept (a whole transcript or
+// a whole card) or from a new answer: a card answer keeps the card's id; a replay
+// answers with the card as it is then (_replay). Undated receipts take `at`.
+function compactReceipt(saved, at) {
+  if (!saved || typeof saved !== 'object') return saved;
+  const body = saved.body;
+  if (body && body.record && typeof body.record === 'object') saved.body = historyReceipt(body.record, body.duplicate);
+  else if (body && body.card && typeof body.card === 'object' && typeof body.card.id === 'string') {
+    const { card, ...rest } = body;
+    saved.body = { cardId: card.id, ...rest };
+  }
+  if (typeof saved.at !== 'string') saved.at = at;
+  return saved;
 }
 
 function publicCard(card) {
@@ -146,6 +199,10 @@ class SharedStore {
     // IDs are untrusted keys, including __proto__ and inherited method names.
     // JSON.parse restores ordinary objects, so rebuild every index on load too.
     for (const key of ['devices', 'cards', 'ops', 'history']) data[key] = Object.assign(Object.create(null), data[key]);
+    // Older hubs kept the whole transcript or card in each receipt, and no time.
+    const at = new Date(this.now()).toISOString();
+    for (const saved of Object.values(data.ops)) compactReceipt(saved, at);
+    for (const [key, record] of Object.entries(data.history)) if (record && typeof record === 'object') data.history[key] = compactHistory(record);
     data.seq = Number.isInteger(data.seq) ? data.seq : 0;
     return data;
   }
@@ -154,9 +211,24 @@ class SharedStore {
     atomicWrite(this.file, JSON.stringify(this.data));
   }
   _remember(opId, status, body) {
-    const saved = { status, body: clone(body) };
-    this.data.ops[opId] = saved;
-    return saved;
+    const now = this.now();
+    if (now - (this.prunedAt || 0) >= 60 * 60_000) {
+      this.prunedAt = now;
+      for (const [id, saved] of Object.entries(this.data.ops)) {
+        if (!(now - Date.parse(saved && saved.at) < RECEIPT_KEEP_MS)) delete this.data.ops[id];
+      }
+    }
+    this.data.ops[opId] = compactReceipt({ status, body: clone(body) }, new Date(now).toISOString());
+    return { status, body: clone(body) };
+  }
+  // The answer to an operation already applied: its outcome, with the card as the
+  // hub has it now (what the client takes as its base).
+  _replay(opId) {
+    const saved = this.data.ops[opId];
+    const { cardId, ...rest } = (saved && saved.body) || {};
+    if (typeof cardId !== 'string') return { status: saved.status, body: clone(saved.body) };
+    const card = this.data.cards[cardId];
+    return { status: saved.status, body: { card: card ? publicCard(card) : null, ...clone(rest) } };
   }
   devices() {
     const now = this.now();
@@ -208,7 +280,7 @@ class SharedStore {
     if (!isDeviceId(deviceId)) throw reject(400, 'Invalid device id.');
     if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw reject(400, 'Invalid revision.');
     if (!set || typeof set !== 'object' || Array.isArray(set)) throw reject(400, 'Invalid field set.');
-    if (this.data.ops[opId]) return this.data.ops[opId];
+    if (this.data.ops[opId]) return this._replay(opId);
     const clean = {};
     for (const key of MUTABLE_KEYS) if (key in set) clean[key] = clone(set[key]);
     for (const [key, value] of Object.entries(clean)) checkValue(key, value);
@@ -262,18 +334,18 @@ class SharedStore {
     if (typeof opId !== 'string' || !/^[A-Za-z0-9_-]{8,160}$/.test(opId)) throw reject(400, 'Invalid opId.');
     if (!isSessionId(sessionId) || !isDeviceId(deviceId)) throw reject(400, 'Invalid history identity.');
     if (typeof contentHash !== 'string' || !/^[a-f0-9]{64}$/.test(contentHash)) throw reject(400, 'Invalid history hash.');
-    if (this.data.ops[opId]) return this.data.ops[opId];
+    if (this.data.ops[opId]) return this._replay(opId);
     const key = sessionId + '@' + deviceId;
     const existing = this.data.history[key];
     if (existing && existing.contentHash === contentHash) {
-      const saved = this._remember(opId, 200, { record: existing, duplicate: true });
+      const saved = this._remember(opId, 200, historyReceipt(existing, true));
       this._save();
       return saved;
     }
     const cleanTurns = stripSecrets(Array.isArray(turns) ? turns : []);
     // A delayed older save cannot shorten history already accepted by the hub.
     if (existing && cleanTurns.length <= existing.turns.length && cleanTurns.every((turn, i) => turnExtends(existing.turns[i], turn))) {
-      const saved = this._remember(opId, 200, { record: existing, duplicate: true });
+      const saved = this._remember(opId, 200, historyReceipt(existing, true));
       this._save();
       return saved;
     }
@@ -287,24 +359,35 @@ class SharedStore {
     };
     if (existing) {
       record.alternatives = existing.alternatives || [];
-      if (!existing.turns.every((turn, i) => turnExtends(cleanTurns[i], turn))) {
-        const { alternatives, ...previous } = existing;
-        record.alternatives = [...record.alternatives, previous];
+      if (!existing.turns.every((turn, i) => turnExtends(cleanTurns[i], turn, true))) {
+        record.alternatives = [...record.alternatives, rewrittenVersion(existing, cleanTurns)];
       }
     }
     this.data.history[key] = record;
-    const saved = this._remember(opId, 200, { record, duplicate: false });
+    const saved = this._remember(opId, 200, historyReceipt(record, false));
     this._save();
     return saved;
   }
-  snapshot() {
+  // hashesOnly: each transcript is named by its hash and time, without its turns;
+  // a client fetches only the ones that changed (record()) instead of every
+  // transcript every round.
+  snapshot({ hashesOnly = false } = {}) {
     return {
       cursor: this.data.seq,
       devices: this.devices(),
       cards: Object.values(this.data.cards).map(publicCard),
-      history: Object.values(this.data.history).map((record) => clone(record)),
+      history: Object.values(this.data.history).map((record) => {
+        if (!hashesOnly) return clone(record);
+        const { turns, alternatives, ...head } = record;
+        return clone(head);
+      }),
     };
+  }
+  record(sessionId, deviceId) {
+    if (!isSessionId(sessionId) || !isDeviceId(deviceId)) return null;
+    const record = this.data.history[sessionId + '@' + deviceId];
+    return record ? clone(record) : null;
   }
 }
 
-module.exports = { SharedStore, LEASE_MS, MUTABLE_KEYS, isDeviceId, isSessionId, stripSecrets, publicCard };
+module.exports = { SharedStore, LEASE_MS, MUTABLE_KEYS, isDeviceId, isSessionId, stripSecrets, publicCard, compactReceipt, compactHistory };

@@ -1369,7 +1369,14 @@ the same field stay as two copies and the card shows 冲突. The sidebar section
 
 The service is `node sync-server.js --data <dir> --token-file <path>`. Bind it
 to the WireGuard address when it is deployed; the default listen address is
-loopback. Each desktop keeps its settings in `userData/fleet.json` (not the
+loopback. A hub file too large for the service to load (Node reads at most
+~512 MB into one string) is rewritten small by
+`node scripts/fleet-store-compact.js <old store.json> <new store.json>`: it walks
+the file entry by entry, applies the rules the service applies when it loads a
+file (upload receipts name their transcript, copies kept only for card-state
+moves go, a rewritten version keeps the turns rewritten), keeps cards, devices and transcripts, only reads
+the old file and never replaces an existing one. Point `--data` at the new file's
+folder and keep the old file as the rollback. Each desktop keeps its settings in `userData/fleet.json` (not the
 deck `config.json`, which the window rewrites):
 
 ```json
@@ -1405,11 +1412,29 @@ preserve pending edits, including changes made by other local board writers.
 Older revisioned task snapshots restored by Git keep their older revision when
 submitted, so they cannot silently replace newer server edits.
 Repeated operations do not increment a card revision or add a second conflict.
+The hub answers a replayed operation from its receipt for 30 days. A transcript
+upload's receipt names the record (hash and time) instead of copying it; a card
+operation's receipt keeps its outcome and the card's id, and a replay is answered
+with the card as the hub has it then (what the client takes as its base). A hub
+file written by an older hub has its whole-transcript and whole-card receipts
+shrunk when it loads.
+(Copies per save of a growing chat took the live hub file to 608 MB, past what
+Node can read, on 2026-10-09.)
 All conflicting alternatives and captain turns are retained. Older transcript
-prefixes cannot shorten newer history; divergent saves retain the prior version
-in the history record's `alternatives`. Credential-shaped fields are stripped,
+prefixes cannot shorten newer history; a divergent save keeps the earlier version
+in the history record's `alternatives` as its hash, time, length and the turns
+the save rewrote or dropped (with their index), not a whole copy; whole copies an
+older hub kept are reduced that way when it loads. A dispatch card's state moving on inside
+a turn (its `task` field) is the same turn going on, not a divergent save, so no
+copy is kept; copies an older hub kept that way are dropped when it loads. A
+round asks for transcripts by hash (`/v1/snapshot?history=hash`) and fetches
+only the ones whose hash or time changed (`/v1/history`); an older client still
+gets whole transcripts, and every answer over 1 KB is gzipped for a client that
+asks (Node's fetch does). Credential-shaped fields are stripped,
 but transcript prose is preserved, so sync only to a trusted private service.
-Requests time out after 10 seconds and retry on subsequent sync rounds.
+Requests time out after 10 seconds and retry on subsequent sync rounds. A round
+still running when the next is due is not queued behind it (one round at a time,
+none started after sync stops).
 If the hub loses a card or rolls back behind a pending edit's revision, the
 client discards that edit's old base and queues the complete local card with a
 new operation ID and revision zero for the next round. Newer local fields are
