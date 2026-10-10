@@ -836,9 +836,10 @@
     top.setAttribute('aria-pressed', String(!!next.on));
     row.append(go, top);
     box.append(row);
-    // the reason a grey 马上派人做 gives, in words on the page (not only in its tooltip)
-    if (!now.enabled) {
-      const why = el('p', 'tbv-d-act-why' + (now.pending ? ' pending' : ''), now.reason);
+    // the reason a grey 马上派人做 gives, in words on the page (not only in its tooltip); a request
+    // already waiting is said once, in 谁在做 and on the card
+    if (!now.enabled && !now.pending) {
+      const why = el('p', 'tbv-d-act-why', now.reason);
       why.id = 'tbv-act-why'; go.setAttribute('aria-describedby', why.id);
       box.append(why);
     }

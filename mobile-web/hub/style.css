@@ -227,11 +227,10 @@ textarea::placeholder { color: var(--muted); }
 .task-act.now { flex: 1 1 auto; border: 0; background: var(--accent); color: var(--accent-ink); }
 .task-act.next { flex: 0 1 auto; border: 1px solid color-mix(in srgb, var(--prio) 55%, transparent); background: transparent; color: var(--prio); }
 .task-act.next[aria-pressed="true"] { background: var(--prio); border-color: var(--prio); color: var(--prio-ink); }
-.task-act:disabled { cursor: default; }
-.task-act.now:disabled { background: var(--soft); color: var(--muted); }
+.task-act:disabled { cursor: default; opacity: 1; }
+.task-act.now:disabled { background: var(--soft); color: var(--secondary); }
 .task-act.next:disabled:not([aria-pressed="true"]) { border-color: var(--line-strong); color: var(--muted); }
 .task-act-why { margin-top: 7px; color: var(--secondary); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
-.task-act-why.pending::before { content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 7px 1px 1px; border-radius: 50%; background: var(--prio); vertical-align: middle; }
 .task-act-why.error { color: var(--bad); }
 .task-card h3 { font-size: 14px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
 .task-assignee { font: 11px/1.6 var(--mono); color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }

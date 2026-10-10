@@ -278,7 +278,12 @@
   function deliverWaitingDispatch() {
     if (!mainCol() || dispatchSweep) return dispatchSweep;
     dispatchSweep = (async () => {
-      try { for (const card of await window.deck.taskBoard('dispatchNowWaiting', {})) await handOverDispatch(card); }
+      try {
+        // a plain read first: only a board holding an undelivered request asks which are this computer's
+        const all = await window.deck.taskBoard('list', {});
+        if (!Array.isArray(all) || !all.some((c) => c && c.dispatch_now && c.dispatch_now.delivered !== true)) return;
+        for (const card of await window.deck.taskBoard('dispatchNowWaiting', {})) await handOverDispatch(card);
+      }
       catch (_) { /* the next board change or start tries again */ }
       finally { dispatchSweep = null; }
     })();

@@ -145,8 +145,9 @@ test('desktop: 马上派人做 reaches 队长 on the receipts channel, the card 
   // the card and the drawer say it is with 队长, and the button is grey with the reason
   await expect(page.locator('.tbv-act-now')).toHaveText('已交给队长');
   await expect(page.locator('.tbv-act-now')).toBeDisabled();
-  await expect(page.locator('.tbv-d-act-why')).toHaveText('已经交给队长了，等它派人');
+  await expect(page.locator('.tbv-act-now')).toHaveAttribute('title', '已经交给队长了，等它派人');
   await expect(page.locator('.tbv-d-who-name')).toHaveText('已交给队长 · 等派人');
+  await expect(page.locator('.tbv-d-act-why'), 'said once, in 谁在做').toHaveCount(0);
   await expect(page.locator('.tbv-card[data-card-id="t-now"] .tbv-activity')).toHaveText('已交给队长 · 等派人');
   await keep(page, 'desktop-asked-dark');
   // a second click (another way in) changes nothing and tells 队长 nothing new
@@ -226,7 +227,8 @@ test('desktop without 队长: the request waits on the card and goes to 队长 o
   await openCard('t-now');
   await page.locator('.tbv-act-now').click();
   await expect(page.locator('#toast')).toContainText('这台电脑没有队长，打开队长后才会派');
-  await expect(page.locator('.tbv-d-act-why')).toHaveText('这台电脑没有队长，打开队长后才会派');
+  await expect(page.locator('.tbv-d-who-name')).toHaveText('这台电脑没有队长，打开队长后才会派');
+  await expect(page.locator('.tbv-act-now')).toHaveAttribute('title', '这台电脑没有队长，打开队长后才会派');
   await expect(page.locator('.tbv-card[data-card-id="t-now"] .tbv-activity')).toHaveText('这台电脑没有队长，打开队长后才会派');
   expect(readCard('t-now').dispatch_now).toMatchObject({ delivered: false, host: os.hostname() });
   await keep(page, 'desktop-no-captain-dark');
@@ -234,7 +236,14 @@ test('desktop without 队长: the request waits on the card and goes to 队长 o
   await page.evaluate((cwd) => MainSession.create('', cwd), profile);
   await expect.poll(captainNotices, { timeout: 15000 }).toEqual([expect.stringContaining('用户要求马上派：给登录页加验证码（t-now）')]);
   await expect.poll(() => readCard('t-now').dispatch_now?.delivered).toBe(true);
+  // creating 队长 shows its column and closes the board; open it again
+  if (!(await page.evaluate(() => TaskBoardUI.isOpen()))) await page.locator('#taskBoardBtn').click();
+  if (!(await page.locator('.tbv-detail[data-card-id="t-now"]:not([hidden])').count())) {
+    if (await page.locator('.tbv-more[data-cell="客户门户/todo"]').count()) await page.locator('.tbv-more[data-cell="客户门户/todo"]').click();
+    await openCard('t-now');
+  }
   await expect(page.locator('.tbv-d-who-name')).toHaveText('已交给队长 · 等派人');
+  await expect(page.locator('.tbv-card[data-card-id="t-now"] .tbv-activity')).toHaveText('已交给队长 · 等派人');
   await page.waitForTimeout(500);
   expect(await captainNotices()).toHaveLength(1);
 });
@@ -286,8 +295,9 @@ test('phone hub: the two buttons on a card, the request to the computer with 队
 
     await card.locator('.task-act.now').click();
     await expect.poll(() => hub.machines.mac.taskWrites).toEqual([{ op: 'dispatch-now', id: 'p-now' }]);
-    await expect(card.locator('.task-act-why')).toHaveText('已交给 Mac 的队长，等它派人。');
     await expect(card.locator('.task-asked')).toHaveText('已交给队长 · 等派人');
+    await expect(card.locator('.task-act-why'), 'said once, on the card').toHaveCount(0);
+    await expect(card.locator('.task-act.now')).toHaveAttribute('title', '已经交给队长了，等它派人');
     await expect(card.locator('.task-act.now')).toHaveText('已交给队长');
     await expect(card.locator('.task-act.now')).toBeDisabled();
     await card.scrollIntoViewIfNeeded();
@@ -327,8 +337,9 @@ test('phone hub: a computer without 队长 keeps the request and says so; a refu
     const { context, phone, problems } = await phoneLogin(hub, browser, 'dark');
     const card = phoneCard(phone, 'p-now');
     await card.locator('.task-act.now').click();
-    await expect(card.locator('.task-act-why')).toHaveText('Mac 没有队长，打开队长后才会派。');
     await expect(card.locator('.task-asked')).toHaveText('Mac 没有队长，打开队长后才会派');
+    await expect(card.locator('.task-act-why')).toHaveCount(0);
+    await expect(card.locator('.task-act.now')).toHaveAttribute('title', 'Mac 没有队长，打开队长后才会派');
     await card.scrollIntoViewIfNeeded();
     await keep(phone, 'phone-no-captain-dark');
     // the computer refuses (its board changed meanwhile): the reason is on the card

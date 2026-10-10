@@ -3672,7 +3672,6 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
 .tbv-act-next:disabled:not([aria-pressed="true"]) { background: transparent; color: var(--tbv-ink-3); border-color: var(--tbv-rim); }
 .tbv-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tbv-d-act-why { margin: 0; font-size: 12px; line-height: 1.5; color: var(--tbv-ink-2); }
-.tbv-d-act-why.pending::before { content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 7px 1px 1px; border-radius: 50%; background: var(--prio); vertical-align: middle; }
 .tbv-d-who-name.asked { color: var(--prio); font-weight: 600; }
 .tbv-d-meta { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; color: var(--tbv-ink-3); font-variant-numeric: tabular-nums; }
 .tbv-d-meta span { flex: 1; min-width: 0; overflow-wrap: anywhere; }

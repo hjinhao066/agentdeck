@@ -1613,10 +1613,13 @@
     top.setAttribute('aria-pressed', String(!!next.on));
     const row = node('div', 'task-act-row'); row.append(go, top);
     box.append(row);
-    const hint = taskHints.get(task.id);
-    const why = busy ? '正在交给电脑…' : hint ? hint.text : now.enabled ? '' : waitingOn(now.reason, task, known);
+    // Each thing is said once: a waiting request is on the card's own line (task-asked) and a
+    // 下一个做 card wears its mark, so a success note goes once the board shows it.
+    let hint = taskHints.get(task.id);
+    if (hint && !hint.error && (Core.dispatchNote(task) || nextTask(task))) hint = null;
+    const why = busy ? '正在交给电脑…' : hint ? hint.text : now.enabled || now.pending ? '' : waitingOn(now.reason, task, known);
     if (why) {
-      const line = node('p', 'task-act-why' + (hint && hint.error ? ' error' : now.pending && !hint ? ' pending' : ''), why);
+      const line = node('p', 'task-act-why' + (hint && hint.error ? ' error' : ''), why);
       if (hint && hint.error) line.setAttribute('role', 'alert');
       line.id = 'task-why-' + task.id; go.setAttribute('aria-describedby', line.id);
       box.append(line);
