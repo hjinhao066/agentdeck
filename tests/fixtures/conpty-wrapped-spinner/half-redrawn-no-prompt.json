@@ -1,0 +1,247 @@
+{
+ "note": "Windows ConPTY screen of a working Claude Code 2.x column, 34 columns. Row flags w = xterm isWrapped. Content rows are redacted (letters x, digits 0, Chinese 汉); spinner, prompt rules and footer chrome are verbatim.",
+ "cols": 34,
+ "rows": 60,
+ "screen": [
+  {
+   "w": false,
+   "t": "  \"汉汉\"]"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉xxxx"
+  },
+  {
+   "w": false,
+   "t": "  \"$xxxxxxxxx_xxxxx_xxx\" xxx"
+  },
+  {
+   "w": false,
+   "t": "  --xxxxxxxx"
+  },
+  {
+   "w": false,
+   "t": "  \"汉汉汉汉汉汉汉汉汉汉汉汉汉\"汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉xxxx"
+  },
+  {
+   "w": false,
+   "t": "  \"$xxxxxxxxx_xxxxx_xxx\" xxxxxxxx"
+  },
+  {
+   "w": false,
+   "t": "  --xxxxxxx \"汉汉汉汉\"汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉 xxxxx 汉 xxxxx/xxxx"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉xxxxxxx xxxxxxxxxx"
+  },
+  {
+   "w": false,
+   "t": "  汉 $xxxxxxxxx_xxxxx_xxx 汉汉"
+  },
+  {
+   "w": false,
+   "t": "  $xxx:xxxxxxxxx_xxxxx_xxx汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  xxxxx汉汉汉汉汉汉 xxxxxxxxx_"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  xxxxx-xxx.xx汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉xxxx 汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  0汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  xxxxxxxxx 汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  xxxxx-xxx汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  --xxxxxx汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉/"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": "  ⎿  xxxxxxxxxxxxxxxx xxxx xxxxx"
+  },
+  {
+   "w": true,
+   "t": "  ⎿  xxxx xxxx xxxxxx xxxxxxxxxx"
+  },
+  {
+   "w": true,
+   "t": "     xxxxxx — xxxxxxxxxxxxxxxxxx"
+  },
+  {
+   "w": false,
+   "t": "     xx xxxxxxx xxxxxxxx xxxxx"
+  },
+  {
+   "w": true,
+   "t": "     \"xxxxxxxxxxxxx\""
+  },
+  {
+   "w": true,
+   "t": ""
+  },
+  {
+   "w": true,
+   "t": "  xxxx 0 xxxx, xxx 0 xxxxx"
+  },
+  {
+   "w": true,
+   "t": "  xxxxxxxx"
+  },
+  {
+   "w": true,
+   "t": ""
+  },
+  {
+   "w": true,
+   "t": "● xxxxx 汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": true,
+   "t": "  汉汉汉汉汉汉汉汉汉 0"
+  },
+  {
+   "w": false,
+   "t": "  汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉"
+  },
+  {
+   "w": false,
+   "t": ""
+  },
+  {
+   "w": true,
+   "t": "  xxxxxxx"
+  },
+  {
+   "w": false,
+   "t": "  x:\\xxxxxxxxx\\xxxxxxxxxx\\xxxx-xxx"
+  },
+  {
+   "w": true,
+   "t": "  xxx\\xxxxx0\\xxx\\xxxxx\\xxxx.xxx"
+  },
+  {
+   "w": false,
+   "t": "  ⎿  x:\\xxxxxxxxx\\xxxxxxxxxx\\xxxx-"
+  },
+  {
+   "w": true,
+   "t": "     xxxxxx\\xxxxx0\\xxx\\xxxxx\\xxxx."
+  },
+  {
+   "w": false,
+   "t": "     xxx"
+  },
+  {
+   "w": true,
+   "t": ""
+  },
+  {
+   "w": true,
+   "t": "✽ Catapulting… (29s · thinking)"
+  },
+  {
+   "w": false,
+   "t": ""
+  },
+  {
+   "w": false,
+   "t": ""
+  },
+  {
+   "w": false,
+   "t": ""
+  },
+  {
+   "w": false,
+   "t": ""
+  },
+  {
+   "w": false,
+   "t": "            ██                0"
+  },
+  {
+   "w": false,
+   "t": ""
+  },
+  {
+   "w": false,
+   "t": "  ⏵⏵ bypass permissions on  · ←…"
+  }
+ ]
+}

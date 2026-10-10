@@ -4181,13 +4181,20 @@ function dumpScreen(term, count = 40) {
 // dumpScreen's bounded tail is for reply/history extraction: it can miss a busy
 // row above a tall input/footer, or retain an obsolete spinner in scrollback.
 function statusScreen(term) {
+  const STATUS_ROW_START_RE = /^\s{0,2}(?:[✻✽✳✶✢✺∴*·⏺●◦•]|[\u2800-\u28FF])\s+\S/;
   const buf = term.buffer.active;
   const lines = [];
   for (let y = buf.baseY; y < buf.baseY + term.rows; y++) {
     const line = buf.getLine(y);
     // (as wide as the terminal is: a full-screen TUI's row keeps its old length when the terminal narrows)
     const text = line ? line.translateToString(false, 0, term.cols) : '';
-    if (line?.isWrapped && lines.length && !chromeRowBreak(buf.getLine(y - 1)?.translateToString(false, 0, term.cols) || '', text)) {
+    // The Windows console marks a row it padded with spaces as wrapped although the row below is a new line
+    // (Claude on a narrow column: a blank row, then "✽ Cascading… (3m 5s · thinking)"). Joined onto the text above,
+    // that spinner row loses its row start, WORKING_RE's anchor misses it and a working Claude reads as finished
+    // (已结束，未提交回执 three minutes later). A row that opens with a spinner or tool bullet after a row whose last
+    // cell is blank is a row of its own; a wide character or a word carried down never starts with one.
+    const ownRow = STATUS_ROW_START_RE.test(text) && /\s$/.test(lines[lines.length - 1] || '');
+    if (line?.isWrapped && lines.length && !ownRow && !chromeRowBreak(buf.getLine(y - 1)?.translateToString(false, 0, term.cols) || '', text)) {
       // a wide character (中文) that did not fit at the end of the row above went down whole: the cell it left
       // there (empty in xterm, a space from the Windows console between two wide characters) is no space in the
       // text; nor are the blank cells after it once the window has grown since (the console paints spaces to the
