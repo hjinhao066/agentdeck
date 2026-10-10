@@ -1471,7 +1471,8 @@ types `claude` into a manual terminal to prove the trap catches a real agent nam
 "恢复默认布局" also leaves no columns. `task-board.spec.js` archives every terminal a test opened when
 that test ends, so a full run keeps about three PowerShells open instead of one per worker. It calls the
 same `host.archiveColumn` that `archive --id` ends with, and nothing else: cards are not set to stopped
-and pending receipts are kept. If more than the kept count plus 2 terminals are still alive at the end,
+and pending receipts are kept. If more than 2 test terminals are still alive at the end (archived ones whose
+PTY did not die are asked again),
 the file's `afterAll` fails and names the leftovers and the tests whose cleanup failed.
 Fixture cleanup first requests normal Electron quit, then kills only its isolated process tree
 after 10 seconds if native teardown stalls, with an explicit warning in the test log.

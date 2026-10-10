@@ -87,27 +87,36 @@ async function installStandIns() {
 }
 // (a profile still held by the closed Electron's helpers on Windows is reported, it does not fail the run)
 // Before the app closes, the live terminals are counted once more: a cleanup that broke (and only warned in afterEach) must still turn
-// the run red. More than the kept count plus 2 left over fails here; the app is closed in `finally`, so the check never leaks it.
+// the run red. Two sources are counted: the terminals still in `terms`, and the `survivors` (terminals whose archive ran, so they left
+// `terms`, but whose PTY did not die within the wait; each is asked again here, so one that exited late is not counted). More than 2 left
+// over fails here. The app is closed and the profile removed first, then the check's error is thrown, so it is neither leaked nor hidden.
 test.afterAll(async () => {
+  let checkError;
   try {
     if (app && page) {
       const left = await page.evaluate(async ([keep]) => {
         const alive = [];
         for (const id of terms.keys()) {
           if (keep.includes(id) || columns.some((c) => c.id === id && c.isMain)) continue;
-          if (await window.deck.ptyIsAlive(id)) alive.push(columns.find((c) => c.id === id)?.title || id);
+          if (await window.deck.ptyIsAlive(id)) alive.push({ id, label: columns.find((c) => c.id === id)?.title || id });
         }
         return alive;
       }, [keepColumns]);
-      if (left.length > keepColumns.length + 2) {
-        throw new Error(`${left.length} test terminals are still alive at the end (allowed: ${keepColumns.length + 2}): ${left.join(', ')}. Cleanup failed in: ${cleanupFailures.length ? cleanupFailures.join(' | ') : 'no test (the cleanup itself did not remove them)'}`);
+      for (const s of survivors) {
+        if (left.some((l) => l.id === s.id)) continue;
+        if (await page.evaluate((id) => window.deck.ptyIsAlive(id), s.id)) left.push({ id: s.id, label: `${s.title} (left by "${s.test}")` });
+      }
+      if (left.length > 2) {
+        throw new Error(`${left.length} test terminals are still alive at the end (allowed: 2): ${left.map((l) => l.label).join(', ')}. Cleanup failed in: ${cleanupFailures.length ? cleanupFailures.join(' | ') : 'no test (the cleanup itself did not remove them)'}`);
       }
     }
+  } catch (error) { checkError = error; }
+  try { if (app) await app.close(); } catch (error) {
+    if (!checkError) checkError = error; else console.warn(`app not closed cleanly: ${error.message.split('\n')[0]}`);
   } finally {
-    try { if (app) await app.close(); } finally {
-      if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
-    }
+    if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
   }
+  if (checkError) throw checkError;
 });
 // Every worker is a ConPTY PowerShell plus its stand-in node. Left open
 // until the file ends, the first ten tests alone piled up 26 PowerShells and a whole run took the machine to 98% commit. So a test's
@@ -118,14 +127,20 @@ test.afterAll(async () => {
 // Columns present when the tests start (the idle shell and the Captain) stay.
 let keepColumns = [];
 const cleanupFailures = [];   // titles of the tests whose cleanup threw; afterAll names them if terminals piled up
-async function closeTestTerminals() {
+const survivors = [];         // { id, title, test } of archived terminals whose PTY was still alive after the wait; afterAll asks again
+async function closeTestTerminals(testTitle = '') {
   const closed = await page.evaluate((keep) => {
-    const ids = [];
-    for (const col of columns.filter((c) => !c.isMain && !keep.includes(c.id))) { archiveColumn(col, { captain: true, quiet: true }); ids.push(col.id); }
-    return ids;
+    const cols = [];
+    for (const col of columns.filter((c) => !c.isMain && !keep.includes(c.id))) { cols.push({ id: col.id, title: col.title || col.id }); archiveColumn(col, { captain: true, quiet: true }); }
+    return cols;
   }, keepColumns);
   // archiveColumn sends the kill; wait until each PTY is really gone before the next test starts a new one
-  for (const id of closed) await expect.poll(() => page.evaluate((s) => window.deck.ptyIsAlive(s), id), { timeout: 15000 }).toBe(false);
+  let failure;
+  for (const { id, title } of closed) {
+    try { await expect.poll(() => page.evaluate((s) => window.deck.ptyIsAlive(s), id), { timeout: 15000 }).toBe(false); }
+    catch (error) { survivors.push({ id, title, test: testTitle }); failure = failure || error; }
+  }
+  if (failure) throw failure;
   return closed.length;
 }
 test.afterEach(async ({}, info) => {
@@ -135,7 +150,7 @@ test.afterEach(async ({}, info) => {
       await info.attach('task-board-state', { body: JSON.stringify({ cards: await list({ archived: true }), notices: await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板')) }), contentType: 'application/json' });
     }
   } catch (error) { console.warn(`state of "${info.title}" not attached: ${error.message.split('\n')[0]}`); }
-  try { await closeTestTerminals(); } catch (error) { cleanupFailures.push(info.title); console.warn(`terminals of "${info.title}" not all closed: ${error.message.split('\n')[0]}`); }
+  try { await closeTestTerminals(info.title); } catch (error) { cleanupFailures.push(info.title); console.warn(`terminals of "${info.title}" not all closed: ${error.message.split('\n')[0]}`); }
 });
 
 test('CLI cards bind actual worker receipts, exact text stays in the session and dependencies unlock', async () => {
