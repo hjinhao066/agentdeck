@@ -2454,7 +2454,15 @@ function wrappedLineToCells(buf, row, cols) {
     if (!line) break;
     if (r > start && !line.isWrapped) break; // next logical line begins
     endRow = r;
-    for (let x = 0; x < cols; x++) {
+    // A wide glyph that did not fit in the last column went on to the next row
+    // and left that column blank: no space in the text ("经验 学习" in a path).
+    let width = cols;
+    const next = buf.getLine(r + 1);
+    if (next && next.isWrapped) {
+      const head = next.getCell(0), tail = line.getCell(cols - 1);
+      if (head && head.getWidth() === 2 && tail && tail.getWidth() === 1 && !(tail.getChars() || ' ').trim()) width = cols - 1;
+    }
+    for (let x = 0; x < width; x++) {
       cell = line.getCell(x, cell);
       if (!cell) continue;
       const w = cell.getWidth();
@@ -2469,6 +2477,43 @@ function wrappedLineToCells(buf, row, cols) {
 function trimTrail(text, s, e) {
   while (e > s && /[\s.,;:!?)\]}>'"]/.test(text[e - 1])) e--;
   return e;
+}
+// Characters no path in agent output goes past: Chinese and full-width
+// punctuation (，。、；：（）「」…), full-width letters, curly quotes, "…" and "—".
+const PATH_STOP = '\\u2014\\u2015\\u2018-\\u201f\\u2026\\u3000-\\u3004\\u3008-\\u303f\\uff01-\\uff60\\uffe0-\\uffe6';
+const FILE_EXT = /\.[A-Za-z][A-Za-z0-9]{0,7}(?::\d+(?::\d+)?)?$/;
+const CJK_WORD = /^[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]+$/;
+// Where an absolute path the pattern took really ends. The pattern lets single
+// spaces through for folder names ("Application Support", "My Project"), so it
+// also took the prose after a path: "…/renderer.js 里的 findLinks", or
+// "…\a.json 和 C", whose "C:" then started no second link. A space stays in a
+// folder name; in the last name only when that name reads as one file name: it
+// ends in an extension, the word before the space has none and no word after it
+// is Chinese ("截屏2026-10-09 下午3.04.12.png" stays whole, "README.md 最急的两件"
+// ends at README.md). A space after a sentence's own punctuation ("a.md, then")
+// ends a path anywhere, and so does Chinese glued to an extension with no dot
+// after it ("a.md里面写了"). `sep` is the separator: "/", or "/" and "\" on Windows.
+function pathEnd(text, s, e, sep) {
+  let p = text.slice(s, e), from = 0;
+  for (let i = 0; i <= p.length; i++) {
+    if (i < p.length && !sep.test(p[i])) continue;
+    const seg = p.slice(from, i), words = seg.split(/(?<!\\) /);   // "\ " is an escaped space, part of the name
+    let cut = -1;
+    for (let w = 0, at = 0; w < words.length - 1 && cut < 0; w++) {
+      at += words[w].length;
+      if (/[.,;:!?]$/.test(words[w])) cut = at;
+      at++;
+    }
+    if (cut < 0 && words.length > 1 && (FILE_EXT.test(words[0]) ||
+      i === p.length && (!FILE_EXT.test(seg) || words.slice(1).some((w) => CJK_WORD.test(w))))) cut = words[0].length;
+    if (cut >= 0) { p = p.slice(0, from + cut); break; }
+    from = i + 1;
+  }
+  let name = p.length;
+  while (name > 0 && !sep.test(p[name - 1])) name--;
+  const glued = /^(.*?\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?)[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/.exec(p.slice(name));
+  if (glued && !p.slice(name + glued[1].length).includes('.')) p = p.slice(0, name + glued[1].length);
+  return trimTrail(text, s, s + p.length);
 }
 // The relative file references in one run of [\w.+@%:/-], i.e. the matches of
 //   /(?:\.{1,2}\/)?(?:[\w.+@%-]+\/)+[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?
@@ -2529,28 +2574,37 @@ function findLinks(text) {
   // Match file:// URIs, ~/... and /... absolute paths. Real macOS paths often
   // contain UNESCAPED spaces ("Application Support", "My Project"), so a path
   // segment accepts: a backslash-escaped space ("\ "); any char that isn't
-  // whitespace/quotes/angle-brackets/pipe or CJK punctuation (this includes "/"
-  // so multi-level paths just work); or a single space NOT followed by another
-  // space or a slash (stops at double-spaces and at " /" so two paths on one line
-  // don't merge). Over-capture of trailing prose is corrected in the main process
-  // by resolving the longest path that actually exists on disk.
-  const fileRe = /(?:file:\/\/)?(?:~\/|\/)(?:\\ |[^\s"'`<>|，。、；：！？（）【】「」]| (?![\s/]))+/gu;
+  // whitespace/quotes/angle-brackets/pipe or Chinese punctuation (PATH_STOP; this
+  // includes "/" so multi-level paths just work); or a single space NOT followed
+  // by another space or a slash (stops at double-spaces and at " /" so two paths
+  // on one line don't merge). pathEnd then gives back the prose after the path,
+  // and the search goes on from there: the rest of the line may hold the next one.
+  // No path is longer than 1024 characters (macOS's PATH_MAX); the cap keeps a
+  // long line of short paths with prose between them from being read to its end
+  // once per path. What remains ambiguous is settled in the main process, which
+  // resolves the longest path that actually exists on disk.
+  const sep = env.platform === 'win32' ? /[\\/]/ : /\//;
+  const fileRe = new RegExp('(?:file:\\/\\/)?(?:~\\/|\\/)(?:\\\\ |[^\\s"\'`<>|' + PATH_STOP + ']| (?![\\s/])){1,1024}', 'gu');
   while ((m = fileRe.exec(text))) {
-    const raw = m[0];
+    const raw = m[0], s = m.index;
     if (/^https?:/.test(raw) || raw.length < 4) continue;
-    if (m.index > 0 && text[m.index - 1] === '.') continue; // "./x" is relative — relRe below handles it
-    const slashes = (raw.match(/\//g) || []).length;
+    // the tail of something else: "src/lib/a.js" and "./x" are relative (relativeLinks
+    // below), "C:/Users/…" is a Windows path (winRe), "x.com/a/b" a URL's
+    if (s > 0 && /[\w.~/\\-]/.test(text[s - 1]) || /(?:^|[^A-Za-z])[A-Za-z]:$/.test(text.slice(Math.max(0, s - 3), s))) continue;
+    const e = pathEnd(text, s, trimTrail(text, s, s + raw.length), sep);
+    fileRe.lastIndex = Math.max(e, s + 1);
+    const slashes = (text.slice(s, e).match(/\//g) || []).length;
     if (!raw.startsWith('~') && slashes < 2) continue; // noise guard for bare /a/b
-    const s = m.index, e = trimTrail(text, s, s + raw.length);
     if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL
     out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
   }
   // Windows absolute paths: "C:\Users\jinhao\proj\file.js:12" or "C:/…". Only
   // matched on Windows so a stray "C:\" in prose can't hijack macOS output.
   if (env.platform === 'win32') {
-    const winRe = /\b[A-Za-z]:[\\/](?:[^\s"'`<>|:*?，。、；：！？（）【】「」]| (?![\s\\/]))+(?::\d+(?::\d+)?)?/gu;
+    const winRe = new RegExp('\\b[A-Za-z]:[\\\\/](?:[^\\s"\'`<>|:*?' + PATH_STOP + ']| (?![\\s\\\\/])){1,1024}(?::\\d+(?::\\d+)?)?', 'gu');
     while ((m = winRe.exec(text))) {
-      const s = m.index, e = trimTrail(text, s, s + m[0].length);
+      const s = m.index, e = pathEnd(text, s, trimTrail(text, s, s + m[0].length), sep);
+      winRe.lastIndex = Math.max(e, s + 1);
       if (out.some((o) => s < o.end && e > o.start)) continue;
       out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
     }

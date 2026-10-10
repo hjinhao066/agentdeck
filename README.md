@@ -1021,7 +1021,13 @@ an index from before this counts nothing as new). The phone hub does not have it
 - Clicking a link or file path in a bubble opens it in the right side pane, with
   tabs for 预览 (code, Markdown, images, directories), 终端 and 浏览器 (PDF opens
   there too). Cmd/Ctrl-click uses the system browser or file manager, Option-click
-  the editor.
+  the editor. Terminal output and bubbles find paths with the same rules
+  (`findLinks` in `renderer.js`): a path ends at Chinese or full-width punctuation,
+  curly quotes and the space before the words after it, so two paths on one line
+  are two links. Spaces stay inside a folder name (`Application Support`,
+  `Program Files (x86)`) and in a file name that reads as one
+  (`截屏2026-10-09 下午3.04.12.png`). `C:\…` paths are links on Windows only, and
+  keep their backslashes in rendered Markdown (`C:\Users\me\.claude`).
 - Cmd/Ctrl minus, plus and zero adjust the terminal and chat text together (8–32,
   default 13). The native View menu uses the same control; it does not zoom the
   page, so the sidebar and column geometry stay stable.

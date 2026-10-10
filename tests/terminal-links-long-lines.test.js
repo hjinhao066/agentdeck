@@ -47,6 +47,8 @@ for (const [name, text] of [
   ['20,000 characters of "a."', 'a.'.repeat(10000)],
   ['a long list of dotted versions', 'v1.2.3-'.repeat(3000)],
   ['a long dotted path', 'a.b/'.repeat(5000) + 'c.js:12'],
+  // each path ends at its first space, so the search starts again right after it
+  ['20,000 characters of paths with words between them', '/a/b.md ('.repeat(2250)],
 ]) {
   test(`findLinks on ${name} finishes in linear time`, () => {
     findLinks('/warm/up.js:1');
@@ -55,17 +57,27 @@ for (const [name, text] of [
   });
 }
 
+test('findLinks on 20,000 characters of Windows paths with words between them finishes in linear time on Windows', () => {
+  const win = load('win32').findLinks;
+  win('C:\\warm\\up.js:1');
+  const { value, ms } = timed(() => win('C:\\a\\b.md 和 C:\\c d\\e.md, '.repeat(800)));
+  assert.ok(ms < BUDGET_MS, `took ${ms.toFixed(0)} ms`);
+  assert.equal(value.length, 1600);
+});
+
 test('links found in ordinary lines are unchanged', () => {
-  // Exactly what findLinks returned before the change, quirks included.
+  // What findLinks returned before the change, except where a path took the
+  // prose after it or a relative path was linked from its second folder
+  // (tests/path-links.test.js has those cases).
   const kinds = (text) => findLinks(text).map((m) => `${m.kind}:${m.text}@${m.start}`);
   assert.deepEqual(kinds('see src/renderer.js:406 and main.js:12 now'), ['file:src/renderer.js:406@4', 'file:main.js:12@28']);
-  assert.deepEqual(kinds('open /Users/me/My Project/a.md 这里'), ['file:/Users/me/My Project/a.md 这里@5']);
+  assert.deepEqual(kinds('open /Users/me/My Project/a.md 这里'), ['file:/Users/me/My Project/a.md@5']);
   assert.deepEqual(kinds('https://example.com/a/b.js?x=1, then ./lib/x.ts'), ['url:https://example.com/a/b.js?x=1@0', 'file:./lib/x.ts@37']);
   assert.deepEqual(kinds('"file":"src/a.js:10","n":1.5'), ['file:src/a.js:10@8']);
-  assert.deepEqual(kinds('x/~src/a.js and node.js or and/or'), ['file:/~src/a.js and node.js or and/or@1']);
-  assert.deepEqual(kinds('a+src/b.js q@r/s.txt'), ['file:/b.js q@r/s.txt@5']);
+  assert.deepEqual(kinds('x/~src/a.js and node.js or and/or'), []);
+  assert.deepEqual(kinds('a+src/b.js q@r/s.txt'), ['file:a+src/b.js@0', 'file:q@r/s.txt@11']);
   assert.deepEqual(kinds('~/notes/todo.md:3:7'), ['file:~/notes/todo.md:3:7@0']);
-  assert.deepEqual(kinds('build/out/app.min.js.map'), ['file:/out/app.min.js.map@5']);
+  assert.deepEqual(kinds('build/out/app.min.js.map'), ['file:build/out/app.min.js.map@0']);
   assert.deepEqual(kinds('ok main.js:1, b.ts:22 x'), ['file:main.js:1@3', 'file:b.ts:22@14']);
 });
 
