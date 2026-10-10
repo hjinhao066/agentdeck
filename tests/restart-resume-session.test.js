@@ -501,3 +501,16 @@ test('a crew task the fallback closed before a quit that did not park it is cont
   assert.equal(app.task().status, 'working');
   assert.deepEqual(w.config.mainSession.pending.filter((p) => p.taskId === 'task' && p.source === 'fallback'), []);
 });
+
+// Merging at delivery takes in the column's unsent supplements, never an older task that ran and ended long ago.
+test('a continue message does not relabel an older task of the same column that the fallback closed', async (t) => {
+  const w = world(t);
+  w.config.mainSession.tasks.unshift({ id: 'old', colId: 'worker', gen: 1, status: 'stopped', title: '更早的活', startedAt: 1, doneAt: 2, instructionSent: true,
+    receipt: { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' } });
+  const app = w.boot();
+  await app.resume(); await app.deliver();
+  const old = w.config.mainSession.tasks.find((x) => x.id === 'old');
+  assert.equal(old.status, 'stopped');
+  assert.equal(old.receipt.source, 'fallback');
+  assert.equal(app.task().status, 'working');
+});
