@@ -122,6 +122,7 @@ contextBridge.exposeInMainWorld('deck', {
   ptySpawn: (id, cwd, cols, rows, managed, seatId, configDir, crew, captain) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId, configDir, crew, captain }),
   claudeSeats: (fresh) => ipcRenderer.invoke('seats:list', { fresh: fresh === true }),
   tokenUsage: (fresh) => ipcRenderer.invoke('token-usage:get', { fresh: fresh === true }),
+  tokenUsageMachines: () => ipcRenderer.invoke('token-usage:machines'),
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
   captainCheckpoint: (payload) => ipcRenderer.invoke('seats:checkpoint', payload),
   captainHandoff: (payload) => ipcRenderer.invoke('seats:handoff', payload),

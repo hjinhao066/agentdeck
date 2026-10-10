@@ -46,6 +46,7 @@ const { TodoFailureNotifications, nextAllowedTime } = require('./todo-failure-no
 const Worktree = require('./worktree-core');
 const { prepareWorkspaceTrust } = require('./workspace-trust-main');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
+const FleetUsage = require('./fleet-usage-core');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { watchDir } = require('./dir-watch');
 const { createRefresh: createClaudeQuotaRefresh, createSeatGate, readSeat: readClaudeSeat, readCredentials: readClaudeCredentials } = require('./quota-claude');
@@ -155,6 +156,9 @@ handleMain('todos:request', (_event, payload) => {
   return { item };
 });
 let fleetClient = null;
+// Token 用量 (token-usage-main.js): its scans also feed this machine's summary to the hub.
+let tokenUsage = null;
+let fleetUsageTimer = null;
 handleMain('task-board:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'move', 'archive', 'update', 'priority', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched', 'noteWorktree', 'dispatchNow', 'dispatchNowWaiting', 'dispatchNowDelivered', 'nextUp'].includes(payload.op)) throw new Error('Invalid task board operation.');
   const result = taskStore[payload.op](payload.input || {});
@@ -198,6 +202,8 @@ handleMain('worktree:reclaim', (_event, payload) => {
 });
 handleMain('fleet:state', () => fleetClient ? fleetClient.snapshot() : { configured: false, devices: [], history: [], error: null, conflictCount: 0, selfId: null, lastSyncAt: null });
 handleMain('fleet:ack-conflicts', () => (fleetClient && typeof fleetClient.ackConflicts === 'function' ? fleetClient.ackConflicts() : null));
+// The Token 用量 chart's Mac | Windows switch: the other machine's summary and why it may have none.
+handleMain('token-usage:machines', () => ({ selfPlatform: process.platform, fleet: fleetClient && fleetClient.usageSnapshot ? fleetClient.usageSnapshot() : { configured: false } }));
 
 // Every privileged channel belongs exclusively to the local deck main frame.
 // Native notifications are created here, never in a page.
@@ -1121,8 +1127,9 @@ app.whenReady().then(async () => {
     handoffOptions: { discussionsRoot: tudArg ? path.join(app.getPath('userData'), 'discussions') : undefined, cards: () => taskStore.list({ archived: true }), tasksDir: taskStore.dir, boardVersion: () => boardVersionOf(taskStore.dir),
       machine: { platform: process.platform, hostname: os.hostname(), appVersion: app.getVersion() } } });
   // Token 用量: this machine's CLI logs, scanned in a utility process. A test profile reads only its own usage-home.
-  registerTokenUsageIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'usage-home') : HOME, userData: app.getPath('userData'),
-    getSeats: () => seatConfig().claudeSeats, test: !!tudArg });
+  tokenUsage = registerTokenUsageIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'usage-home') : HOME, userData: app.getPath('userData'),
+    getSeats: () => seatConfig().claudeSeats, test: !!tudArg,
+    onResult: (result) => { if (fleetClient && fleetClient.noteUsage) fleetClient.noteUsage(FleetUsage.summarize(result)); } });
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
@@ -2224,6 +2231,7 @@ function startFleet(configPath) {
   if (settings.error) {
     fleetClient = {
       snapshot: () => ({ configured: true, devices: [], history: [], error: settings.error, conflictCount: 0, selfId: device.id, lastSyncAt: null }),
+      usageSnapshot: () => ({ configured: true, devices: [], error: settings.error, selfId: device.id, lastSyncAt: null, usage: {} }),
       stop() {}, noteResult() {}, noteCaptain() {},
     };
     return;
@@ -2237,7 +2245,7 @@ function startFleet(configPath) {
     fleetClient = new FleetClient({
       baseUrl: settings.baseUrl, tokenFile: settings.tokenFile, device, taskStore,
       historyDir: path.join(userData, 'fleet-history'), stateFile: path.join(userData, 'fleet-state.json'),
-      sessions: () => fleetSessions(configPath), version, syncMs: settings.syncMs,
+      sessions: () => fleetSessions(configPath), version, syncMs: settings.syncMs, usageEveryMs: settings.usageEveryMs,
       onChange: () => send('task-board:changed', {}),
     });
     try {
@@ -2247,9 +2255,20 @@ function startFleet(configPath) {
       }
     } catch (_) {}
     fleetClient.start();
+    // The other machine sees this one's Token 用量 even when nobody opens the view here:
+    // a scan (incremental, in its utility process) a little after sync starts, then every
+    // half hour. Scans the view runs feed the summary too (onResult above).
+    const scanForFleet = () => { if (tokenUsage) tokenUsage.get().catch(() => {}); };
+    fleetUsageTimer = setTimeout(function again() {
+      scanForFleet();
+      fleetUsageTimer = setTimeout(again, settings.usageScanMs);
+      if (fleetUsageTimer.unref) fleetUsageTimer.unref();
+    }, settings.usageDelayMs);
+    if (fleetUsageTimer.unref) fleetUsageTimer.unref();
   }, settings.startDelayMs);
   fleetClient = {
     snapshot: () => ({ configured: true, devices: [], history: [], error: null, conflictCount: 0, selfId: device.id, lastSyncAt: null }),
+    usageSnapshot: () => ({ configured: true, devices: [], error: null, selfId: device.id, lastSyncAt: null, usage: {} }),
     stop() { clearTimeout(startTimer); }, noteResult() {}, noteCaptain() {},
   };
 }
@@ -2326,6 +2345,7 @@ quitGate = RestartResume.createQuitGate({
 onMain('park-for-restart-done', () => { if (quitGate) quitGate.acked(); });
 app.on('before-quit', (event) => {
   if (quitGate.beforeQuit(event, readResumeEnabled()) !== 'cleanup') return;
+  clearTimeout(fleetUsageTimer);
   if (fleetClient && fleetClient.stop) fleetClient.stop();
   claudeQuotaTimer?.stop();
   claudeQuotaRefresh?.dispose();

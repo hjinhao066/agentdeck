@@ -14,11 +14,17 @@
 // 无官方价 and is never drawn as $0. The 订阅值不值 card (in both units) weighs each
 // Claude account's dollars this billing cycle against its plan's price; the
 // dearest subscription leads, large, the others follow small to compare.
+// The chart's Mac | Windows switch redraws the chart and its day table with the
+// other machine's numbers (synced by fleet-usage-core.js); the cards above it
+// always count this machine. Another machine without numbers says why instead
+// of drawing empty columns.
 (function () {
   'use strict';
   const C = window.TokenUsageCore;
+  const F = window.FleetUsageCore;
   const RANGES = [7, 30];
   const REFRESH_EVERY = 2 * 60 * 1000;
+  const MACHINES_EVERY = 10 * 1000;   // the other machine's state is a local read
   const MIN_COL = 22;         // px per day before the chart scrolls
   const LINE = 14;            // a total label's line height
   const GAP = 2;              // surface gap between stacked segments
@@ -30,9 +36,13 @@
     download: svgIcon('<path d="M12 4v11"/><path d="m7 11 5 5 5-5"/><path d="M5 20h14"/>'),
     alert: svgIcon('<path d="M12 8v5M12 16.5v.01"/><circle cx="12" cy="12" r="9"/>'),
     pencil: svgIcon('<path d="M4 20h4L19 9a2.83 2.83 0 0 0-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/>'),
+    // Lucide "unlink" (ISC): two halves of a chain pulled apart, with break marks at the gap
+    unlinked: svgIcon('<path d="m18.84 12.25 1.72-1.71h-.02a5 5 0 0 0-.12-7.07 5 5 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 .12 7.07 5 5 0 0 0 6.95 0l1.71-1.71"/><path d="M8 2v3M2 8h3M16 19v3M19 16h3"/>'),
+    clock: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   };
   const UNITS = [['tokens', 'Token'], ['usd', '金额']];
   const NO_PRICE = '无官方价';
+  const EMPTY = '这段时间本机没有用量记录，队长和队员干过活后会按天出现在这里';
   const SVG_NS = 'http://www.w3.org/2000/svg';
   let host = null;
   let root, heroEl, heroCapEl, heroSubEl, providersEl, legendEl, wrapEl, svgEl, tipEl, tableEl, sourcesEl, statusEl, emptyEl, rangeEl, unitEl, valueEl, seatsEl, updatedEl, refreshBtn;
@@ -51,6 +61,11 @@
   let hover = null;           // the column under the pointer (or keyboard)
   let focusKey = null;        // a legend entry under the pointer
   let model = null;           // what the last render drew: { days, colors, labels, cols, ... }
+  let ownModel = null;        // this machine's numbers, whichever machine the chart shows
+  // The chart's Mac | Windows switch: the token-usage:machines answer, the platform
+  // picked (null: this machine, the default every time the view opens), the parts.
+  let machines = null, shownPlatform = null, shown = null, machineSig = '', machineTimer = null, spoken = '';
+  let machineEl, machineNoteEl, offEl;
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -65,13 +80,13 @@
   };
 
   // ---- what the numbers say for the chosen range ----
-  function derive() {
+  function derive(src = data) {
     const today = data.today;
     const days = C.dayRange(today, range);
-    const tokenDays = data.days || {};
+    const tokenDays = src.days || {};
     // 金额: each day's priced models read like a token day; the rest are 无官方价.
     const money = unit === 'usd';
-    const costDays = data.costs || {};
+    const costDays = src.costs || {};
     const byDay = money ? Object.fromEntries(Object.keys(costDays).map((d) => [d, C.pricedDay(costDays[d])])) : tokenDays;
     const unpriced = new Set();
     if (money) for (const d of days) for (const k of C.unpricedKeys(costDays[d])) unpriced.add(k);
@@ -145,6 +160,7 @@
   }
   const valueText = (m, key) => (m.money && m.unpriced.has(key) && !(m.series[key] > 0) ? NO_PRICE : short(m, m.series[key] || 0));
   function renderLegend(m) {
+    if (shownOff()) { legendEl.replaceChildren(); return; }
     legendEl.replaceChildren(...legendEntries(m).map((e) => {
       const item = el('li', 'tu-legend-item');
       item.dataset.key = e.key;
@@ -176,8 +192,11 @@
   }
 
   function renderChart(m) {
+    if (shownOff()) { svgEl.replaceChildren(); model.cols = []; setHover(null); return; }
     const n = m.days.length;
-    const boxW = Math.max(200, wrapEl.clientWidth);
+    // the box's real width rounded down: clientWidth rounds 1104.67 up to 1105, and the svg one
+    // pixel too wide gave every chart a sideways scrollbar (Windows, 1440 px window)
+    const boxW = Math.max(200, Math.floor(wrapEl.getBoundingClientRect().width) || wrapEl.clientWidth);
     const height = wrapEl.clientHeight > 120 ? wrapEl.clientHeight : 300;
     const side = 6;
     const colW = Math.max(MIN_COL, (boxW - side * 2) / n);
@@ -317,8 +336,10 @@
     const unpriced = m.money ? C.unpricedKeys(m.costDays[day]) : [];
     const n = (v) => (m.money ? C.formatUsd(v) : C.formatFull(v));
     tableEl.replaceChildren();
+    tableEl.hidden = shownOff();
+    if (tableEl.hidden) return;
     const cap = el('div', 'tu-table-cap');
-    cap.append(el('span', 'tu-table-day', C.dayTitle(day, m.today)), el('span', 'tu-table-total', total ? `合计 ${n(total)}` : ''));
+    cap.append(el('span', 'tu-table-day', C.dayTitle(day, m.today) + (shown ? ` · ${shown.label}` : '')), el('span', 'tu-table-total', total ? `合计 ${n(total)}` : ''));
     tableEl.append(cap);
     if (!total && !unpriced.length) { tableEl.append(el('div', 'tu-table-empty', '这天没有用量记录。')); return; }
     const t = el('table', 'tu-table');
@@ -348,6 +369,103 @@
     tableEl.append(scroll);
   }
 
+  // ---- the chart's Mac | Windows switch ----
+  // shown: the other machine picked (FleetUsage.machine), null for this one.
+  const shownOff = () => !!shown && shown.state !== 'ok';
+  const clock = (ms) => { const t = new Date(ms); return `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
+  function asOf(ms) {
+    if (!ms) return '';
+    const day = C.dayKey(ms);
+    return day === data.today ? clock(ms) : `${C.axisLabel(day, data.today)} ${clock(ms)}`;
+  }
+  // What the chart draws: this machine's scan, the other machine's summary, or nothing.
+  function chartSource() {
+    shown = null;
+    if (!machines || !F || !shownPlatform || shownPlatform === machines.selfPlatform) return data;
+    shown = F.machine({ platform: shownPlatform, selfPlatform: machines.selfPlatform, fleet: machines.fleet });
+    return shown.state === 'ok' ? shown.summary : null;
+  }
+  // The dot on the other machine's button: has numbers, has old numbers, or none.
+  const dotOf = (mm) => (mm.state === 'ok' ? (mm.stale ? 'stale' : 'ok') : ['old', 'newer', 'missing', 'error', 'unconfigured'].includes(mm.state) ? 'warn' : 'none');
+  function renderMachine() {
+    const self = machines && machines.selfPlatform;
+    const known = !!(F && self && F.PLATFORMS.some((p) => p.key === self));
+    machineEl.hidden = !known;
+    root.classList.toggle('off', shownOff());
+    // the notice is rebuilt only when what it says changes or it comes into view; it is said
+    // through the page's live region (FleetUsage.speakNotice), once each time, never on a refresh
+    const note = F && F.notice(shown);
+    if (F && open) {
+      const talk = F.speakNotice(spoken, note);
+      spoken = talk.spoken;
+      if (talk.say) host.announce(talk.say);
+    }
+    if (!note) { offEl.hidden = true; delete offEl.dataset.key; }
+    else if (offEl.hidden || offEl.dataset.key !== note.key) {
+      offEl.dataset.state = note.state;
+      offEl.dataset.key = note.key;
+      const icon = el('i', 'tu-off-icon');
+      icon.innerHTML = ICON[note.icon] || ICON.alert;
+      icon.setAttribute('aria-hidden', 'true');
+      offEl.replaceChildren(icon, el('b', 'tu-off-title', note.title), el('span', 'tu-off-detail', note.detail));
+      if (note.hint) offEl.title = note.hint; else offEl.removeAttribute('title');
+      offEl.hidden = false;
+    }
+    if (!known) { machineNoteEl.textContent = ''; return; }
+    machineEl.querySelectorAll('button').forEach((b) => {
+      const p = b.dataset.platform;
+      const on = p === (shownPlatform || self);
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', String(on));
+      const label = F.platformLabel(p);
+      const dot = b.querySelector('.tu-machine-dot');
+      if (p === self) {
+        dot.dataset.state = 'self';
+        b.title = `${label}（本机）的用量`;
+        b.setAttribute('aria-label', `看 ${label}（本机）的用量`);
+        return;
+      }
+      const mm = F.machine({ platform: p, selfPlatform: self, fleet: machines.fleet });
+      dot.dataset.state = dotOf(mm);
+      const why = mm.state === 'ok' ? `数字截至 ${asOf(mm.summary.generatedAt)}${mm.stale ? '，它现在离线' : ''}` : mm.title + (mm.hint ? `（${mm.hint}）` : '');
+      b.title = `${label} 的用量：${why}`;
+      b.setAttribute('aria-label', `看 ${label} 的用量，${why}`);
+    });
+    if (!shown) machineNoteEl.textContent = '';
+    else if (shown.state === 'ok') {
+      machineNoteEl.textContent = `${shown.stale ? '离线 · ' : ''}截至 ${asOf(shown.summary.generatedAt)}`;
+      machineNoteEl.title = `${shown.label}${shown.device && shown.device.name ? `（${shown.device.name}）` : ''}最近一次上传的用量${shown.syncError ? `；这台电脑同步出了问题：${shown.syncError}` : ''}`;
+    } else { machineNoteEl.textContent = ''; machineNoteEl.title = ''; }
+    emptyEl.textContent = shown ? `这段时间 ${shown.label} 没有用量记录` : EMPTY;
+  }
+  function loadMachines() {
+    if (!window.deck || !window.deck.tokenUsageMachines) return;
+    window.deck.tokenUsageMachines().then((r) => {
+      if (!open || !r) return;
+      // redrawn only when what a button or the chart says changed (the sync time moves every round)
+      const sig = JSON.stringify(F ? F.PLATFORMS.map((p) => {
+        const mm = F.machine({ platform: p.key, selfPlatform: r.selfPlatform, fleet: r.fleet });
+        return [mm.state, mm.title, mm.detail, mm.stale, mm.summary ? mm.summary.generatedAt : 0, mm.updatedAt, mm.syncError];
+      }) : []);
+      machines = r;
+      if (sig === machineSig) return;
+      machineSig = sig;
+      if (data) render(); else renderMachine();
+    }).catch(() => {});
+  }
+  function setMachine(p) {
+    const next = machines && p === machines.selfPlatform ? null : p;
+    if (next === shownPlatform) return;
+    shownPlatform = next;
+    selected = null;
+    delete wrapEl.dataset.scrolled;
+    render();
+    loadMachines();   // what the other machine sent may have changed since the view opened
+    // a notice is said by renderMachine (speakNotice); saying it here too would read it twice
+    const said = F.announcement(shown || { state: 'self', label: F.platformLabel(p) });
+    if (said) host.announce(said);
+  }
+
   // ---- where the numbers come from ----
   const SOURCE_NOTE = {
     cursor: '从 Cursor 网站导出用量表（usage-events…csv）放进「下载」文件夹就能算上',
@@ -355,6 +473,8 @@
     'chatgpt-web': '网页版 ChatGPT 不提供用量数字',
   };
   function renderSources() {
+    // the row lists this machine's logs: shown only while the chart shows this machine
+    sourcesEl.hidden = !!F && !F.showsSources(shown);
     sourcesEl.replaceChildren(...(data.sources || []).map((s) => {
       const item = el('li', 'tu-source ' + s.state);
       item.dataset.source = s.id;
@@ -446,7 +566,7 @@
     window.deck.claudeSeats(false).then((list) => {
       if (!open || !Array.isArray(list)) return;
       seats = list;
-      if (data && model) { if (!editing) renderValue(model); renderSeats(model); }
+      if (data && model) { if (!editing) renderValue(model); renderSeats(ownModel || model); }
     }).catch(() => {});
   }
 
@@ -501,12 +621,17 @@
     root.classList.toggle('loading', !data && loading);
     root.classList.toggle('ready', !!data);
     if (!data) return;
-    model = derive();
+    // the cards count this machine; the chart and its day table the machine picked
+    const src = chartSource();
+    model = derive(src || data);
+    const own = src && src !== data ? derive(data) : model;
+    ownModel = own;
+    renderMachine();
     root.classList.toggle('money', model.money);
-    emptyEl.hidden = model.total > 0 || model.unpriced.size > 0;
-    renderHero(model);
+    emptyEl.hidden = shownOff() || model.total > 0 || model.unpriced.size > 0;
+    renderHero(own);
     if (!editing) renderValue(model);   // a refresh never wipes a date being typed
-    renderSeats(model);
+    renderSeats(own);   // the seat directories are this machine's
     renderLegend(model);
     renderChart(model);
     renderTable(model);
@@ -518,6 +643,7 @@
     const mine = ++seq;
     loading = true;
     render();
+    loadMachines();
     window.deck.tokenUsage(fresh).then((r) => {
       if (mine !== seq) return;
       data = r; error = '';
@@ -576,7 +702,14 @@
           <section class="tu-value" aria-label="订阅值不值" hidden></section>
           <section class="tu-seats" aria-label="按席位目录" hidden></section>
           <section class="tu-chart-card" aria-label="每天各模型用量">
-            <ul class="tu-legend" aria-label="图例"></ul>
+            <div class="tu-chart-head">
+              <ul class="tu-legend" aria-label="图例"></ul>
+              <div class="tu-machine-bar">
+                <span class="tu-machine-note"></span>
+                <div class="tu-range tu-machine" role="group" aria-label="看哪台电脑的用量" hidden>${(F ? F.PLATFORMS : []).map((p) => `<button type="button" data-platform="${p.key}"><i class="tu-machine-dot" aria-hidden="true"></i>${p.label}</button>`).join('')}</div>
+              </div>
+            </div>
+            <div class="tu-off" hidden></div>
             <div class="tu-chart" tabindex="0" role="group" aria-label="每天的用量柱状图：左右方向键换一天">
               <svg class="tu-svg" aria-hidden="true"></svg>
               <div class="tu-tip" role="tooltip" hidden></div>
@@ -595,6 +728,10 @@
     heroSubEl = root.querySelector('.tu-hero-sub');
     providersEl = root.querySelector('.tu-providers');
     legendEl = root.querySelector('.tu-legend');
+    machineEl = root.querySelector('.tu-machine');
+    machineNoteEl = root.querySelector('.tu-machine-note');
+    offEl = root.querySelector('.tu-off');
+    machineEl.querySelectorAll('button').forEach((b) => { b.onclick = () => setMachine(b.dataset.platform); });
     wrapEl = root.querySelector('.tu-chart');
     svgEl = root.querySelector('.tu-svg');
     tipEl = root.querySelector('.tu-tip');
@@ -625,7 +762,7 @@
       host.announce(`${C.dayTitle(days[i], model.today)}，${full(model, C.dayTotal(model.byDay[days[i]]))}`);
     });
     wrapEl.addEventListener('blur', () => setHover(null));
-    new ResizeObserver(() => { if (open && data) { model = derive(); renderChart(model); } }).observe(wrapEl);
+    new ResizeObserver(() => { if (open && data) { model = derive(chartSource() || data); renderChart(model); } }).observe(wrapEl);
   }
 
   function init(h) {
@@ -639,12 +776,13 @@
     root.hidden = false;
     const saved = C.viewPrefs(host.prefs());
     range = saved.days; unit = saved.unit; starts = saved.starts;
-    selected = null; hover = null; editing = null;
+    selected = null; hover = null; editing = null; shownPlatform = null; machineSig = ''; spoken = '';
     delete wrapEl.dataset.scrolled;
     render();
     load(false);
     loadSeats();
     timer = setInterval(() => { if (!document.hidden) load(false); }, REFRESH_EVERY);
+    machineTimer = setInterval(() => { if (!document.hidden) loadMachines(); }, MACHINES_EVERY);
   }
   function hide() {
     if (!open) return;
@@ -653,6 +791,7 @@
     seq++;
     loading = false;
     clearInterval(timer); timer = null;
+    clearInterval(machineTimer); machineTimer = null;
     setHover(null);
   }
 
