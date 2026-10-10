@@ -76,12 +76,14 @@ raw diagnostics are not copied into AgentDeck logs or conversations.
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
-- **待办** (sidebar, under 搜索): your own one-line to-dos, kept apart from the
+- **待办** (sidebar, after 任务看板): your own one-line to-dos, kept apart from the
   agents' task cards. Type and press Enter; ⌘⇧N (Ctrl+Shift+N on Windows, changeable
   in 设置 · 快捷键) opens a quick-capture box with the list from anywhere in the window.
   The phone hub has the same list. A literal `@ai` mention (Chinese/end/space/punctuation boundary, excluding email/handles) opts a Todo into a local task for the Captain; unread notices survive Captain recreation. Status/artifact write-back uses `board-cli todo`; the state shows under the item (desktop and phone) and the answer is filed on 待我处理 (waiting for you or failed → 要你处理, done with files → 做完了你还没看); only failures send coalesced ordinary expedited phone alerts, deferred during local 23:00–10:00 quiet hours. See [docs/todo.md](docs/todo.md).
-- **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 任务看板, 搜索, 待办, Schedule, Artifacts, Skills,
-  then the 队长 row (once the Captain exists) with a folding arrow for the
+- **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 任务看板, 待办, Schedule, Artifacts, Skills
+  in two columns (icon and name, the counts at the right end), 搜索 across both under them. When a
+  name would be cut (a narrow sidebar or a bigger sidebar font) the entries show icons only, four to a
+  row, the counts on their corners and the names in the tooltips. Then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
   Every session is a live terminal column.
   待我处理 collects decisions, login/payment requests and reports that the Captain
@@ -1392,7 +1394,10 @@ heartbeat, which covers shutdown and sleep. Task cards, their fields, and
 saved captain transcripts are shared; a change is visible on the other side
 within a minute. Edits to different fields of the same card merge. Edits to
 the same field stay as two copies and the card shows 冲突. The sidebar section
-两机 shows online/offline, the last-seen time, and any sync error.
+两机 is one line: a dot per computer (Mac / Windows) and, only when something needs a look, 同步失败
+or the number of 冲突. Hovering it, reaching it with the keyboard, or clicking it (kept open until
+Esc or a click elsewhere) shows each computer's full name with online/offline and the last-seen time,
+the whole sync message, and the latest 队长记录, beside the sidebar.
 
 The service is `node sync-server.js --data <dir> --token-file <path>`. Bind it
 to the WireGuard address when it is deployed; the default listen address is
