@@ -9,7 +9,6 @@ const path = require('path');
 // sign-in pages in the user's browser. These tests leave the column config empty on purpose, so every one puts a trap in front of
 // PATH first: each real agent name only writes a line to trap.log. A test instance with no columns must leave trap.log empty.
 const AGENTS = ['claude', 'agy', 'antigravity', 'gemini', 'codex', 'cursor-agent', 'cursor', 'grok'];
-const GUARD = path.join(__dirname, 'fixtures', 'no-dialog-guard.js');
 const PACKAGED = !!process.env.AGENTDECK_TEST_EXECUTABLE;
 const APP_ARGS = PACKAGED ? [] : [path.resolve(__dirname, '../..')];
 let profile, trapFile, guardLog, app, page;
@@ -43,7 +42,7 @@ async function start(config) {
   const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
   env[pathKey] = trapDir + path.delimiter + (env[pathKey] || '');
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
-    args: ['-r', GUARD, ...APP_ARGS, `--test-user-data=${profile}`], env });
+    args: [...APP_ARGS, `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -52,18 +51,11 @@ async function start(config) {
 }
 const trapped = () => (fs.existsSync(trapFile) ? fs.readFileSync(trapFile, 'utf8') : '');
 const guardLines = () => (fs.existsSync(guardLog) ? fs.readFileSync(guardLog, 'utf8').trim().split('\n') : []);
-// Whether `-r <guard>` was honoured. Source run (electron <app path>): Electron's default app reads `-r`, so the guard must be
-// loaded, and a missing one fails the test. A packaged app does not read `-r` (probed on the installed 2.0.7 AgentDeck.exe: it starts,
-// and guard.log is never written), so there the check is skipped, and the output says why instead of timing out.
+// main.js installs test-instance-guard.js itself as soon as it sees --test-user-data, so the dialog guard is active in the source run
+// and in the packaged app alike (nothing is passed with -r). It writes "guard loaded" to E2E_DIALOG_GUARD_LOG; a missing line fails.
 async function guardLoaded() {
-  if (!PACKAGED) { await expect.poll(guardLines, { message: 'the dialog guard (-r) was not loaded before the app' }).toContain('guard loaded'); return true; }
-  const loaded = await expect.poll(guardLines, { timeout: 3000 }).toContain('guard loaded').then(() => true, () => false);
-  if (!loaded) {
-    const note = 'dialog guard check skipped: the packaged app (AGENTDECK_TEST_EXECUTABLE) did not load -r <script>, so the guard is not active';
-    test.info().annotations.push({ type: 'skipped-check', description: note });
-    console.warn(note);
-  }
-  return loaded;
+  await expect.poll(guardLines, { message: 'main.js did not install the test-instance dialog guard' }).toContain('guard loaded');
+  return true;
 }
 // Zero columns. When it fails, give the default columns time to type their launch lines (~0.7 s), so trap.log says which agent they
 // started, and put it in the failure message before the count is asserted.
@@ -80,7 +72,7 @@ for (const [label, config] of [
   ['a config file that cannot be read', '{ "columns": [ not json'],
 ]) {
   test(`a test instance with ${label} opens no default agent columns and starts nothing`, async () => {
-    // start() has checked the guard (-r in front of the app path) where the app honours it
+    // start() has checked that main.js installed the dialog guard
     const { errors } = await start(config);
     await expectNoColumns('at start');
     expect(await page.evaluate(() => [config.columns.length, terms.size])).toEqual([0, 0]);
@@ -136,5 +128,27 @@ test('the trap catches a real agent name typed into a manual terminal of the tes
   await page.evaluate(() => window.deck.ptyInput('saved-shell', 'claude\r'));
   await expect.poll(trapped, { timeout: 15000, message: 'typing claude did not reach the trap in front of PATH' }).toMatch(/TRAP claude/);
   expect(trapped().trim().split(/\r?\n/).map((line) => line.trim())).toEqual(['TRAP claude']);
+  expect(errors).toEqual([]);
+});
+
+// A test instance answers a main-process dialog as cancelled and notes it, without anything being passed with -r.
+test('a main-process dialog opened in a test instance is answered as cancelled and noted', async () => {
+  const { errors } = await start(JSON.stringify({ perpetualCaptain: { enabled: false }, columns: [] }));
+  const answers = await app.evaluate(async ({ dialog }) => ({
+    box: dialog.showMessageBoxSync({ message: 'x', buttons: ['Delete', 'Cancel'], cancelId: 1 }),
+    open: await dialog.showOpenDialog({ properties: ['openFile'] }),
+    sync: dialog.showOpenDialogSync({}),
+  }));
+  expect(answers).toEqual({ box: 1, open: { canceled: true, filePaths: [] }, sync: undefined });
+  expect(guardLines()).toEqual(['guard loaded', 'blocked showMessageBoxSync', 'blocked showOpenDialog', 'blocked showOpenDialogSync']);
+  expect(errors).toEqual([]);
+});
+
+// A page's own confirm() is not the guard's business: Playwright still gets to answer it (the guard's early version took it away).
+test('a page confirm() in a test instance still reaches Playwright, and the guard notes nothing for it', async () => {
+  const { errors } = await start(JSON.stringify({ perpetualCaptain: { enabled: false }, columns: [] }));
+  page.once('dialog', (dialog) => dialog.accept());
+  expect(await page.evaluate(() => confirm('sure?'))).toBe(true);
+  expect(guardLines()).toEqual(['guard loaded']);
   expect(errors).toEqual([]);
 });

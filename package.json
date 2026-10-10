@@ -43,6 +43,7 @@
     "productName": "AgentDeck",
     "files": [
       "main.js",
+      "test-instance-guard.js",
       "memory-pressure.js",
       "pty-work.js",
       "config-cache.js",

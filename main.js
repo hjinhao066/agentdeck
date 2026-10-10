@@ -91,6 +91,8 @@ function requestMobile(op, input) {
 // end-to-end test deck can run alongside the real one without touching it.
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
+// A test instance never opens a main-process dialog (test-instance-guard.js answers each one as cancelled and notes it).
+if (tudArg) require('./test-instance-guard').install({ dialog });
 // Test profiles must never write the user's shared board.
 function readLocalConfig() {
   const file = path.join(app.getPath('userData'), 'config.json');

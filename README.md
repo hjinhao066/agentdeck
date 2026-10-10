@@ -1464,9 +1464,11 @@ never list or edit the user's own skills. A test instance whose saved layout has
 columns (no config file, an unreadable one, `columns` missing or empty) opens no columns
 at all, instead of the three default agent columns that start real `agy`/`claude`/`grok`;
 a normal run keeps the defaults. `test-instance-columns.spec.js` checks this with a PATH
-trap, and loads `fixtures/no-dialog-guard.js` (`electron -r <guard> <app>`) so no dialog can open.
-A packaged app does not read `-r` (only Electron's default app does), so against
-`AGENTDECK_TEST_EXECUTABLE` the guard check is skipped and the output says so. The same spec
+trap. A test instance also never opens a main-process dialog: `main.js` loads its own `test-instance-guard.js` as soon
+as it sees `--test-user-data=`, which answers every `dialog.*` call as cancelled and, when `E2E_DIALOG_GUARD_LOG` names a
+file, notes it there (and notes uncaught exceptions instead of showing Electron's error box). It needs no `-r` flag or
+environment variable, so source and packaged runs are both covered, and it loads no outside code. The spec asserts its
+`guard loaded` line in both. The same spec
 types `claude` into a manual terminal to prove the trap catches a real agent name, and checks that
 "恢复默认布局" also leaves no columns. `task-board.spec.js` archives every terminal a test opened when
 that test ends, so a full run keeps about three PowerShells open instead of one per worker.
