@@ -76,6 +76,17 @@ test('real claude: after each restart the resumed 队长 takes its restart notic
   delete env.ELECTRON_RUN_AS_NODE;
   if (fs.existsSync('/bin/zsh')) env.SHELL = '/bin/zsh';
   const notice = M.restartNotice(process.platform, '');
+  // Every model request carries the whole conversation, so count the notice where it lands once: as a user
+  // message in the CLI's own conversation file.
+  const conversation = () => {
+    const dir = path.join(cfg, 'projects');
+    for (const sub of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+      const file = path.join(dir, sub, SESSION + '.jsonl');
+      if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch (_) { return {}; } });
+    }
+    return [];
+  };
+  const notices = () => conversation().filter((l) => l.type === 'user' && l.message?.content === notice).length;
   const launch = async () => {
     const application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
       args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
@@ -95,10 +106,10 @@ test('real claude: after each restart the resumed 队长 takes its restart notic
     app = null;
     console.log(`[real-cli-restart] ${execSync(`${JSON.stringify(real)} --version`, { encoding: 'utf8' }).trim()}`);
     for (let round = 1; round <= 3; round++) {
-      const before = api.userTexts().filter((t) => t === notice).length;
       const started = Date.now();
       app = await launch();
-      await expect.poll(() => api.userTexts().filter((t) => t === notice).length, { timeout: 90000 }).toBe(before + 1);
+      await expect.poll(notices, { timeout: 90000 }).toBe(round);
+      await expect.poll(() => api.userTexts().includes(notice), { timeout: 30000 }).toBe(true);
       timings.push(Date.now() - started);
       await app.page.waitForTimeout(3000);
       const alarms = (await app.page.evaluate(() => window.AttentionUI.mobileView())).items.filter((i) => /重启后/.test(i.title));
