@@ -45,13 +45,31 @@ function atomicWrite(file, text) {
   const tmp = file + '.' + crypto.randomUUID() + '.tmp';
   const fd = fs.openSync(tmp, 'wx', 0o600);
   try {
-    fs.writeFileSync(fd, text);
-    fs.fsyncSync(fd);
+    try {
+      fs.writeFileSync(fd, text);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, file);
   } finally {
-    fs.closeSync(fd);
+    // A write that failed (a full disk) leaves no empty temp file behind either.
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {}
   }
-  try { fs.renameSync(tmp, file); }
-  finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
+}
+
+// A save the disk refused: 507 when it is full, 500 otherwise; `code` is kept for the log.
+function storageError(err) {
+  const full = err && (err.code === 'ENOSPC' || err.code === 'EDQUOT');
+  return Object.assign(reject(full ? 507 : 500, full ? 'storage-full' : 'Sync store could not be written.'), { code: err && err.code });
+}
+
+// IDs are untrusted keys, including __proto__ and inherited method names.
+// JSON.parse restores ordinary objects, so every index is rebuilt after parsing.
+function indexed(data) {
+  data.ops = data.ops || {};
+  for (const key of ['devices', 'cards', 'ops', 'history']) data[key] = Object.assign(Object.create(null), data[key]);
+  return data;
 }
 
 function emptyData() {
@@ -188,6 +206,8 @@ class SharedStore {
     this.leaseMs = leaseMs;
     this.now = now;
     this.data = this._load();
+    // What the file holds: a save the disk refuses puts the store back to it.
+    this.saved = JSON.stringify(this.data);
     this.uploads = new Map();
     this.staged = 0;
   }
@@ -204,10 +224,7 @@ class SharedStore {
     if (!data || data.version !== 1 || !data.devices || !data.cards || !data.history) {
       throw reject(500, 'Sync store schema is not version 1. Refusing to overwrite it.');
     }
-    data.ops = data.ops || {};
-    // IDs are untrusted keys, including __proto__ and inherited method names.
-    // JSON.parse restores ordinary objects, so rebuild every index on load too.
-    for (const key of ['devices', 'cards', 'ops', 'history']) data[key] = Object.assign(Object.create(null), data[key]);
+    indexed(data);
     // Older hubs kept the whole transcript or card in each receipt, and no time.
     const at = new Date(this.now()).toISOString();
     for (const saved of Object.values(data.ops)) compactReceipt(saved, at);
@@ -215,9 +232,18 @@ class SharedStore {
     data.seq = Number.isInteger(data.seq) ? data.seq : 0;
     return data;
   }
+  // Every change is saved before it is answered. A save the disk refuses undoes the
+  // change (the store goes back to what its file holds) and the request fails, so
+  // a retry is applied again instead of answered from a receipt the disk never had.
   _save() {
     this.data.seq += 1;
-    atomicWrite(this.file, JSON.stringify(this.data));
+    const text = JSON.stringify(this.data);
+    try { atomicWrite(this.file, text); }
+    catch (err) {
+      this.data = indexed(JSON.parse(this.saved));
+      throw storageError(err);
+    }
+    this.saved = text;
   }
   _remember(opId, status, body) {
     const now = this.now();

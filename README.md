@@ -1475,7 +1475,13 @@ until the hub is upgraded. An older client keeps sending whole transcripts
 but transcript prose is preserved, so sync only to a trusted private service.
 Requests time out after 10 seconds and retry on subsequent sync rounds. A round
 still running when the next is due is not queued behind it (one round at a time,
-none started after sync stops).
+none started after sync stops). The hub saves every change before it answers.
+A save the disk refuses (a full disk answers 507 `storage-full`) undoes the change
+and leaves no temp file; the hub's log names the request and error code (the same
+one at most once a minute, never a body or token), the client says the hub's disk
+is full, and its retry is applied again once there is room. (2026-10-10 the
+Windows disk holding the hub filled for 37 minutes: 500s, 301 empty temp files,
+and retries answered from receipts the disk never had.)
 If the hub loses a card or rolls back behind a pending edit's revision, the
 client discards that edit's old base and queues the complete local card with a
 new operation ID and revision zero for the next round. Newer local fields are
