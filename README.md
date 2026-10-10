@@ -594,6 +594,9 @@ again with the current provider, model and effort instructions.
   `stop --id <session-id>` (Esc, keeps the terminal, cancels unsent supplements),
   or end and archive it with `archive --id <session-id>` even while busy, without
   a confirmation dialog. Both commands protect the Captain's own session.
+  They (and `tell --now`) withdraw that session's unread automatic notices
+  (a confirmation prompt, 已结束，未提交回执); a complete or ask the worker
+  already submitted stays for the 队长 to read.
   If a new session stops on a startup dialog before the task can go in (Cursor
   asks "Do you trust this workspace?" in a folder it has not seen), nothing is
   typed into the dialog; the 队长 is sent its text once and answers with

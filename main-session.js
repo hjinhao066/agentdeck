@@ -2783,7 +2783,8 @@
       t.receipt = { summary: summary || (archive ? '队长已结束终端并归档。' : '队长已请求中断当前操作。'), files: [], images: [], failed: '', explicit: true, source: archive ? 'captain-archive' : 'captain-stop' };
       update(t);
     });
-    dropReceipts(s, (p) => p.colId === id);
+    // Automatic notices about this session go; the worker's own complete/ask stays unread for the Captain.
+    dropReceipts(s, (p) => p.colId === id && p.source !== 'command');
     if (col.executor === 'chatgpt-web') {
       try { await window.deck.chatgptWebCancel(id); }
       finally { if (entry) entry.webExecutorStopping = false; }
