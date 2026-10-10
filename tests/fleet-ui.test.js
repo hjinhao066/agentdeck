@@ -58,3 +58,23 @@ test('captain records read as their own line, without a repeated 队长记录 pr
     history: [{ sessionId: 's1', deviceId: 'dev-win', summary: '/LOGIN', updatedAt: '2026-10-04T11:59:30.000Z' }] }, now);
   assert.equal(model.history[0].text, '/LOGIN · 刚刚');
 });
+
+test('the conflict notice says what is true: one side kept, the other side\'s old value in the record', () => {
+  const model = viewModel({ configured: true, selfId: 'dev-mac', devices: [], conflictCount: 3, lastSyncAt: '2026-10-04T11:59:00.000Z', history: [] }, now);
+  assert.equal(model.noticeKind, 'warn');
+  assert.match(model.notice, /3 处冲突/);
+  assert.match(model.notice, /保留一边/);
+  assert.match(model.notice, /旧值记在冲突记录里/);
+  assert.doesNotMatch(model.notice, /两份修改都还在/);
+});
+
+test('the 全部标为已看 button is offered only while there are unseen conflicts', () => {
+  const base = { configured: true, selfId: 'dev-mac', devices: [], lastSyncAt: '2026-10-04T11:59:00.000Z', history: [] };
+  assert.equal(viewModel({ ...base, conflictCount: 2, conflictTotal: 2 }, now).canAck, true);
+  // everything seen: the line is quiet, the board still lists the records
+  const seen = viewModel({ ...base, conflictCount: 0, conflictTotal: 34 }, now);
+  assert.equal(seen.canAck, false);
+  assert.equal(seen.noticeKind, 'ok');
+  assert.equal(seen.lineState, '已同步');
+  assert.equal(viewModel({ ...base, error: '同步失败：服务状态 500', conflictCount: 2 }, now).canAck, false);
+});

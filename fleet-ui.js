@@ -73,7 +73,7 @@
     let notice = state.error || '';
     let noticeKind = state.error ? 'error' : 'ok';
     if (!notice && state.conflictCount > 0) {
-      notice = `有 ${state.conflictCount} 处冲突，两份修改都还在`;
+      notice = `有 ${state.conflictCount} 处冲突：已保留一边，另一边的旧值记在冲突记录里`;
       noticeKind = 'warn';
     } else if (!notice && !rows.length && !state.lastSyncAt) {
       notice = '正在连接两机同步…';
@@ -87,8 +87,14 @@
       deviceId: item.deviceId,
       text: (item.summary || '队长记录') + (when(item) ? ' · ' + formatLastSeen(when(item), now) : ''),
     }));
-    return { title: '两机', rows, notice, noticeKind, history, lineState: lineState(notice, noticeKind, state.conflictCount) };
+    return { title: '两机', rows, notice, noticeKind, history, lineState: lineState(notice, noticeKind, state.conflictCount), canAck: noticeKind === 'warn' };
   }
+  const ACK_LABEL = '全部标为已看';
+  const ACK_DONE_LABEL = '已全部标为已看';
+  const ACK_ICONS = {
+    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>',
+  };
   function el(doc, tag, className, text) {
     const node = doc.createElement(tag);
     if (className) node.className = className;
@@ -101,7 +107,7 @@
   // survives the refresh every few seconds.
   function skeleton(rootEl) {
     const line = rootEl.querySelector(':scope > .fleet-line');
-    if (line) return { line, detail: rootEl.querySelector(':scope > .fleet-detail') };
+    if (line) return { line, detail: rootEl.querySelector(':scope > .fleet-detail'), ack: rootEl.querySelector(':scope > .fleet-ack') };
     const doc = rootEl.ownerDocument;
     const button = el(doc, 'button', 'fleet-line');
     button.type = 'button';
@@ -125,13 +131,43 @@
       if (e.key !== 'Escape' || !button.classList.contains('open')) return;
       e.preventDefault(); e.stopPropagation(); setOpen(false);
     });
-    rootEl.replaceChildren(button, detail);
-    return { line: button, detail };
+    // 全部标为已看: an icon button beside the line (a button cannot sit inside the line's own
+    // button). Shown while there is something to mark, and for a moment as a tick afterwards.
+    const ack = el(doc, 'button', 'fleet-ack');
+    ack.type = 'button';
+    ack.hidden = true;
+    ack.innerHTML = ACK_ICONS.eye;
+    ack.title = ACK_LABEL;
+    ack.setAttribute('aria-label', ACK_LABEL);
+    ack.addEventListener('click', () => {
+      const act = rootEl.fleetAck;
+      if (typeof act !== 'function' || ack.classList.contains('done')) return;
+      Promise.resolve(act()).catch(() => {});
+      ack.classList.add('done');
+      ack.innerHTML = ACK_ICONS.check;
+      ack.title = ACK_DONE_LABEL;
+      ack.setAttribute('aria-label', ACK_DONE_LABEL);
+      clearTimeout(ack.doneTimer);
+      ack.doneTimer = setTimeout(() => {
+        ack.classList.remove('done');
+        ack.innerHTML = ACK_ICONS.eye;
+        ack.title = ACK_LABEL;
+        ack.setAttribute('aria-label', ACK_LABEL);
+        ack.hidden = !rootEl.classList.contains('can-ack');
+        rootEl.classList.toggle('has-ack', !ack.hidden);
+      }, 1500);
+    });
+    rootEl.replaceChildren(button, detail, ack);
+    return { line: button, detail, ack };
   }
-  function mount(rootEl, state, now = Date.now()) {
+  function mount(rootEl, state, now = Date.now(), actions = {}) {
     const model = viewModel(state, now);
     const doc = rootEl.ownerDocument;
-    const { line, detail } = skeleton(rootEl);
+    const { line, detail, ack } = skeleton(rootEl);
+    rootEl.fleetAck = actions.ack || null;
+    rootEl.classList.toggle('can-ack', model.canAck && typeof actions.ack === 'function');
+    ack.hidden = !rootEl.classList.contains('can-ack') && !ack.classList.contains('done');
+    rootEl.classList.toggle('has-ack', !ack.hidden);
     line.querySelector('.fleet-chips').replaceChildren(...model.rows.map((row) => {
       const chip = el(doc, 'span', 'fleet-chip' + (row.online ? ' online' : ' offline'));
       chip.dataset.device = row.id;
@@ -161,11 +197,12 @@
     detail.replaceChildren(...parts);
     return model;
   }
-  function install(rootEl, readState) {
+  function install(rootEl, readState, ackConflicts) {
     let timer = null;
+    const actions = { ack: typeof ackConflicts === 'function' ? async () => { await ackConflicts(); await tick(); } : null };
     const tick = async () => {
-      try { mount(rootEl, await readState()); }
-      catch (_) { mount(rootEl, { configured: true, error: '同步状态读取失败', devices: [], history: [] }); }
+      try { mount(rootEl, await readState(), Date.now(), actions); }
+      catch (_) { mount(rootEl, { configured: true, error: '同步状态读取失败', devices: [], history: [] }, Date.now(), actions); }
     };
     tick();
     timer = setInterval(tick, 3000);
@@ -178,7 +215,7 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined') {
   const bootFleet = () => {
     const root = document.getElementById('fleetStatus');
     if (!root || !window.FleetUI || !window.deck || typeof window.deck.fleetState !== 'function') return;
-    window.FleetUI.install(root, () => window.deck.fleetState());
+    window.FleetUI.install(root, () => window.deck.fleetState(), typeof window.deck.fleetAckConflicts === 'function' ? () => window.deck.fleetAckConflicts() : null);
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootFleet);
   else bootFleet();
