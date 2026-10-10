@@ -1066,8 +1066,36 @@ an index from before this counts nothing as new). The phone hub does not have it
   reading view also reads what an Obsidian note uses (`renderMarkdown(..., { rich: true })`,
   off everywhere else): `==highlight==`, task boxes, callouts (`> [!note]`, folding with
   `-`/`+`), properties at the top, `#tags`, `[[links]]` to a note beside this one,
-  pictures lying next to the note, footnotes, `%%comments%%`. Relative links open in
-  the preview, web links in the 浏览器 tab. Terminal output and bubbles find paths with the same rules
+  pictures lying next to the note, footnotes, `%%comments%%`, and a single line break
+  kept as a line break (as Obsidian does). Relative links open in the preview, web
+  links in the 浏览器 tab.
+- **Reading tools in the preview** (logic in `preview-reader.js`, wired in `side-pane.js`):
+  - 目录: a note with two or more headings gets an outline icon button. The outline sits
+    beside the note when the pane is at least 600px wide (open or put away is remembered,
+    `config.side.outline`); in a narrower pane it floats over the note when asked for and
+    goes after a jump or Esc. A click jumps to the heading; the section being read is
+    marked as the note scrolls.
+  - The file on screen is watched (`preview:watch`: the main process polls that one
+    file's stat once a second and tells the page a number, never a path). When it
+    changes the pane reads it again and draws it where the reader was: a note finds the
+    block at the top of the view again by its text, a code file keeps its first line in
+    view, unfolded callouts stay unfolded, and 「已更新」 shows by the name for a moment.
+    A web page reloads in its own view. A file that is gone keeps its last text, and the
+    head says so until it is back.
+  - ⌘F (Ctrl+F off the Mac) with the pointer or the keyboard in the preview opens a find
+    bar: Enter / Shift+Enter (and ⌘G / ⇧⌘G) walk the matches, Esc closes. Notes, code
+    files and folder lists mark matches with CSS highlight ranges (nothing is written
+    into the text; a match in a folded callout unfolds it; line numbers are not
+    searched); a web page uses Chromium's own find in its view, and ⌘F pressed inside
+    the page comes to the bar. Anywhere else ⌘F is the conversation or terminal search
+    as before. ⌘⇧F is left alone: a lyrics app on the owner's Mac holds it system-wide.
+  - Every code block in a note has a bar with its language and a copy icon button (two
+    squares; a tick for a moment after copying).
+  - A picture in a note, or one previewed on its own, opens full screen with a click or
+    Enter: fitted to the window (never enlarged past its own size); the wheel or a pinch
+    zooms about the pointer, a drag moves it, a double click goes to its own size and
+    back, + − 0 1 on the keyboard; Esc or a click beside it closes.
+- Terminal output and bubbles find paths with the same rules
   (`findLinks` in `renderer.js`): a path ends at Chinese or full-width punctuation,
   curly quotes and the space before the words after it, so two paths on one line
   are two links. Spaces stay inside a folder name (`Application Support`,

@@ -129,13 +129,14 @@ function standIn() {
       this.options = options; this.bounds = null; this.visible = false;
       const wc = this.webContents = { events: {}, loaded: [], closed: false, on: (event, fn) => { wc.events[event] = fn; }, loadURL: (url) => { wc.loaded.push(url); return Promise.resolve(); },
         setWindowOpenHandler: (fn) => { wc.opener = fn; }, isDestroyed: () => wc.closed, close: () => { wc.closed = true; }, getURL: () => wc.loaded[wc.loaded.length - 1] || '',
-        getTitle: () => '', isLoading: () => false, canGoBack: () => false, canGoForward: () => false, reload: () => { wc.reloads = (wc.reloads || 0) + 1; } };
+        getTitle: () => '', isLoading: () => false, canGoBack: () => false, canGoForward: () => false, reload: () => { wc.reloads = (wc.reloads || 0) + 1; },
+        finds: [], stops: [], findInPage: (text, o) => { wc.finds.push([text, o]); return (wc.lastRequest = (wc.lastRequest || 0) + 1); }, stopFindInPage: (how) => { wc.stops.push(how); } };
       calls.views.push(this);
     }
     setBounds(b) { this.bounds = b; }
     setVisible(v) { this.visible = v; }
   }
-  const win = { isDestroyed: () => false, webContents: { getZoomFactor: () => 1 }, contentView: { children: [], addChildView(v) { this.children.push(v); }, removeChildView(v) { this.children = this.children.filter((c) => c !== v); } } };
+  const win = { isDestroyed: () => false, webContents: { getZoomFactor: () => 1, focus: () => { calls.focused = (calls.focused || 0) + 1; } }, contentView: { children: [], addChildView(v) { this.children.push(v); }, removeChildView(v) { this.children = this.children.filter((c) => c !== v); } } };
   const pane = registerSideIpc({
     onMain: (channel, fn) => { calls.handlers[channel] = fn; }, handleMain: (channel, fn) => { calls.invoke[channel] = fn; },
     send: (channel, message) => calls.sent.push([channel, message]), getWindow: () => win, session, WebContentsView,
@@ -232,4 +233,46 @@ test('a page in a catch-all folder is opened alone and the pane is told', () => 
   assert.deepEqual(calls.sent.pop(), ['side:preview-state', { alone: true }]);
   calls.handlers['side:preview-html']({}, { raw: path.join(report, 'index.html') });
   assert.deepEqual(calls.sent.pop(), ['side:preview-state', { alone: false }]);
+});
+
+test('find in the page: the words go to the page\'s own view, its count comes back, and ⌘F pressed inside the page opens the bar', () => {
+  const { calls } = standIn();
+  calls.handlers['side:preview-find']({}, { text: '周报' });            // no page open: nothing to search, nothing breaks
+  calls.handlers['side:preview-html']({}, { raw: path.join(report, 'index.html') });
+  calls.sent.splice(0);
+  const wc = calls.views[calls.views.length - 1].webContents;
+  calls.handlers['side:preview-find']({}, { text: '周报' });
+  assert.deepEqual(wc.finds.pop(), ['周报', { forward: true, findNext: true, matchCase: false }]);
+  calls.handlers['side:preview-find']({}, { text: '周报', next: true, forward: false });
+  assert.deepEqual(wc.finds.pop(), ['周报', { forward: false, findNext: false, matchCase: false }]);
+  wc.events['found-in-page']({}, { requestId: wc.lastRequest, activeMatchOrdinal: 2, matches: 5, finalUpdate: true });
+  assert.deepEqual(calls.sent.pop(), ['side:preview-found', { active: 2, total: 5 }]);
+  // an answer to an older search, or one still on its way, is not passed on
+  wc.events['found-in-page']({}, { requestId: wc.lastRequest - 1, activeMatchOrdinal: 1, matches: 9, finalUpdate: true });
+  wc.events['found-in-page']({}, { requestId: wc.lastRequest, activeMatchOrdinal: 1, matches: 9, finalUpdate: false });
+  assert.equal(calls.sent.length, 0);
+  // the words are cut to a sane length; an empty or odd query clears the page instead
+  calls.handlers['side:preview-find']({}, { text: 'x'.repeat(5000) });
+  assert.equal(wc.finds.pop()[0].length, 200);
+  for (const text of ['', 42, null]) {
+    calls.handlers['side:preview-find']({}, { text });
+    assert.equal(wc.stops.pop(), 'clearSelection');
+    assert.deepEqual(calls.sent.pop(), ['side:preview-found', { active: 0, total: 0 }]);
+  }
+  calls.handlers['side:preview-find']({}, null);
+  calls.handlers['side:preview-find-stop']({});
+  assert.equal(wc.stops.pop(), 'clearSelection');
+
+  // ⌘F (Ctrl+F off the Mac) pressed while the page has the keyboard: the pane's bar opens; every other key stays with the page
+  const key = (input) => { let kept = false; wc.events['before-input-event']({ preventDefault: () => { kept = true; } }, input); return kept; };
+  const mod = process.platform === 'darwin' ? { meta: true } : { control: true };
+  calls.sent.splice(0);
+  assert.equal(key({ type: 'keyDown', key: 'f', ...mod }), true);
+  assert.deepEqual(calls.sent.pop(), ['side:preview-find-key', {}]);
+  assert.equal(calls.focused, 1);                                         // the deck's page takes the keyboard back
+  assert.equal(key({ type: 'keyDown', key: 'F', ...mod }), true);
+  calls.sent.splice(0);
+  for (const input of [{ type: 'keyDown', key: 'f' }, { type: 'keyUp', key: 'f', ...mod }, { type: 'keyDown', key: 'c', ...mod }, { type: 'keyDown', key: 'f', ...mod, shift: true }, { type: 'keyDown', key: 'f', ...mod, alt: true }])
+    assert.equal(key(input), false, JSON.stringify(input));
+  assert.equal(calls.sent.length, 0);
 });

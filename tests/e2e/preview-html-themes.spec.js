@@ -418,8 +418,8 @@ test('the keyboard picks a theme too, and the choice is still there after a rest
   await page.keyboard.press('Enter');
   const picked = Themes.THEMES[1].id;
   await expect(page.locator('#pvBody .pv-md')).toHaveAttribute('data-md-theme', picked);
-  // a click elsewhere closes the list
-  await page.locator('#pvBody .pv-md h1').click();
+  // a click elsewhere closes the list (the title's left end: the list hangs over the right of the note)
+  await page.locator('#pvBody .pv-md h1').click({ position: { x: 8, y: 8 } });
   await expect(page.locator('.pv-theme-menu')).toHaveCount(0);
   expect(await page.evaluate(() => config.side.mdTheme)).toBe(picked);
   await page.evaluate(() => flushConfig());

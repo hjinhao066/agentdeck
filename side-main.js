@@ -130,6 +130,28 @@ function registerSideIpc(ctx) {
     if (!r) return { ok: false, error: '路径不存在：' + msg.raw.slice(0, 80) };
     try { return readPreview(r.target, msg.raw); } catch (error) { return { ok: false, error: error.message }; }
   });
+
+  // The file on screen is watched so the pane can show it again when someone changes it. Polling
+  // its stat once a second sees a file saved in place, one an editor renames over it, and one that
+  // goes and comes back; only the file shown is watched, and the page is told only a number.
+  let watched = null;                // { file, listener }
+  let watchCount = 0;
+  const unwatch = () => { if (watched) fs.unwatchFile(watched.file, watched.listener); watched = null; };
+  handleMain('preview:watch', (_e, msg) => {
+    unwatch();
+    if (!rawOf(msg)) return 0;
+    const r = resolveClick(msg, false);
+    if (!r) return 0;
+    const watch = ++watchCount;
+    const listener = (now, before) => {
+      if (now.mtimeMs === before.mtimeMs && now.size === before.size && now.ino === before.ino) return;
+      send('side:preview-changed', { watch });
+    };
+    fs.watchFile(r.target, { interval: ctx.watchInterval || 1000, persistent: false }, listener);
+    watched = { file: r.target, listener };
+    return watch;
+  });
+  onMain('preview:unwatch', () => unwatch());
   handleMain('artifacts:stat', (_e, msg) => statPaths(msg && msg.paths, home));
 
   // The embedded browser is a separate sandboxed view with its own cookie jar,
@@ -252,6 +274,7 @@ function registerSideIpc(ctx) {
     ses.on('will-download', (event) => event.preventDefault());
     return (pageSession = ses);
   }
+  let findRequest = 0;               // the page's latest search; an answer to an older one is dropped
   function ensurePageView() {
     const win = getWindow();
     if (!win || win.isDestroyed()) return null;
@@ -260,6 +283,19 @@ function registerSideIpc(ctx) {
       webPreferences: { session: ensurePageSession(), sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, backgroundThrottling: true },
     });
     const wc = pageView.webContents;
+    wc.on('found-in-page', (_e, r) => {
+      if (r && r.finalUpdate && r.requestId === findRequest) send('side:preview-found', { active: r.activeMatchOrdinal || 0, total: r.matches || 0 });
+    });
+    // ⌘F (Ctrl+F off the Mac) while the page has the keyboard opens the pane's find bar; the page
+    // gets every other key. Only the press itself is passed on, nothing the page typed.
+    wc.on('before-input-event', (event, input) => {
+      const mod = process.platform === 'darwin' ? input.meta && !input.control : input.control && !input.meta;
+      if (input.type !== 'keyDown' || !mod || input.shift || input.alt || String(input.key).toLowerCase() !== 'f') return;
+      event.preventDefault();
+      const host = getWindow();
+      if (host && !host.isDestroyed()) host.webContents.focus();
+      send('side:preview-find-key', {});
+    });
     // A link to the public web is handed to the browser tab; nothing else leaves the
     // page. A script can "click" too, so an address on this machine or its network is
     // not handed over: the browser tab would fetch it on the page's behalf.
@@ -308,9 +344,24 @@ function registerSideIpc(ctx) {
     if (action === 'close') closePage();
     else if (action === 'reload' && pageView && !pageView.webContents.isDestroyed()) pageView.webContents.reload();
   });
+  // Find in the page: Chromium's own search in the page's view; the count comes back on side:preview-found.
+  const livePage = () => (pageView && !pageView.webContents.isDestroyed() ? pageView.webContents : null);
+  function stopFind() {
+    const wc = livePage();
+    findRequest = 0;
+    if (wc) wc.stopFindInPage('clearSelection');
+  }
+  onMain('side:preview-find', (_e, msg) => {
+    const wc = livePage();
+    if (!wc || !msg) return;
+    if (typeof msg.text !== 'string' || !msg.text) { stopFind(); send('side:preview-found', { active: 0, total: 0 }); return; }
+    findRequest = wc.findInPage(msg.text.slice(0, 200), { forward: msg.forward !== false, findNext: !msg.next, matchCase: false });
+  });
+  onMain('side:preview-find-stop', () => stopFind());
 
   return {
     dispose() {
+      unwatch();
       if (view && !view.webContents.isDestroyed()) { try { view.webContents.close(); } catch (_) {} }
       view = null;
       closePage();

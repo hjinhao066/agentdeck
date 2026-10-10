@@ -1017,14 +1017,16 @@
     // rich: the box is drawn by the page, and a finished item says so
     const item$ = (text) => {
       const task = opts && opts.rich && /^\[( |x|X)\]\s+/.exec(text);
-      if (!task) return '<li>' + inline(boxed(text), opts);
+      if (!task) return '<li>' + inline(boxed(text), opts).replace(/\n/g, '<br>');
       const done = task[1] !== ' ';
-      return `<li class="md-task${done ? ' done' : ''}"><span class="md-box" role="checkbox" aria-checked="${done}" aria-label="${done ? '已完成' : '未完成'}"></span>` + inline(text.slice(task[0].length), opts);
+      return `<li class="md-task${done ? ' done' : ''}"><span class="md-box" role="checkbox" aria-checked="${done}" aria-label="${done ? '已完成' : '未完成'}"></span>` + inline(text.slice(task[0].length), opts).replace(/\n/g, '<br>');
     };
+    // rich keeps an item's own line breaks, as the note's paragraphs do
+    const itemText = (text) => (opts && opts.rich && opts.breaks ? text.join('\n') : text.reduce((a, b) => a + joinGap(a, b) + b));
     const render = (list) => {
       const tag = list.ordered ? 'ol' : 'ul';
       return `<${tag}${list.ordered && list.first !== 1 ? ` start="${list.first}"` : ''}>` + list.items.map((it) =>
-        `${item$(it.text.reduce((a, b) => a + joinGap(a, b) + b))}${it.lists.map(render).join('')}</li>`).join('') + `</${tag}>`;
+        `${item$(itemText(it.text))}${it.lists.map(render).join('')}</li>`).join('') + `</${tag}>`;
     };
     return { html: root.lists.map(render).join('\n'), next: i };
   }
@@ -1034,7 +1036,9 @@
   // carries the path; the page decides what opening one means).
   // rich: what an Obsidian note uses on top of that, for the desktop's reading
   // view: ==highlight==, task boxes, callouts (> [!note]), properties at the top,
-  // #tags, [[links]], pictures next to the note, footnotes, %%comments%%.
+  // #tags, [[links]], pictures next to the note, footnotes, %%comments%%, a single
+  // line break kept as one, and a bar on each code block with its language and a
+  // copy button (the page gives the button its icon and its click).
   // Off unless asked for, so replies and the phone page are written as before.
   const CALLOUT = { note: 'info', info: 'info', todo: 'info', abstract: 'tip', summary: 'tip', tldr: 'tip', tip: 'tip', hint: 'tip', important: 'tip',
     success: 'ok', check: 'ok', done: 'ok', question: 'ask', help: 'ask', faq: 'ask', warning: 'warn', caution: 'warn', attention: 'warn',
@@ -1094,7 +1098,7 @@
       const def = /^\[\^([^\]\s]{1,40})\]:\s*(.*)$/.exec(line);
       if (def) notes.defs.set(def[1], def[2]); else body.push(line);
     }
-    const inner = { ...opts, inner: true, notes };
+    const inner = { ...opts, inner: true, notes, breaks: true };
     let html = props + renderMarkdown(body.join('\n'), inner);
     if (notes.order.length) html += '\n<section class="md-footnotes"><ol>' + notes.order.map((id, k) => `<li data-fn="${k + 1}">${inline(notes.defs.get(id), { ...inner, notes: null })}</li>`).join('') + '</ol></section>';
     return html;
@@ -1115,7 +1119,9 @@
         while (i < lines.length && !/^\s*(```|~~~)\s*$/.test(lines[i])) body.push(lines[i++]);
         i++;
         const lang = LANG[fence[2]] || 'plain';
-        html.push(`<pre class="md-code"><code data-lang="${esc(fence[2])}">${highlightCode(body.join('\n'), lang)}</code></pre>`);
+        const block = `<pre class="md-code"><code data-lang="${esc(fence[2])}">${highlightCode(body.join('\n'), lang)}</code></pre>`;
+        html.push(opts && opts.rich ? `<div class="md-pre"><div class="md-code-bar"><span class="md-code-lang">${esc(fence[2])}</span>`
+          + `<button type="button" class="md-copy" aria-label="复制代码" title="复制代码"></button></div>${block}</div>` : block);
         continue;
       }
       const h = /^(#{1,6})\s+(.*)$/.exec(line);

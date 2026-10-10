@@ -77,6 +77,11 @@ and regression pass, not a penetration-test certification.
 - Remaining boundary: the check is on the host name, so a public name that resolves to a
   local address (DNS rebinding) is not caught; the same holds for any page in the browser
   tab. A page can send what it can read (its own folder) to the public web.
+- Reading tools: the file watch is set only on a path resolved like a preview click
+  (`resolveClick`), one file at a time, and reports a counter, not a path. Find in a page
+  passes only the typed words (at most 200 characters) to Chromium's find in the page's
+  own view; the page's `before-input-event` takes only ⌘F/Ctrl+F and passes nothing it
+  typed. Find in a note marks text with highlight ranges and writes no markup.
 
 ## Skills page
 

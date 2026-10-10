@@ -114,12 +114,23 @@
     shape('quote bar', c.quoteBar, c.bg);
     shape('checkbox', c.accent, c.bg);
     shape('check mark', c.accentInk, c.accent);
+    // the reading tools: words found (the one walked to is the text colours turned over), the
+    // outline beside the note, the bar on a code block, the bar of the picture viewer
+    text('found word', c.mark, c.markBg);
+    text('current found word', c.bg, c.text);
+    text('outline item', c.muted, c.bg);
+    text('outline item being read', c.link, c.bg);
+    shape('outline mark', c.accent, c.bg);
+    text('code block language', c.tokC, c.pre);
+    shape('copy button', c.tokC, c.pre);
+    text('picture viewer', c.preText, c.pre);
     return out;
   }
-  // The whole set as CSS: one rule per theme and deck mode.
+  // The whole set as CSS: one rule per theme and deck mode, on whatever carries the theme (the
+  // note, and the outline and picture viewer that go with it).
   function sheet() {
     return THEMES.flatMap((t) => ['light', 'dark'].map((mode) =>
-      `:root[data-theme="${mode}"] .pv-md[data-md-theme="${t.id}"] { ${Object.entries(vars(t.id, mode)).map(([k, v]) => `${k}: ${v};`).join(' ')} }`)).join('\n');
+      `:root[data-theme="${mode}"] [data-md-theme="${t.id}"] { ${Object.entries(vars(t.id, mode)).map(([k, v]) => `${k}: ${v};`).join(' ')} }`)).join('\n');
   }
 
   return { THEMES, DEFAULT, KEYS, normalize, contrast, mix, vars, pairs, sheet };

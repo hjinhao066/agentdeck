@@ -80,6 +80,27 @@ test('nothing in a note becomes markup of its own', () => {
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 });
 
+test('a single line break stays a line break, as in Obsidian: paragraphs, quotes, list items, callouts', () => {
+  assert.equal(rich('第一行\n第二行\n\n新的一段'), '<p>第一行<br>第二行</p>\n<p>新的一段</p>');
+  assert.equal(rich('> 引用一行\n> 引用二行'), '<blockquote>引用一行<br>引用二行</blockquote>');
+  assert.match(rich('- 一条\n  接着写的一行\n- 两条'), /<li>一条<br>接着写的一行<\/li><li>两条<\/li>/);
+  assert.match(rich('> [!note]\n> 甲\n> 乙'), /<div class="md-callout-body"><p>甲<br>乙<\/p><\/div>/);
+  // code keeps its own lines, and replies and the phone page are written as before
+  assert.match(rich('```\na\nb\n```'), /<code data-lang="">a\nb<\/code>/);
+  assert.equal(Core.renderMarkdown('第一行\n第二行'), '<p>第一行 第二行</p>');
+  assert.match(Core.renderMarkdown('- 一条\n  接着写的一行', { breaks: true }), /<li>一条接着写的一行<\/li>/);
+});
+
+test('a code block in a note carries its language name and a copy button; elsewhere it is the plain block', () => {
+  const html = rich('```bash\necho "hi"\n```');
+  assert.match(html, /^<div class="md-pre"><div class="md-code-bar"><span class="md-code-lang">bash<\/span><button type="button" class="md-copy" aria-label="复制代码" title="复制代码"><\/button><\/div><pre class="md-code"><code data-lang="bash">echo <span class="tok-s">&quot;hi&quot;<\/span><\/code><\/pre><\/div>$/);
+  // no language written: no name, still the button
+  assert.match(rich('```\nplain\n```'), /^<div class="md-pre"><div class="md-code-bar"><span class="md-code-lang"><\/span><button type="button" class="md-copy"/);
+  // the name is text, never markup
+  assert.doesNotMatch(rich('```<b>\nx\n```'), /<b>/);
+  assert.equal(Core.renderMarkdown('```bash\necho\n```'), '<pre class="md-code"><code data-lang="bash">echo</code></pre>');
+});
+
 // ---- themes ----
 test('there are four to six themes, each with a light and a dark side and a name to show', () => {
   assert.ok(Themes.THEMES.length >= 4 && Themes.THEMES.length <= 6);
@@ -131,5 +152,14 @@ test('the style sheet colours only through the theme and never sets a size under
   const defined = new Set(Object.keys(Themes.vars(Themes.DEFAULT, 'dark')));
   for (const [, name] of css.matchAll(/var\((--md-[a-z0-9-]+)/g)) assert.ok(defined.has(name), name);
   const sheet = Themes.sheet();
-  for (const theme of Themes.THEMES) for (const mode of ['light', 'dark']) assert.ok(sheet.includes(`:root[data-theme="${mode}"] .pv-md[data-md-theme="${theme.id}"]`), `${theme.id} ${mode}`);
+  // on whatever carries the theme: the note, and the outline and picture viewer beside it
+  for (const theme of Themes.THEMES) for (const mode of ['light', 'dark']) assert.ok(sheet.includes(`:root[data-theme="${mode}"] [data-md-theme="${theme.id}"] {`), `${theme.id} ${mode}`);
+});
+
+test('the reading tools are checked too: found words, the outline, the name on a code block, the picture viewer', () => {
+  for (const theme of Themes.THEMES) for (const mode of ['light', 'dark']) {
+    const names = Themes.pairs(theme.id, mode).map((p) => p[0]);
+    for (const name of ['found word', 'current found word', 'outline item', 'outline item being read', 'code block language', 'picture viewer'])
+      assert.ok(names.includes(name), `${theme.id} ${mode}: ${name}`);
+  }
 });

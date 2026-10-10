@@ -138,6 +138,7 @@
       "side-main.js",
       "preview-html-core.js",
       "preview-themes.js",
+      "preview-reader.js",
       "preview-themes.css",
       "archive-recovery.js",
       "skills-core.js",
