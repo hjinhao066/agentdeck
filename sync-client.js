@@ -14,6 +14,13 @@ const HEARTBEAT_MS = 15_000;
 const START_DELAY_MS = 15_000;
 // Task uploads are marked attempted, saved and accepted this many at a time.
 const FLUSH_BATCH = 50;
+// Every hub refuses a request body over 2,000,000 bytes. A transcript upload that
+// fits under PLAIN_MAX goes in one request any hub takes; a bigger one goes in
+// pieces of PART_CHARS characters (at most ~0.8 MB each once JSON-escaped).
+const PLAIN_MAX = 1_900_000;
+const PART_CHARS = 256 * 1024;
+const TOO_BIG = '同步失败：这段对话超过 2 MB，同步服务版本太旧传不了，升级同步服务后会自动补上';
+const turnHash = (turn) => crypto.createHash('sha256').update(JSON.stringify(turn)).digest('hex');
 
 function clip(value, max) {
   const text = String(value ?? '').replace(/[\u0000-\u001f]/g, ' ').trim();
@@ -120,6 +127,9 @@ class FleetClient {
     this.dirty = false;
     this.writtenHistory = new Map();
     this.historyStamps = new Map();
+    // Per transcript, the version the hub last confirmed (its hash and each turn's
+    // hash): the next save sends only the turns from the first one that changed.
+    this.historyAcked = new Map();
     // Transcripts an older build left in the state file, kept one file each
     // until the hub has them. Ones that could not be written stay in the state file.
     this.outboxDir = path.join(path.dirname(stateFile), path.basename(stateFile, '.json') + '-history-outbox');
@@ -258,7 +268,7 @@ class FleetClient {
     if (token) message = message.split(token).join('');
     return message.slice(0, 300);
   }
-  async _send(token, method, pathname, body) {
+  async _send(token, method, pathname, body, accept = []) {
     let response;
     try {
       response = await this.fetchImpl(this.baseUrl + pathname, {
@@ -275,8 +285,8 @@ class FleetClient {
       catch (_) { throw new Error('同步失败：服务返回了无法识别的内容'); }
     }
     if (response.status === 401) throw new Error('同步失败：同步服务拒绝了本机（检查令牌文件）');
-    if (response.status === 409 && pathname === '/v1/tasks') {
-      return { status: 409, body: payload };
+    if ((response.status === 409 && pathname === '/v1/tasks') || accept.includes(response.status)) {
+      return { status: response.status, body: payload };
     }
     if (!response.ok) throw new Error('同步失败：服务状态 ' + response.status);
     return { status: response.status, body: payload };
@@ -344,12 +354,54 @@ class FleetClient {
     let failure = null;
     for (const item of [...this.historyOutbox.values()]) {
       try {
-        await this._send(token, 'POST', '/v1/history', { ...item, deviceId: this.device.id });
+        await this._uploadHistory(token, item);
         if (this.historyOutbox.get(item.sessionId)?.opId === item.opId) this.historyOutbox.delete(item.sessionId);
         this._delivered(item.sessionId);
       } catch (err) { failure = failure || err; }
     }
     return failure;
+  }
+  // Sends one transcript: only the turns that changed when the hub has the version
+  // this client last sent, else whole. An older hub (404 on the new paths) takes
+  // only the single whole request, as before.
+  async _uploadHistory(token, item) {
+    const hashes = item.turns.map(turnHash);
+    const head = { opId: item.opId, sessionId: item.sessionId, deviceId: this.device.id, contentHash: item.contentHash, summary: item.summary, startedAt: item.startedAt, endedAt: item.endedAt };
+    const acked = this.historyAcked.get(item.sessionId);
+    if (acked) {
+      let from = 0;
+      while (from < hashes.length && from < acked.turnHashes.length && hashes[from] === acked.turnHashes[from]) from += 1;
+      const answer = await this._sendText(token, { ...head, base: { contentHash: acked.contentHash, from } }, JSON.stringify(item.turns.slice(from)));
+      if (answer.status === 200) return this._acked(item, hashes, answer.body);
+      if (answer.body.error === 'parts-missing') throw new Error('同步失败：同步服务重启过，这段对话下一轮重传');
+      // 404: an older hub; base-mismatch: the hub's copy is not the one we sent last.
+    }
+    const whole = { ...item, deviceId: this.device.id };
+    if (Buffer.byteLength(JSON.stringify(whole)) <= PLAIN_MAX) {
+      return this._acked(item, hashes, (await this._send(token, 'POST', '/v1/history', whole)).body);
+    }
+    const answer = await this._sendText(token, head, JSON.stringify(item.turns));
+    if (answer.status === 404) throw new Error(TOO_BIG);
+    if (answer.status !== 200) throw new Error(answer.body.error === 'parts-missing' ? '同步失败：同步服务重启过，这段对话下一轮重传' : '同步失败：同步服务没有收下这段对话');
+    return this._acked(item, hashes, answer.body);
+  }
+  // Turns as JSON text, in one request or in pieces put together on the hub.
+  async _sendText(token, head, text) {
+    const accept = [404, 409];
+    if (text.length <= PART_CHARS) return this._send(token, 'POST', '/v1/history/assemble', { ...head, text }, accept);
+    const uploadId = 'up-' + crypto.randomUUID();
+    const count = Math.ceil(text.length / PART_CHARS);
+    for (let index = 0; index < count; index++) {
+      const part = await this._send(token, 'POST', '/v1/history/part', { uploadId, index, count, text: text.slice(index * PART_CHARS, (index + 1) * PART_CHARS) }, [404]);
+      if (part.status === 404) return part;
+    }
+    return this._send(token, 'POST', '/v1/history/assemble', { ...head, uploadId, parts: count }, accept);
+  }
+  // The hub's answer names the version it keeps (an older hub sends the record).
+  _acked(item, turnHashes, body) {
+    const kept = body && (body.contentHash || (body.record && body.record.contentHash));
+    if (kept === item.contentHash) this.historyAcked.set(item.sessionId, { contentHash: kept, turnHashes });
+    else this.historyAcked.delete(item.sessionId);
   }
   // A transcript the hub names by hash and time: the local copy stands while both
   // match; it is fetched again only when they changed.

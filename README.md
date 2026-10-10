@@ -1449,7 +1449,21 @@ copy is kept; copies an older hub kept that way are dropped when it loads. A
 round asks for transcripts by hash (`/v1/snapshot?history=hash`) and fetches
 only the ones whose hash or time changed (`/v1/history`); an older client still
 gets whole transcripts, and every answer over 1 KB is gzipped for a client that
-asks (Node's fetch does). Credential-shaped fields are stripped,
+asks (Node's fetch does).
+Every hub refuses a request body over 2,000,000 bytes, so a transcript is not
+always sent whole in one request. Once the hub has confirmed a version, the next
+save sends only the turns from the first one that changed, laid over that
+version (`/v1/history/assemble` with `base`); the hub checks the result against
+the transcript's hash and answers `base-mismatch` when its copy is not that
+version, and the client then sends it whole. A whole transcript under 1.9 MB goes
+in one `/v1/history` request any hub takes; a bigger one, or a big set of changed
+turns, goes in pieces of 256 K characters (`/v1/history/part`) that the hub holds
+in memory (10 minutes, 256 M characters at once) until `assemble` puts them
+together. A hub restarted between pieces answers `parts-missing` and the
+transcript goes again next round. An older hub answers 404 to both paths: small
+transcripts sync as before, and one over 2 MB shows 「这段对话超过 2 MB，同步服务版本太旧」
+until the hub is upgraded. An older client keeps sending whole transcripts
+(up to 2 MB) and the hub takes them as before. Credential-shaped fields are stripped,
 but transcript prose is preserved, so sync only to a trusted private service.
 Requests time out after 10 seconds and retry on subsequent sync rounds. A round
 still running when the next is due is not queued behind it (one round at a time,

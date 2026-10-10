@@ -87,6 +87,16 @@ function startSyncServer({ store, token, host = '127.0.0.1', port = 0, log = () 
         const saved = store.pushHistory(await readBody(req));
         return finish(saved.status, saved.body);
       }
+      // A transcript over MAX_BODY comes in pieces, then is put together; one the
+      // hub already has comes as only the turns that changed (README 两机同步).
+      if (req.method === 'POST' && pathname === '/v1/history/part') {
+        const saved = store.stageHistoryPart(await readBody(req));
+        return finish(saved.status, saved.body);
+      }
+      if (req.method === 'POST' && pathname === '/v1/history/assemble') {
+        const saved = store.pushHistoryText(await readBody(req));
+        return finish(saved.status, saved.body);
+      }
       return finish(404, { error: 'not-found' });
     } catch (err) {
       const status = Number.isInteger(err.status) ? err.status : 500;
