@@ -333,13 +333,13 @@ test('a card reads in three layers and its line is news: never a CLI update noti
   }
   const long = await page.evaluate(() => {
     const n = document.querySelector('.cm-node[data-node-id="w2"]'), seat = n.querySelector('.agent-seat-label'), st = n.querySelector('.cm-status'), model = n.querySelector('.agent-model-label'), more = n.querySelector('.cm-more');
-    (seat.querySelector('bdi') || seat).textContent = 'alice2-research-team-account';
+    (seat.querySelector('bdi') || seat).textContent = 'alice2-research-team-account-alpha';
     const r = (x) => x.getBoundingClientRect();
     return { seatCut: seat.scrollWidth > seat.clientWidth, ellipsis: getComputedStyle(seat).textOverflow, statusCut: st.scrollWidth > st.clientWidth, modelCut: model.scrollWidth > model.clientWidth,
       inside: r(seat).left >= r(st).right && r(seat).right <= r(more).left + 0.5, letters: r(seat).width >= 28, named: /^当前账号：/.test(seat.title) };
   });
   expect(long).toEqual({ seatCut: true, ellipsis: 'ellipsis', statusCut: false, modelCut: false, inside: true, letters: true, named: true });
-  // (cut from the left, as everywhere an account is named: the end that tells alice2 from alice stays)
+  // (cut from the left, as everywhere an account is named: the end of the name stays)
   expect(await page.evaluate(() => getComputedStyle(document.querySelector('.cm-node[data-node-id="w2"] .agent-seat-label')).direction)).toBe('rtl');
   // 队长's tally and the bar of the whole crew under it
   const fleet = await page.evaluate(() => [...document.querySelectorAll('.cm-node.kind-captain .cm-fleet i')].map((i) => [i.className, Number(i.style.flexGrow)]));

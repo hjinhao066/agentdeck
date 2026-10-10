@@ -604,7 +604,7 @@ test('phone rows carry display fields only: account name, masked address, no con
   const rows = Q.mobile(store, now, seats, 'cn');
   assert.deepEqual(rows.map((r) => [r.key, r.name, r.short, r.flag, r.captain, r.status]), [
     // A seat goes by its account name (the part before the @); one without a recognised account says which seat it is.
-    ['Claude:cn', 'Claude hjinhao', 'hjinhao', '', true, 'normal'], ['Claude:us', 'Claude 识别中（us）', '识别中（us）', '', false, 'out'],
+    ['Claude:cn', 'Claude alice', 'alice', '', true, 'normal'], ['Claude:us', 'Claude 识别中（us）', '识别中（us）', '', false, 'out'],
     ['Codex', 'Codex', 'Codex', '', false, 'normal'], ['Cursor', 'Cursor Grok', 'Cursor', '', false, 'unknown'], ['Antigravity', 'Gemini', 'Gemini', '', false, 'unknown']]);
   assert.deepEqual(rows[0].cells.map((c) => [c.key, c.remaining, c.out]), [['5h', 26, false], ['7d', 61, false]]);
   assert.deepEqual([rows[0].account, rows[1].account, rows[2].account, rows[3].account], ['a***@example.com', 'u***@example.com', 'c***@example.com', '']);
@@ -617,7 +617,7 @@ test('phone rows carry display fields only: account name, masked address, no con
     assert.deepEqual(Object.keys(row).sort(), ['account', 'captain', 'cells', 'failed', 'flag', 'health', 'key', 'name', 'provider', 'recoveryAt', 'sampledAt', 'short', 'source', 'status']);
     assert.deepEqual(Object.keys(row.health).sort(), ['action', 'kind', 'label', 'level', 'reason']);
     // The name may go to the phone; a whole address never does (every @ there follows the mask).
-    assert.doesNotMatch(JSON.stringify(row), /\.claude|account-|-cred|hjinhao@|[^*]@/);
+    assert.doesNotMatch(JSON.stringify(row), /\.claude|account-|-cred|alice@|[^*]@/);
   }
   // Past the freshness window an official sample keeps its numbers but is marked old; a screen sample loses them.
   const later = Q.mobile(store, now + 31 * 60000, seats, 'cn');

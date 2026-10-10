@@ -158,7 +158,7 @@ test('quota is a read-only, login-only endpoint that returns display fields with
   const response = await request(status, '/api/quota', { headers: auth });
   assert.equal(response.status, 200);
   assert.equal(response.headers['cache-control'], 'no-store');
-  assert.doesNotMatch(response.text, /hjinhao|secret|configDir|accountKey|credentialKey|c93892d01d8a|\.claude|detail|未识别/);
+  assert.doesNotMatch(response.text, /alice|secret|configDir|accountKey|credentialKey|c93892d01d8a|\.claude|detail|未识别/);
   const body = JSON.parse(response.text);
   assert.deepEqual(body, { version: '1.1.6', now, rows: [
     { key: 'Claude:cn', provider: 'Claude', name: 'Claude 🇨🇳 CN', short: 'CN', flag: '🇨🇳', captain: true, status: 'normal', failed: false,
