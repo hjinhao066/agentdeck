@@ -93,6 +93,7 @@ the middle:
   desktop or the phone hub, with the window focused (leaving it restarts the count). Board cards that stop for the user go to
   the Captain first, never straight onto this page. The phone hub shows both computers' items. See [待我处理](docs/attention.md).
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
+  已归档 keeps every archived session (no cap): it lists the newest 100 and 显示更早的 adds 100 more, down to the oldest.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
   sessions in exactly the sidebar order (队长 first, then folders, then loose
   sessions), so swiping walks the list; the 队长's background sessions are not
@@ -1049,7 +1050,14 @@ an index from before this counts nothing as new). The phone hub does not have it
 - Conversations are saved locally in the app's userData folder under `chats`
   (one private JSON file per session, written atomically) and are not committed.
   Folders, archived sessions and schedules live in the
-  local `config.json` in the same folder. Turning a reply into a bubble is heuristic, so a TUI
+  local `config.json` in the same folder. A saved conversation that nothing lists any more (before 2.0.4
+  the archive kept only its newest 500 sessions and dropped the rest at launch) is put back into 已归档 at
+  the next launch, if the user spoke in it: with the command, folder and card it had when an older copy of
+  `config.json` (beside it, or in an install backup) still lists it, otherwise named after its first prompt,
+  and restoring that one opens a plain shell. `config.json` is first copied to
+  `config.json.before-archive-recovery-<time>`; no chat file is changed and nothing is deleted. Terminal output
+  already pruned does not come back. `node scripts/archive-recovery.js [--list]` shows what the next launch
+  would bring back without writing anything (`--user-data COPY --apply` tries it on a copy). Turning a reply into a bubble is heuristic, so a TUI
   that redraws unusually may produce an imperfect bubble; the terminal view
   always has the full output. Syncing to a private GitHub repo is planned.
 

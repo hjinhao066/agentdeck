@@ -96,7 +96,17 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   (`captainCrew` while a 队长 exists) are `.backstage`: built and sized off-deck,
   skipped by navigation and popups, shown after 队长 only while opened (`peekId`). Reorder by moving live column nodes, never by
   rebuilding terminals. Archive kills the PTY with `keepReplay` so restore can
-  replay the saved output; the startup prune must keep archived ids.
+  replay the saved output; the startup prune must keep archived ids. The archive has no
+  cap (`SidebarCore.normalizeArchived` keeps every entry, the sidebar pages it): never
+  drop an entry to shorten the list, its chat and replay would be orphaned. At launch
+  `archive-recovery.js` runs before that prune and puts a chat file nothing lists back into
+  the archive (only one the user spoke in; never a 队长 chat; `config.json` copied aside
+  first; never deletes or rewrites a chat). A test profile reads no backup outside itself.
+- Open columns are rebuilt at launch through a field whitelist (`renderer.js`,
+  `config.columns = saved.columns.map(...)`). A field the app must still find on a column
+  after a restart (`worktree`, `executor`/`webMode`, ...) has to be added there with its
+  type check and to `tests/relaunch-keeps-column-fields.test.js`. Archived entries and
+  restored columns are kept whole, so only an open column loses a forgotten field.
 - Archiving ends a terminal, so a session that is working, waiting on an answer or
   printing output is never archived, automatically or by click, and never asks first
   (`archiveColumn` shows a notice and stops). The automatic archive reads the terminal itself one more time
