@@ -950,8 +950,9 @@
   const SAFE_URL = /^(https?:\/\/|mailto:)/i;
   // next to Chinese text a star needs no space around it: "这是*重点*内容"
   const EM_BEFORE = '(^|[\\s(（“"「【：，。、\\u3400-\\u9fff])', EM_AFTER = '(?=[\\s).,;:!?，。；：、）”"」】\\u3400-\\u9fff]|$)';
-  // "C:\…" up to white space, quotes or Chinese punctuation; single spaces as in "Program Files"
-  const WIN_PATH = /\b[A-Za-z]:\\(?:[^\s`"'<>|\u3000-\u303f\uff01-\uff60]| (?=[^\s`"'<>|]))*/g;
+  // "C:\…" up to white space, quotes or Chinese punctuation; single spaces as in "Program Files", when
+  // another folder follows (the words after a path are not part of it: their escapes still work)
+  const WIN_PATH = /\b[A-Za-z]:\\(?:[^\s`"'<>|\u3000-\u303f\uff01-\uff60]| (?=[^\s`"'<>|\\][^\s`"'<>|]*\\))*/g;
   const EM_STAR = new RegExp(EM_BEFORE + '\\*([^*\\s][^*\\n]*)\\*' + EM_AFTER, 'g'), EM_BAR = new RegExp(EM_BEFORE + '_([^_\\s][^_\\n]*)_' + EM_AFTER, 'g');
   function inline(src, opts) {
     const held = [], links = !!(opts && opts.links), rich = !!(opts && opts.rich);
