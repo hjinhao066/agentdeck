@@ -215,7 +215,7 @@ test('both phone pages show the same colours, marks and words as the desktop', a
       expect(await contrast(item.locator('.quota-name-text')), `hub ${theme} ${id}`).toBeGreaterThanOrEqual(4.5);
       if (level !== 'ok') await expect(item.locator('.quota-row')).toHaveAttribute('aria-label', new RegExp(label));
     }
-    await expect(card.locator('.quota-item').filter({ has: phone.locator('.quota-name-text', { hasText: /^jinhao\.h\.sub$/ }) }).locator('.quota-row-note')).toHaveText('登录凭据坏了 · 需要重新登录这个席位');
+    await expect(card.locator('.quota-item').filter({ has: phone.locator('.quota-name-text', { hasText: /^bob\.sub$/ }) }).locator('.quota-row-note')).toHaveText('登录凭据坏了 · 需要重新登录这个席位');
     expect(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await card.locator('.quota').scrollIntoViewIfNeeded();
     await shot(phone, `hub-${theme}`);
