@@ -53,6 +53,7 @@ test.beforeAll(async () => {
   page = await app.firstWindow();
   await page.waitForFunction(() => typeof window.MainSession === 'object' && typeof window.TaskBoard === 'object' && typeof config === 'object');
   await expect(page.locator('.column')).toHaveCount(1);
+  keepColumns = await page.evaluate(() => columns.map((c) => c.id));   // the idle shell; the Captain is kept by its isMain flag
   await page.evaluate((cwd) => MainSession.create('', cwd), profile);
   const captain = await page.evaluate(() => MainSession.mainCol().id);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), captain)).toBe(true);
@@ -85,10 +86,71 @@ async function installStandIns() {
   }, FAKE);
 }
 // (a profile still held by the closed Electron's helpers on Windows is reported, it does not fail the run)
-test.afterAll(async () => { if (app) await app.close(); if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); } });
+// Before the app closes, the live terminals are counted once more: a cleanup that broke (and only warned in afterEach) must still turn
+// the run red. Two sources are counted: the terminals still in `terms`, and the `survivors` (terminals whose archive ran, so they left
+// `terms`, but whose PTY did not die within the wait; each is asked again here, so one that exited late is not counted). More than 2 left
+// over fails here. The app is closed and the profile removed first, then the check's error is thrown, so it is neither leaked nor hidden.
+test.afterAll(async () => {
+  let checkError;
+  try {
+    if (app && page) {
+      const left = await page.evaluate(async ([keep]) => {
+        const alive = [];
+        for (const id of terms.keys()) {
+          if (keep.includes(id) || columns.some((c) => c.id === id && c.isMain)) continue;
+          if (await window.deck.ptyIsAlive(id)) alive.push({ id, label: columns.find((c) => c.id === id)?.title || id });
+        }
+        return alive;
+      }, [keepColumns]);
+      for (const s of survivors) {
+        if (left.some((l) => l.id === s.id)) continue;
+        if (await page.evaluate((id) => window.deck.ptyIsAlive(id), s.id)) left.push({ id: s.id, label: `${s.title} (left by "${s.test}")` });
+      }
+      if (left.length > 2) {
+        throw new Error(`${left.length} test terminals are still alive at the end (allowed: 2): ${left.map((l) => l.label).join(', ')}. Cleanup failed in: ${cleanupFailures.length ? cleanupFailures.join(' | ') : 'no test (the cleanup itself did not remove them)'}`);
+      }
+    }
+  } catch (error) { checkError = error; }
+  try { if (app) await app.close(); } catch (error) {
+    if (!checkError) checkError = error; else console.warn(`app not closed cleanly: ${error.message.split('\n')[0]}`);
+  } finally {
+    if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
+  }
+  if (checkError) throw checkError;
+});
+// Every worker is a ConPTY PowerShell plus its stand-in node. Left open
+// until the file ends, the first ten tests alone piled up 26 PowerShells and a whole run took the machine to 98% commit. So a test's
+// terminals end with the test: whatever column the test (a worker, a reviewer, a dispatcher stand-in) opened is archived with the same
+// host.archiveColumn that `archive --id` ends with (the PTY is killed and the xterm disposed; the conversation is saved). It is only
+// that last step: the card is not set to stopped and the column's pending receipts are not dropped, so a card keeps the state the test left it in.
+// The case that leaves dispatcher stand-ins on purpose ("Gemini out or unread") is covered the same way, after it has finished.
+// Columns present when the tests start (the idle shell and the Captain) stay.
+let keepColumns = [];
+const cleanupFailures = [];   // titles of the tests whose cleanup threw; afterAll names them if terminals piled up
+const survivors = [];         // { id, title, test } of archived terminals whose PTY was still alive after the wait; afterAll asks again
+async function closeTestTerminals(testTitle = '') {
+  const closed = await page.evaluate((keep) => {
+    const cols = [];
+    for (const col of columns.filter((c) => !c.isMain && !keep.includes(c.id))) { cols.push({ id: col.id, title: col.title || col.id }); archiveColumn(col, { captain: true, quiet: true }); }
+    return cols;
+  }, keepColumns);
+  // archiveColumn sends the kill; wait until each PTY is really gone before the next test starts a new one
+  let failure;
+  for (const { id, title } of closed) {
+    try { await expect.poll(() => page.evaluate((s) => window.deck.ptyIsAlive(s), id), { timeout: 15000 }).toBe(false); }
+    catch (error) { survivors.push({ id, title, test: testTitle }); failure = failure || error; }
+  }
+  if (failure) throw failure;
+  return closed.length;
+}
 test.afterEach(async ({}, info) => {
-  if (info.status === info.expectedStatus) return;
-  await info.attach('task-board-state', { body: JSON.stringify({ cards: await list({ archived: true }), notices: await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板')) }), contentType: 'application/json' });
+  // The failure attachment sits inside the try as well: a crashed page makes list() throw, and the cleanup must still be attempted.
+  try {
+    if (info.status !== info.expectedStatus) {
+      await info.attach('task-board-state', { body: JSON.stringify({ cards: await list({ archived: true }), notices: await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板')) }), contentType: 'application/json' });
+    }
+  } catch (error) { console.warn(`state of "${info.title}" not attached: ${error.message.split('\n')[0]}`); }
+  try { await closeTestTerminals(info.title); } catch (error) { cleanupFailures.push(info.title); console.warn(`terminals of "${info.title}" not all closed: ${error.message.split('\n')[0]}`); }
 });
 
 test('CLI cards bind actual worker receipts, exact text stays in the session and dependencies unlock', async () => {
@@ -650,7 +712,7 @@ test('Gemini out or unread: the board dispatcher is a Haiku session, titled with
       expect(col.cmd).toContain('--haiku-stand-in');
       expect(col.title).toBe(`调度：Haiku dispatch ${gemini}（Claude Haiku 5.5）`);
       expect(await page.evaluate(() => columns.filter((c) => /^agy\b/.test(c.cmd || '')).length)).toBe(0);
-      // the stand-in dispatcher is left to the profile's teardown: it takes no part in what is checked here
+      // the stand-in dispatcher stays open on purpose: it takes no part in what is checked here, and afterEach archives it
     }
   } finally { await page.evaluate(() => { window.testStance = (cmd) => (cmd.includes('fake-agent.js') ? 'ok' : undefined); TaskBoard.settings('captain'); }); }
 });

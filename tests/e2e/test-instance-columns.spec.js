@@ -10,10 +10,13 @@ const path = require('path');
 // PATH first: each real agent name only writes a line to trap.log. A test instance with no columns must leave trap.log empty.
 const AGENTS = ['claude', 'agy', 'antigravity', 'gemini', 'codex', 'cursor-agent', 'cursor', 'grok'];
 const GUARD = path.join(__dirname, 'fixtures', 'no-dialog-guard.js');
-const APP_ARGS = process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')];
-let profile, trapFile, guardLog, app;
+const PACKAGED = !!process.env.AGENTDECK_TEST_EXECUTABLE;
+const APP_ARGS = PACKAGED ? [] : [path.resolve(__dirname, '../..')];
+let profile, trapFile, guardLog, app, page;
 
-test.afterEach(async () => {
+test.afterEach(async ({}, info) => {
+  // A failure keeps what the trap caught, so the report names the agent that got started.
+  if (info.status !== info.expectedStatus && trapFile) await info.attach('trap.log', { body: trapped(), contentType: 'text/plain' }).catch(() => {});
   if (app) await closeElectron(app).catch(() => {});
   app = null;
   // A profile the just-closed Electron still holds (Windows) is left to the temp folder, not a failure of the test.
@@ -41,14 +44,34 @@ async function start(config) {
   env[pathKey] = trapDir + path.delimiter + (env[pathKey] || '');
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: ['-r', GUARD, ...APP_ARGS, `--test-user-data=${profile}`], env });
-  const page = await app.firstWindow();
+  page = await app.firstWindow();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.waitForFunction(() => typeof config === 'object' && typeof terms === 'object');
-  return { page, errors };
+  return { page, errors, guard: await guardLoaded() };
 }
 const trapped = () => (fs.existsSync(trapFile) ? fs.readFileSync(trapFile, 'utf8') : '');
 const guardLines = () => (fs.existsSync(guardLog) ? fs.readFileSync(guardLog, 'utf8').trim().split('\n') : []);
+// Whether `-r <guard>` was honoured. Source run (electron <app path>): Electron's default app reads `-r`, so the guard must be
+// loaded, and a missing one fails the test. A packaged app does not read `-r` (probed on the installed 2.0.7 AgentDeck.exe: it starts,
+// and guard.log is never written), so there the check is skipped, and the output says why instead of timing out.
+async function guardLoaded() {
+  if (!PACKAGED) { await expect.poll(guardLines, { message: 'the dialog guard (-r) was not loaded before the app' }).toContain('guard loaded'); return true; }
+  const loaded = await expect.poll(guardLines, { timeout: 3000 }).toContain('guard loaded').then(() => true, () => false);
+  if (!loaded) {
+    const note = 'dialog guard check skipped: the packaged app (AGENTDECK_TEST_EXECUTABLE) did not load -r <script>, so the guard is not active';
+    test.info().annotations.push({ type: 'skipped-check', description: note });
+    console.warn(note);
+  }
+  return loaded;
+}
+// Zero columns. When it fails, give the default columns time to type their launch lines (~0.7 s), so trap.log says which agent they
+// started, and put it in the failure message before the count is asserted.
+async function expectNoColumns(label) {
+  const count = await page.locator('.column').count();
+  if (count !== 0) await page.waitForTimeout(3000);
+  expect(count, `${label}: ${count} column(s) opened, trap.log: ${JSON.stringify(trapped())}`).toBe(0);
+}
 
 for (const [label, config] of [
   ['no config file', null],
@@ -57,14 +80,13 @@ for (const [label, config] of [
   ['a config file that cannot be read', '{ "columns": [ not json'],
 ]) {
   test(`a test instance with ${label} opens no default agent columns and starts nothing`, async () => {
-    const { page, errors } = await start(config);
-    // the guard really was loaded before the app (-r in front of the app path)
-    await expect.poll(guardLines).toContain('guard loaded');
-    expect(await page.locator('.column').count()).toBe(0);
+    // start() has checked the guard (-r in front of the app path) where the app honours it
+    const { errors } = await start(config);
+    await expectNoColumns('at start');
     expect(await page.evaluate(() => [config.columns.length, terms.size])).toEqual([0, 0]);
     // the default columns would type their launch lines after ~0.7 s (Windows: once the prompt is up): give them time to show
     await page.waitForTimeout(5000);
-    expect(await page.locator('.column').count()).toBe(0);
+    await expectNoColumns('after 5 s');
     expect(await page.evaluate(() => terms.size)).toBe(0);
     expect(trapped()).toBe('');
     expect(errors).toEqual([]);
@@ -72,14 +94,47 @@ for (const [label, config] of [
   });
 }
 
+// "Reset to default layout" used to open the three default agent columns in a test instance as well.
+test('resetting the layout in a test instance leaves no columns and starts nothing', async () => {
+  const { errors } = await start((dir) => JSON.stringify({ perpetualCaptain: { enabled: false },
+    columns: [{ id: 'saved-shell', title: 'Shell', cmd: '', cwd: dir, role: 'manual' }] }));
+  await expect(page.locator('.column')).toHaveCount(1);
+  // (Playwright cannot answer a page dialog in an Electron window: "No dialog is showing"; the page's own confirm() is answered instead)
+  await page.evaluate(() => { window.confirm = () => true; });
+  await page.locator('button[aria-label="恢复默认布局"]').evaluate((button) => button.click());
+  await page.waitForTimeout(5000);   // the reset is synchronous; the time is for any default column to type its launch line
+  await expectNoColumns('after the reset');
+  expect(await page.evaluate(() => [config.columns.length, terms.size])).toEqual([0, 0]);
+  expect(trapped()).toBe('');
+  expect(errors).toEqual([]);
+});
+
 test('a test instance with saved columns opens exactly those', async () => {
   // the column's folder is the profile itself, which afterEach removes once the app is closed
-  const { page, errors } = await start((dir) => JSON.stringify({ perpetualCaptain: { enabled: false },
+  const { errors } = await start((dir) => JSON.stringify({ perpetualCaptain: { enabled: false },
     columns: [{ id: 'saved-shell', title: 'Shell', cmd: '', cwd: dir, role: 'manual' }] }));
   await expect(page.locator('.column')).toHaveCount(1);
   expect(await page.evaluate(() => config.columns.map((c) => c.id))).toEqual(['saved-shell']);
   await page.waitForTimeout(3000);
   expect(await page.locator('.column').count()).toBe(1);
   expect(trapped()).toBe('');
+  expect(errors).toEqual([]);
+});
+
+// The positive control: every test above asserts an empty trap.log, which only means something if the trap does catch a real agent
+// name. Typed into a manual terminal of the same instance, `claude` has to land in the trap, and as exactly one new line.
+test('the trap catches a real agent name typed into a manual terminal of the test instance', async () => {
+  const { errors } = await start((dir) => JSON.stringify({ perpetualCaptain: { enabled: false },
+    columns: [{ id: 'saved-shell', title: 'Shell', cmd: '', cwd: dir, role: 'manual' }] }));
+  await expect(page.locator('.column')).toHaveCount(1);
+  // wait for the shell's prompt so the line is read by the shell, not lost in start-up
+  await expect.poll(() => page.evaluate((platform) => {
+    const screen = dumpScreen(terms.get('saved-shell').term);
+    return platform === 'win32' ? MainCore.isWindowsShellPrompt(screen) : /[%$#]\s*$/.test(screen);
+  }, process.platform), { timeout: 30000 }).toBe(true);
+  expect(trapped()).toBe('');
+  await page.evaluate(() => window.deck.ptyInput('saved-shell', 'claude\r'));
+  await expect.poll(trapped, { timeout: 15000, message: 'typing claude did not reach the trap in front of PATH' }).toMatch(/TRAP claude/);
+  expect(trapped().trim().split(/\r?\n/).map((line) => line.trim())).toEqual(['TRAP claude']);
   expect(errors).toEqual([]);
 });

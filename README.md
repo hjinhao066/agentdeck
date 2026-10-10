@@ -1546,6 +1546,15 @@ columns (no config file, an unreadable one, `columns` missing or empty) opens no
 at all, instead of the three default agent columns that start real `agy`/`claude`/`grok`;
 a normal run keeps the defaults. `test-instance-columns.spec.js` checks this with a PATH
 trap, and loads `fixtures/no-dialog-guard.js` (`electron -r <guard> <app>`) so no dialog can open.
+A packaged app does not read `-r` (only Electron's default app does), so against
+`AGENTDECK_TEST_EXECUTABLE` the guard check is skipped and the output says so. The same spec
+types `claude` into a manual terminal to prove the trap catches a real agent name, and checks that
+"恢复默认布局" also leaves no columns. `task-board.spec.js` archives every terminal a test opened when
+that test ends, so a full run keeps about three PowerShells open instead of one per worker. It calls the
+same `host.archiveColumn` that `archive --id` ends with, and nothing else: cards are not set to stopped
+and pending receipts are kept. If more than 2 test terminals are still alive at the end (archived ones whose
+PTY did not die are asked again),
+the file's `afterAll` fails and names the leftovers and the tests whose cleanup failed.
 Fixture cleanup first requests normal Electron quit, then kills only its isolated process tree
 after 10 seconds if native teardown stalls, with an explicit warning in the test log.
 This cleanup is not a graceful-shutdown assertion; `restart-resume-exit.spec.js`
