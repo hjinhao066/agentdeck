@@ -125,6 +125,18 @@ test('metadata yields the signed-in email for the seat lists and no credential m
   assert.doesNotMatch(a.loginBase, /--email/);
   assert.equal(queried.length, 2);
 });
+test('metadata yields the subscription day for the Token 用量 billing cycle, unless the CLI says another account is signed in', async (t) => {
+  const home = fixture(t), [, us] = S.normalize(); setup(home);
+  fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test', organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x', subscriptionCreatedAt: '2026-06-11T21:50:13.833781Z' } }));
+  const signedIn = async () => true;
+  const a = await M.seatInfo(us, home, 'darwin', signedIn);
+  assert.equal(a.plan, 'Max 20x');
+  assert.equal(a.subscribedAt, '2026-06-11T21:50:13.833781Z');
+  const moved = await M.seatInfo(us, home, 'darwin', signedIn, async () => ({ loggedIn: true, email: 'other@example.test', plan: 'Pro' }));
+  assert.equal(moved.subscribedAt, '');
+  fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test', subscriptionCreatedAt: { not: 'a date' } } }));
+  assert.equal((await M.seatInfo(us, home, 'darwin', signedIn)).subscribedAt, '');
+});
 test('launch reasserts the seat after shell overrides and handles spaces/quotes', (t) => {
   if (process.platform === 'win32') return;
   const home = fixture(t), bin = path.join(home, 'claude');

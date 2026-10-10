@@ -208,7 +208,8 @@ if (saved) {
       completedOpen: v.completedOpen === true,
     };
   }
-  if (saved.tokenUsageView?.days === 30) config.tokenUsageView = { days: 30 };
+  // Token 用量: range, Token or 金额, and the 订阅值不值 cycle starts the user set
+  if (saved.tokenUsageView) config.tokenUsageView = TokenUsageCore.viewPrefs(saved.tokenUsageView);
   // Artifacts: the projects the user folded away
   config.artifactsCollapsed = (Array.isArray(saved.artifactsCollapsed) ? saved.artifactsCollapsed : []).filter((k) => typeof k === 'string' && k.length <= 120).slice(0, 500);
   // 队长's 交付文件 panel: folded away or not, its two lists if changed, and the index of what it found (DeliverablesCore)
@@ -5001,7 +5002,7 @@ TaskBoardUI.init({
   prefs: () => config.taskBoardView,
   savePrefs: (prefs) => { config.taskBoardView = prefs; saveConfig(); },
   tokenPrefs: () => config.tokenUsageView,
-  saveTokenPrefs: (prefs) => { config.tokenUsageView = { days: prefs.days === 30 ? 30 : 7 }; saveConfig(); },
+  saveTokenPrefs: (prefs) => { config.tokenUsageView = TokenUsageCore.viewPrefs(prefs); saveConfig(); },
   copy: (text) => window.deck.clipboardWrite(text),
   renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', ClaudeSeats.described(config.claudeSeats)),
   openSession: openTaskSession,

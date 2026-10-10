@@ -47,13 +47,22 @@ function forkScan(input) {
   });
 }
 
+// Claude seats by id with their directories, for the 订阅值不值 rows. A test
+// profile keeps only seats inside its own usage-home (~/...).
+function seatList(seats, home, test = false) {
+  return (Array.isArray(seats) ? seats : [])
+    .filter((s) => s && typeof s.id === 'string' && s.id && typeof s.configDir === 'string' && (!test || /^~(?=$|[\\/])/.test(s.configDir)))
+    .map((s) => ({ id: s.id, dir: s.configDir.replace(/^~(?=$|[\\/])/, home) }))
+    .filter((s) => path.isAbsolute(s.dir) && (!test || path.resolve(s.dir).startsWith(path.resolve(home) + path.sep)));
+}
+
 // A test profile reads only <userData>/usage-home and never the real seats.
 function registerTokenUsageIpc({ handleMain, home, userData, getSeats = () => [], test = false, run = forkScan }) {
   const usage = createTokenUsage({
-    run: () => run({ home, cacheFile: path.join(userData, 'token-usage-cache.json'), extraClaude: test ? [] : seatDirs(getSeats(), home) }),
+    run: () => run({ home, cacheFile: path.join(userData, 'token-usage-cache.json'), extraClaude: test ? [] : seatDirs(getSeats(), home), seats: seatList(getSeats(), home, test) }),
   });
   handleMain('token-usage:get', (_e, payload) => usage.get({ fresh: payload?.fresh === true }));
   return usage;
 }
 
-module.exports = { createTokenUsage, seatDirs, registerTokenUsageIpc, MAX_AGE };
+module.exports = { createTokenUsage, seatDirs, seatList, registerTokenUsageIpc, MAX_AGE };
