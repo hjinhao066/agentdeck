@@ -210,7 +210,7 @@ if (saved) {
   config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
   config.crewMap = CrewMapCore.normalizeSaved(saved.crewMap);
   if (saved.boardResponses && typeof saved.boardResponses === 'object' && !Array.isArray(saved.boardResponses)) {
-    config.boardResponses = Object.fromEntries(Object.entries(saved.boardResponses).slice(-200));
+    config.boardResponses = Object.fromEntries(Object.entries(saved.boardResponses).filter(([, r]) => savedBoardResponse(r)).slice(-200));
   }
   if (Array.isArray(saved.links)) {
     config.links = saved.links.map(BoardCore.normalizeLink).filter((link) => link.id && link.fromTaskId && link.toTaskId);
@@ -3514,6 +3514,15 @@ boardInspectorSendTaskEl.onclick = () => {
 const MAX_MANAGED_TASKS = 48;
 const MAX_TASK_DEPTH = 8;
 
+// A kept answer replays a request the CLI sends again (after a page reload or a
+// restart). Verbatim answers can be long (a task list, a session's text: up to a
+// megabyte each); written into config.json, 200 of them made it tens of megabytes,
+// rewritten on every save. An answer longer than the usual 12000-character cap is
+// kept for this page's life only; asked again after a restart, it is read afresh.
+const liveBoardResponses = new Map();
+function savedBoardResponse(r) {
+  return !!r && typeof r === 'object' && !(typeof r.result === 'string' && r.result.length > 12000);
+}
 function respondBoard(requestId, payload, verbatim = false) {
   const id = BoardCore.cleanText(requestId, 200);
   if (!id) return;
@@ -3527,7 +3536,14 @@ function respondBoard(requestId, payload, verbatim = false) {
     snapshot: payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : undefined,
     updatedAt: Date.now(),
   };
-  config.boardResponses[id] = response;
+  if (savedBoardResponse(response)) {
+    config.boardResponses[id] = response;
+    liveBoardResponses.delete(id);
+  } else {
+    delete config.boardResponses[id];
+    liveBoardResponses.set(id, response);
+    if (liveBoardResponses.size > 20) liveBoardResponses.delete(liveBoardResponses.keys().next().value);
+  }
   const ids = Object.keys(config.boardResponses);
   if (ids.length > 200) {
     ids.sort((a, b) => (config.boardResponses[a].updatedAt || 0) - (config.boardResponses[b].updatedAt || 0))
@@ -3699,7 +3715,7 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
 });
 
 window.deck.onBoardCommand(async (message) => {
-  const cached = config.boardResponses[message.id];
+  const cached = config.boardResponses[message.id] || liveBoardResponses.get(message.id);
   if (cached) {
     window.deck.boardRespond({ requestId: message.id, ...cached });
     return;
