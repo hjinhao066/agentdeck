@@ -1,15 +1,15 @@
 # 手机总台部署与版本核对
 
-`mobile-web/hub/` 是独立交付物：VPS `/srv/agentdeck-hub` 的九个静态文件（含版本更新页的 `releases.js` 和它读的 `release-notes.json`，后者构建时取自仓库根目录；含 PDF 阅读用的 `pdf.min.js`、`pdf.worker.min.js`，即 pdf.js 6.4.299 legacy 版，Apache-2.0，打开 PDF 时才加载）不会随着 Mac/Windows 安装应用而更新。`/mac/*` 与 `/win/*` 的 JSON API、登录和退出由各自现役应用经 SSH 反向隧道实时提供；不属于静态部署。当前 Caddy 用 VPS 回环 43122/43123，静态更新不用改 Caddy 或隧道。同 VPS 的 Hermes 有 WireGuard 路由，与这两个前缀不同。
+`mobile-web/hub/` 是独立交付物：VPS `/srv/agentdeck-hub` 的十个静态文件（含版本更新页的 `releases.js` 和它读的 `release-notes.json`，后者构建时取自仓库根目录；含 PDF 阅读用的 `pdf.min.js`、`pdf.worker.min.js`，即 pdf.js 6.4.299 legacy 版，Apache-2.0，内嵌 core-js 3.50.0（MIT），打开 PDF 时才加载）不会随着 Mac/Windows 安装应用而更新。静态包也带许可说明：构建时把仓库根目录的 `THIRD_PARTY_NOTICES.md` 原样放进包里（同一份随安装包发布），公网地址为 `/THIRD_PARTY_NOTICES.md`，发版核对时与其他文件一样校验哈希。`/mac/*` 与 `/win/*` 的 JSON API、登录和退出由各自现役应用经 SSH 反向隧道实时提供；不属于静态部署。当前 Caddy 用 VPS 回环 43122/43123，静态更新不用改 Caddy 或隧道。同 VPS 的 Hermes 有 WireGuard 路由，与这两个前缀不同。
 
 ## 发版门禁
 
 现有 `node scripts/release.js …` 在桌面包校验完成后自动执行 `scripts/mobile-release.js deploy`。普通发版与 `--prepared` 均不可跳过；缓存命中仍执行。`--dry-run` 只列计划。
 
-1. 从干净 checkout 的已提交 Git blob 构建九个文件，校验 CSP，给生成的 `index.html` 嵌入 `agentdeck-version`、`agentdeck-commit`、`agentdeck-builtAt` meta；JS/CSS URL 带提交号，避免刷新后复用旧资源。源码与页面样式不改。
-2. 写出 `release.json`，记录完整版本、40 位提交号、UTC 构建时间和五文件 SHA256。与发版版本/提交不一致时在上传前停止。
+1. 从干净 checkout 的已提交 Git blob 构建十个文件，校验 CSP，给生成的 `index.html` 嵌入 `agentdeck-version`、`agentdeck-commit`、`agentdeck-builtAt` meta；JS/CSS URL 带提交号，避免刷新后复用旧资源。源码与页面样式不改。
+2. 写出 `release.json`，记录完整版本、40 位提交号、UTC 构建时间和十个文件的 SHA256。与发版版本/提交不一致时在上传前停止。
 3. SSH 管理身份经 `sudo -n` 操作 `/srv`；远端目录锁防并发部署。记录原始符号链接作为回滚点（相对/绝对链接均保留原文）。已有总台不存在或不是链接则停止，不盲目覆盖目录。
-4. tar 上传到唯一 release 目录，原子切链接。从 **`https://agentdeck.18-139-28-180.sslip.io/` 公网入口**读取真实 HTML、五文件与 manifest，精确核对版本/提交/时间/字节及 `Cache-Control: no-store`；每次读取带随机查询参数、禁重定向、10 秒超时。认证只过 Caddy Basic，不请求电脑登录 token。
+4. tar 上传到唯一 release 目录，原子切链接。从 **`https://agentdeck.18-139-28-180.sslip.io/` 公网入口**读取真实 HTML、十个文件与 manifest，精确核对版本/提交/时间/字节及 `Cache-Control: no-store`；每次读取带随机查询参数、禁重定向、10 秒超时。认证只过 Caddy Basic，不请求电脑登录 token。
 5. 上传/公网核对最多 3 次，共用同一个候选 release 和部署前回滚点；失败恢复原链接，核对 readlink，再释放自己的锁并退出非零。报告区分 `rollback=restored` 与 `rollback=failed`；后者需按报告的 `previous` 人工恢复，不自动无限重试。SSH 操作各有 60 秒上限。取消时也尝试恢复；断网/进程强杀不能保证远端恢复，不能把失败回执当成功。
 
 `mobile-deploy-result.json` 记录尝试次数、旧链接、线上元信息、结果与回滚状态；`mobile-deploy.log` 记录命令结果。发版报告手机步骤缺失/未部署/失败/线上不符一律 🔴，整个 release 非零退出。每次运行先移除旧成功回执，避免空命令复用历史结果。旧 release 不自动删除，保证回滚点不被保留策略清走；可在验收后手工清理非现役且不再需要的 release。
@@ -33,7 +33,7 @@ npm run mobile:rollback -- --receipt /absolute/unique-report-directory/mobile-de
 | `mobile-web/hub/index.html`、`style.css` 的布局/字号/颜色；`app.js/core.js` 用现有字段分组、折叠、复制、渲染；`machines.json` 现有电脑配置 | 可以，只需静态部署和手机刷新；仍需验收旧应用契约 |
 | 在总台展示可选新字段/新只读接口，缺失时保留旧行为或隐藏该模块 | 可先单发兼容页面；新能力要等应用提供数据才能使用 |
 | `mobile-web.js`、`main.js` 或 preload/IPC 新增 API/字段、派活能力、认证/CSRF/上传/同步协议 | 必须更新对应电脑的应用；单发页面不能使本机接口出现 |
-| `mobile-web/` 单机直连页（hub 目录之外） | 由安装应用实时提供，不在这次 VPS 五文件中；要应用更新 |
+| `mobile-web/` 单机直连页（hub 目录之外） | 由安装应用实时提供，不在这次 VPS 十个文件中；要应用更新 |
 | Caddy 路由、认证配置、隧道账号/端口 | 属基础设施变更，不属于静态部署脚本 |
 
 总台兼容基线是三端 v2 契约（如 1.1.7）：`api/info` 探测、`api/snapshot` 的 machine/sessions、设备登录与 CSRF。更老应用的 info=401/404 显示「需要升级」且禁发，不白屏。可选时间/boardVersion、machine hostname/appVersion、会话 model/回执信息、turn kind/images/steps 缺失仍能导航和阅读旧 user/reply；quota=404 不显示额度，tasks 缺 cards 或404显示空看板。缺 csrfToken 或 captain 禁止发送并保留草稿，不改发另一台。新增静态特性必须延续这套缺字段回退；不能把需要新版 API 的强依赖当作“只改网页”。兼容 E2E 将这些缺字段组合和404作为回归场景，不需要改现有页面源码。

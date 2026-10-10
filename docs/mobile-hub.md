@@ -1,6 +1,6 @@
 # 手机总台（`mobile-web/hub/`）
 
-一组静态文件（`index.html`、`core.js`、`app.js`、`style.css`、`machines.json`、PDF 阅读用的两个 pdf.js 文件，版本更新页的 `releases.js`，以及构建时从仓库根目录带上的 `release-notes.json`），部署在手机入口的根路径。页面本身没有数据和密钥，只同源请求每台电脑自己的前缀（`/mac/…`、`/win/…`），接口契约见三端方案 2.2 节。旧的 `mobile-web/` 不变，继续供本机直连和回滚。
+一组静态文件（`index.html`、`core.js`、`app.js`、`style.css`、`machines.json`、PDF 阅读用的两个 pdf.js 文件，版本更新页的 `releases.js`，以及构建时从仓库根目录带上的 `release-notes.json` 和 `THIRD_PARTY_NOTICES.md` 许可说明），部署在手机入口的根路径。页面本身没有数据和密钥，只同源请求每台电脑自己的前缀（`/mac/…`、`/win/…`），接口契约见三端方案 2.2 节。旧的 `mobile-web/` 不变，继续供本机直连和回滚。
 
 正式发版由 `scripts/release.js` 自动构建并部署总台，公网版本核对失败则回滚并标红；随时运行 `npm run mobile:check` 与本机安装版比对。见 [部署与版本核对](mobile-release.md)。
 

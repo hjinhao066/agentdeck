@@ -15,8 +15,11 @@ const git = (repo, ...args) => execFileSync('git', args, { cwd: repo, encoding: 
 const PUBLIC_ORIGIN = 'https://agentdeck.18-139-28-180.sslip.io';
 // pdf.min.js and pdf.worker.min.js are pdf.js (Apache-2.0), fetched by the page only when a PDF is opened.
 // release-notes.json (版本更新) is the repository's one copy at the root, shared with the desktop app.
-const FILES = ['index.html', 'core.js', 'releases.js', 'app.js', 'style.css', 'machines.json', 'pdf.min.js', 'pdf.worker.min.js', 'release-notes.json'];
-const source = (name) => name === 'release-notes.json' ? name : `mobile-web/hub/${name}`;
+// THIRD_PARTY_NOTICES.md is the same kind of root copy: the pdf.js (Apache-2.0) and core-js (MIT) licenses
+// embedded in pdf.min.js / pdf.worker.min.js must ship with the hub, and the desktop app packages this file too.
+const ROOT_FILES = ['THIRD_PARTY_NOTICES.md', 'release-notes.json'];
+const FILES = ['index.html', 'core.js', 'releases.js', 'app.js', 'style.css', 'machines.json', 'pdf.min.js', 'pdf.worker.min.js', ...ROOT_FILES];
+const source = (name) => ROOT_FILES.includes(name) ? name : `mobile-web/hub/${name}`;
 function privateJSON(file) {
   try { return readJSON(file); }
   catch { throw new Error('Cannot read private mobile configuration/credentials'); }

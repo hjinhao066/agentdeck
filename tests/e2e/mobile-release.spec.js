@@ -18,6 +18,7 @@ test('one browser reload loads the independently deployed commit and its JS; rec
     fs.cpSync(path.join(__dirname, '../../mobile-web/hub'), source, { recursive: true });
     fs.writeFileSync(path.join(repo, 'package.json'), '{"version":"1.2.0"}');
     fs.copyFileSync(path.join(__dirname, '../../release-notes.json'), path.join(repo, 'release-notes.json'));
+    fs.copyFileSync(path.join(__dirname, '../../THIRD_PARTY_NOTICES.md'), path.join(repo, 'THIRD_PARTY_NOTICES.md'));
     git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid');
     git('config', 'core.hooksPath', path.join(root, 'no-hooks')); git('config', 'commit.gpgsign', 'false');
     fs.appendFileSync(path.join(source, 'app.js'), '\nwindow.mobileBuildProbe = "first";\n');
