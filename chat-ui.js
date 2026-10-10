@@ -1419,6 +1419,19 @@
       } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)
         || (viaConpty && (entry.lastOutputAt || 0) <= pastedAt && Date.now() - pastedAt < 3000)
         || (Date.now() - pastedAt < PASTE_READ_MAX && C.pasteBusy(host.dumpScreen(entry.term, 6)))));
+      // A menu that came up after the readiness check (Claude's one-time startup questions) has
+      // its default row selected: this Enter would answer it. Leave it for whoever handles menus.
+      if (host.menuOnScreen && host.menuOnScreen(entry.term)) {
+        if (turn) {
+          const open = pending.get(col.id);
+          if (open && open.turn === turn) { try { open.marker?.dispose(); } catch (_) {} pending.delete(col.id); }
+          Object.assign(turn, { reply: '', done: true, interrupted: true, end: Date.now() });
+          refreshTurn(col.id, turn);
+          scheduleSave(col.id);
+        }
+        host.showToast(`没发出去：「${host.columnLabel(col)}」停在一个确认菜单上，回车没有按下去`);
+        return false;
+      }
       if (!o.silent && window.MainSession) window.MainSession.onContextCommandSent(col, text);
       window.deck.ptyInput(col.id, '\r');
       watchSubmission(col, entry, text);

@@ -555,7 +555,10 @@ const WORKING_RE = /^\s*[│┃|]?\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800
 // also…?" at the end of a normal reply must NOT hold a column red forever.
 // Claude/Grok permission prompts always render a "❯ 1." option list; y/n
 // prompts show "(y/n)"; Antigravity's approval footer is "Enter to confirm".
-const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|select\s+login\s+method/im;
+// Claude's startup menus name themselves: its one-time "Make auto mode your default permission
+// mode?" (Yes / "No, keep bypass permissions", the last row is also idle-looking text) and the
+// bypass-permissions warning (default row "No, exit").
+const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|select\s+login\s+method|make auto mode your default|yes, set auto mode as|no, keep (?:bypass|default|accept|plan)\b|^\s*(?:❯\s*)?(?:\d+\.\s*)?(?:no, exit|yes, i accept)\s*$/im;
 const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|\bBuild anything\b|\bPlan, search, build anything\b|\bAdd a follow-up\b|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
 // Can this column take a prompt now? Busy beats idle. Cursor's prompt row is
 // read by MainCore.cursorActivity, which also copes with a wrapped prompt.
@@ -4032,6 +4035,8 @@ const deckHost = {
   // 队长
   createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, ptyBackgroundWork,
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
+  // A menu or confirmation is on the terminal right now (its own reading, not the last status tick).
+  menuOnScreen: (term) => NEEDS_INPUT_RE.test(statusScreen(term).split('\n').slice(-20).join('\n')),
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), ClaudeSeats.described(config.claudeSeats), claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
