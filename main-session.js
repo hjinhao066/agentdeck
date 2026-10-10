@@ -1582,6 +1582,7 @@
   }
   // A receipt arrived: record it on the column (the ledger), show it, queue it for the model.
   const CLOSED = ['done', 'failed', 'stopped', 'asking'];
+  const NO_RECEIPT = '已结束，未提交回执';   // the three-minute fallback's notice: provisional, never a receipt
   function settle(task, receipt, boardRecorded = false) {
     if (CLOSED.includes(task.status) || task.pendingInstall) return;
     watchSettled(task, receipt);
@@ -1987,7 +1988,9 @@
     if (how === 'skip') return;
     task.restartHold = true;
     task.resumeDeadline = Date.now() + RESUME_START_TIMEOUT;
-    if (R.isCheckpointClosure(task)) { task.status = 'paused'; task.doneAt = 0; task.endedAt = 0; }
+    // Closed only by 已结束，未提交回执 (a quit that parked nothing): continued now, so that notice is not news.
+    if (R.provisionalStop(task)) dropReceipts(state(), (p) => p.taskId === task.id && p.source === 'fallback');
+    if (R.isCheckpointClosure(task) || R.provisionalStop(task)) { task.status = 'paused'; task.doneAt = 0; task.endedAt = 0; }
     resumeWaiting.set(col.id, how);
     clearTimeout(resumeTimer);
     resumeTimer = setTimeout(flushResume, 600);
@@ -1997,7 +2000,8 @@
       mode: col.restartMode === 'resume' && !task.resumeFallback ? 'resume' : 'resend',
       provider: window.RestartResume.providerOf(col.cmd) || '未知',
       title: task.title || stored.title || '', task: stored.task || task.instruction || col.taskPrompt || '',
-      receipt: stored.receipt || '', pendingText: pendingInstruction(col.id) || stored.pendingText || '',
+      // its own progress is its last word; 已结束，未提交回执 is the app's, not a receipt
+      receipt: stored.receipt || task.progress || '', pendingText: pendingInstruction(col.id) || stored.pendingText || '',
     };
     const boardId = task.boardId || col.boardId;
     if (boardId) {
@@ -2010,12 +2014,12 @@
             card.attempt_id && task.boardAttempt && card.attempt_id !== task.boardAttempt ? '卡片已进入另一轮任务' : '';
           if (reason) return { blocked: `续派已停止：会话 ${col.id} 的任务 ${task.id} 停在卡片 ${boardId} 核验处，${reason}。未发送续接指令。` };
           entry.task = card.detail || entry.task;
-          if (!entry.receipt) entry.receipt = card.latest_receipt || '';
+          if (!entry.receipt && card.latest_receipt !== NO_RECEIPT) entry.receipt = card.latest_receipt || '';
         }
       } catch (_) {}
     }
     if (task.instruction && !entry.task.includes(task.instruction) && !entry.pendingText.includes(task.instruction)) entry.task += '\n最后送达的任务指令：\n' + task.instruction;
-    if (!entry.receipt && task.receipt && !task.receipt.checkpoint) entry.receipt = task.receipt.summary || task.receipt.failed || task.receipt.question || '';
+    if (!entry.receipt && task.receipt && !task.receipt.checkpoint && task.receipt.source !== 'fallback') entry.receipt = task.receipt.summary || task.receipt.failed || task.receipt.question || '';
     return entry;
   }
   function fallbackResume(col, task, reason) {
@@ -2656,7 +2660,7 @@
       if (!ended || turn && !turn.done && !task.processEnded) continue;
       const anchor = entry.state === 'done' ? ended : Math.max(ended, entry.lastOutputAt || 0);
       if (Date.now() - anchor < STOP_QUIET) continue;
-      settle(task, { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' });
+      settle(task, { summary: NO_RECEIPT, files: [], images: [], failed: '', explicit: false, source: 'fallback' });
     }
   }
   function onTurnStarted(colId, turn) {

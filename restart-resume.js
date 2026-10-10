@@ -59,22 +59,24 @@
     if (task.receipt && task.receipt.failed) return false;
     return isSafetyCheckpoint(task.receipt && task.receipt.summary);
   }
+  // Closed only by the three-minute 已结束，未提交回执 fallback: the session ended a turn without a command,
+  // which is also what a session told to stop at a safe point does (progress, then stop). Nothing says the
+  // task is done, so a restart keeps it like an open one, however the app went down. (10-09: five such
+  // sessions were not continued after the 2.0.3 install, again after the 2.0.4 install and again after a
+  // restart by hand; the Captain woke each one with tell.)
+  function provisionalStop(task) {
+    return !!task && task.status === 'stopped' && !!task.receipt && task.receipt.source === 'fallback' && !task.receipt.failed;
+  }
   function shouldResume(task) {
     if (!task || task.pendingInstall) return false;
+    if (provisionalStop(task)) return true;
     // failed / stopped / done stay closed unless this app marked a checkpoint.
     // quota and asking are still the same job; a crash never rewrites them.
     if (['failed', 'stopped', 'done'].includes(task.status)) return isCheckpointClosure(task);
     return OPEN.includes(task.status);
   }
   function holdsAcrossRestart(task) {
-    return !!task && !task.pendingInstall && (OPEN.includes(task.status) || isCheckpointClosure(task));
-  }
-  // Closed only by the three-minute 已结束，未提交回执 fallback: the session ended a turn without a command,
-  // which is also what a session told to stop at a safe point does (progress, then stop). Nothing says the
-  // task is done, so a restart keeps it like an open one. (10-09: five sessions waiting for the 2.0.3 install
-  // read 已结束 three minutes before the quit and were never continued.)
-  function provisionalStop(task) {
-    return !!task && task.status === 'stopped' && !!task.receipt && task.receipt.source === 'fallback' && !task.receipt.failed;
+    return !!task && !task.pendingInstall && (OPEN.includes(task.status) || isCheckpointClosure(task) || provisionalStop(task));
   }
   function shouldPark(task) {
     if (!task || task.pendingInstall) return false;
