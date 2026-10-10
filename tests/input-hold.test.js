@@ -33,6 +33,7 @@ test('keys, pastes, clicks and drags still wait for the automatic Enter', () => 
     '\x1b[32;20;10M',                                     // urxvt left press
     '\x1b[<64;20;10Mx',                                   // a key glued to a report still waits
     '\x1b[?12;40Rhello',
+    '\x1b[1;2R', '\x1b[1;5R', '\x1b[1;3R', '\x1b[1;6R',  // Shift/Ctrl/Alt+F3: same shape as a cursor reply on row 1
     '',
   ]) assert.equal(C.passesInputHold(d), false, JSON.stringify(d));
 });

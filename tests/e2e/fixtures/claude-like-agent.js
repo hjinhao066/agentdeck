@@ -7,13 +7,18 @@
 // plain mouse moves, asks for the cursor position (ESC[?6n) 5 times a second, and while
 // working redraws its status rows about 10 times a second (~130 bytes a frame) and turns
 // the window-title spinner twice a second.
-//   CLAUDE_LIKE_LINES  transcript lines (default 3000)
-//   CLAUDE_LIKE_WORK   1 = working, 0 = idle
+//   --lines=N / CLAUDE_LIKE_LINES  transcript lines (default 3000)
+//   --work=0|1 / CLAUDE_LIKE_WORK  1 = working, 0 = idle
+//   --log=FILE / CLAUDE_LIKE_LOG   input log (below)
+// Arguments work on every platform; the variables are for POSIX command lines.
 // Row 1 always reads "VIEW_TOP <n>", the first transcript line shown, so a test can tell
-// which wheel report a frame answers. CLAUDE_LIKE_LOG (a file) gets one line per input
-// chunk, in arrival order: "wheel", "paste", "enter" or "key", never the text itself.
-const lines = Number(process.env.CLAUDE_LIKE_LINES || 3000);
-const working = process.env.CLAUDE_LIKE_WORK !== '0';
+// which wheel report a frame answers. The log gets one line per input event, read off the
+// byte stream in arrival order (a read can hold several): "wheel", "paste", "enter" or
+// "key", never the text itself; mouse moves, focus and terminal replies are not logged.
+const opt = (name, env) => { const a = process.argv.find((x) => x.startsWith(`--${name}=`)); return a ? a.slice(name.length + 3) : process.env[env]; };
+const lines = Number(opt('lines', 'CLAUDE_LIKE_LINES') || 3000);
+const working = opt('work', 'CLAUDE_LIKE_WORK') !== '0';
+const logFile = opt('log', 'CLAUDE_LIKE_LOG');
 const out = (s) => process.stdout.write(s);
 let rows = process.stdout.rows || 40, cols = process.stdout.columns || 100;
 const text = (i) => i % 9 === 0 ? `\x1b[1;36m⏺\x1b[0m Bash(npm test -- --grep case-${i})`
@@ -41,24 +46,31 @@ if (process.stdin.isTTY) process.stdin.setRawMode(true);
 out('\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?2004h\x1b[?1004h\x1b[2J');
 screen();
 process.stdout.on('resize', () => { rows = process.stdout.rows || rows; cols = process.stdout.columns || cols; screen(); });
+const log = (what) => { if (logFile) require('fs').appendFileSync(logFile, `${Date.now()} ${what}\n`); };
 let pending = '';
-const log = (what) => { if (process.env.CLAUDE_LIKE_LOG) require('fs').appendFileSync(process.env.CLAUDE_LIKE_LOG, `${Date.now()} ${what}\n`); };
 process.stdin.on('data', (d) => {
-  const raw = d.toString('latin1');
-  if (raw.includes('\x1b[200~')) log('paste');
-  else if (raw === '\r') log('enter');
-  else if (!/^(?:\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[\??[\d;]*[Rc]|\x1b\[[IO])+$/.test(raw)) log('key');
-  pending += raw;
-  let m, moved = false;
-  const re = /\x1b\[<(\d+);\d+;\d+[Mm]/g;
-  while ((m = re.exec(pending))) {
-    const b = Number(m[1]);
-    if (b === 64 || b === 65) log('wheel');
-    if (b === 64) { top = Math.max(1, top - 3); moved = true; }
-    else if (b === 65) { top = Math.min(Math.max(1, lines - 5), top + 3); moved = true; }
+  pending += d.toString('latin1');
+  let i = 0, moved = false;
+  while (i < pending.length) {
+    const rest = pending.slice(i);
+    let m;
+    if (rest.startsWith('\x1b[200~')) {
+      const end = rest.indexOf('\x1b[201~');
+      if (end < 0) break;   // the rest of the paste is still coming
+      log('paste'); i += end + 6;
+    } else if ((m = /^\x1b\[<(\d+);\d+;\d+[Mm]/.exec(rest))) {
+      const b = Number(m[1]);
+      if (b === 64) { top = Math.max(1, top - 3); moved = true; log('wheel'); }
+      else if (b === 65) { top = Math.min(Math.max(1, lines - 5), top + 3); moved = true; log('wheel'); }
+      i += m[0].length;
+    } else if ((m = /^\x1b\[(?:\?[\d;]*R|[?>=][\d;]*c|I|O)/.exec(rest))) {
+      i += m[0].length;   // a terminal reply or focus report
+    } else if ((m = /^\x1b(?:\[[\d;?<>=]*[ -\/]*[@-~]|O.|[^\[O])/.exec(rest))) {
+      log('key'); i += m[0].length;
+    } else if (rest[0] === '\x1b') break;   // a sequence cut in two by the read
+    else { log(rest[0] === '\r' ? 'enter' : 'key'); i++; }
   }
-  const last = pending.lastIndexOf('\x1b');
-  pending = last >= 0 && !/[Mm]/.test(pending.slice(last)) ? pending.slice(last) : '';
+  pending = pending.slice(i);
   if (moved) screen();
 });
 if (working) {

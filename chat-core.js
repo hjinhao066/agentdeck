@@ -612,8 +612,9 @@
   // terminal's answers to the program's own queries (cursor position, device attributes, mode
   // reports, OSC/DCS replies) go straight through: Claude Code 2.1 runs full-screen with the
   // mouse taken and is scrolled by those wheel reports, so holding them froze scrolling for the
-  // whole delivery (up to 3 s while the agent keeps drawing).
-  const HOLD_FREE = /^(?:\x1b\[<(\d+);\d+;\d+[Mm]|\x1b\[[IO]|\x1b\[\??\d+;\d+(?:;\d+)?R|\x1b\[[?>=][\d;]*c|\x1b\[\??\d+;\d+\$y|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)/;
+  // whole delivery (up to 3 s while the agent keeps drawing). A cursor reply without "?" on row 1
+  // waits like a key: xterm sends Shift/Ctrl/Alt+F3 as ESC[1;<mod>R, the same shape.
+  const HOLD_FREE = /^(?:\x1b\[<(\d+);\d+;\d+[Mm]|\x1b\[[IO]|\x1b\[\?\d+;\d+(?:;\d+)?R|\x1b\[(?!1;)\d+;\d+R|\x1b\[[?>=][\d;]*c|\x1b\[\??\d+;\d+\$y|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)/;
   function passesInputHold(data) {
     if (!data) return false;
     for (let i = 0; i < data.length;) {
