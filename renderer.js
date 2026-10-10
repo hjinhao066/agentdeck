@@ -2473,8 +2473,10 @@ function wrappedLineToCells(buf, row, cols) {
     let width = cols;
     const next = buf.getLine(r + 1);
     if (next && next.isWrapped) {
-      const head = next.getCell(0), tail = line.getCell(cols - 1);
-      if (head && head.getWidth() === 2 && tail && tail.getWidth() === 1 && !(tail.getChars() || ' ').trim()) width = cols - 1;
+      const head = next.getCell(0), tail = line.getCell(cols - 1), pad = (tail && tail.getChars()) || '';
+      // xterm leaves that column empty (''); a space there was printed, except on Windows, whose console writes one
+      const left = pad === '' || (!pad.trim() && (typeof env === 'undefined' || env.platform === 'win32'));
+      if (head && head.getWidth() === 2 && tail && tail.getWidth() === 1 && left) width = cols - 1;
     }
     for (let x = 0; x < width; x++) {
       cell = line.getCell(x, cell);
