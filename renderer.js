@@ -2771,6 +2771,9 @@ function removeCol(col) {
   ChatUI.onColumnRemoved(col.id);
   if (col.isMain) config.mainSession = null;
   detachColumn(col, false);
+  // Without 队长 its background sessions are loose sessions again, listed after the folders:
+  // the deck follows the sidebar order.
+  if (col.isMain) { columns = SidebarCore.orderedColumns(columns, config.folders); reflowDeck(); }
   // A 小队长's children keep running and go back to the 队长.
   if (col.subCaptain) window.MainSession?.releaseSubCrew?.(col, '关掉');
   saveConfig();
