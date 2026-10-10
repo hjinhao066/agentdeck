@@ -98,7 +98,10 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   rebuilding terminals. Archive kills the PTY with `keepReplay` so restore can
   replay the saved output; the startup prune must keep archived ids. The archive has no
   cap (`SidebarCore.normalizeArchived` keeps every entry, the sidebar pages it): never
-  drop an entry to shorten the list, its chat and replay would be orphaned.
+  drop an entry to shorten the list, its chat and replay would be orphaned. At launch
+  `archive-recovery.js` runs before that prune and puts a chat file nothing lists back into
+  the archive (only one the user spoke in; never a 队长 chat; `config.json` copied aside
+  first; never deletes or rewrites a chat). A test profile reads no backup outside itself.
 - Archiving ends a terminal, so a session that is working, waiting on an answer or
   printing output is never archived, automatically or by click, and never asks first
   (`archiveColumn` shows a notice and stops). The automatic archive reads the terminal itself one more time

@@ -136,6 +136,7 @@
       "version-progress.js",
       "side-pane.js",
       "side-main.js",
+      "archive-recovery.js",
       "skills-core.js",
       "skills-ui.js",
       "attention-core.js",

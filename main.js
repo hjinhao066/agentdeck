@@ -16,6 +16,7 @@ const BarkPolicy = require('./bark-policy');
 const { createFileBarkDelivery } = require('./bark-delivery');
 const { createCalendarCache } = require('./bark-calendar');
 const { registerSideIpc, loadAllChats } = require('./side-main');
+const ArchiveRecovery = require('./archive-recovery');
 const { registerSkillsIpc } = require('./skills-core');
 const { registerScheduleFeedIpc } = require('./schedule-feed');
 const BoardCore = require('./board-core');
@@ -1685,6 +1686,13 @@ app.whenReady().then(async () => {
     ptyBuffers.delete(id);
     return text;
   });
+  // Conversations that fell out of the archive (it kept only 500 before 2.0.4) go back into
+  // it, before the page reads config.json and before the prune below reads the layout, so a
+  // replay still on disk is kept. A test profile reads nothing outside itself.
+  const archiveRecovery = ArchiveRecovery.recover({
+    configPath, chatDir: CHAT_DIR,
+    backups: tudArg ? [] : [path.join(HOME, 'Library/Caches/AgentDeck-install-backups')],
+  });
   // Prune replays for columns that no longer exist in the saved layout.
   try {
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -2009,6 +2017,9 @@ app.whenReady().then(async () => {
 
   startFleet(configPath);
   createWindow();
+  if (archiveRecovery.added) {
+    mainWindow.webContents.once('did-finish-load', () => send('toast', { text: `找回了 ${archiveRecovery.added} 段掉出归档的对话，在侧栏「已归档」里，按时间排在后面。` }));
+  }
   const initialFocus = process.argv.find((arg) => arg.startsWith('--focus-column='));
   if (initialFocus && validId(initialFocus.slice(15))) pendingFocusColumn = initialFocus.slice(15);
   app.on('activate', () => { if (!mainWindow || mainWindow.isDestroyed()) createWindow(); });
