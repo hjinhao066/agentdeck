@@ -914,10 +914,27 @@
   const WIN_PATH = /\b[A-Za-z]:\\(?:[^\s`"'<>|\u3000-\u303f\uff01-\uff60]| (?=[^\s`"'<>|]))*/g;
   const EM_STAR = new RegExp(EM_BEFORE + '\\*([^*\\s][^*\\n]*)\\*' + EM_AFTER, 'g'), EM_BAR = new RegExp(EM_BEFORE + '_([^_\\s][^_\\n]*)_' + EM_AFTER, 'g');
   function inline(src, opts) {
-    const held = [], links = !!(opts && opts.links);
+    const held = [], links = !!(opts && opts.links), rich = !!(opts && opts.rich);
     const hold = (html) => '\u0000' + (held.push(html) - 1) + '\u0000';
     let s = String(src).replace(/\u0000/g, '');
     s = s.replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${esc(c)}</code>`));
+    if (rich) {
+      s = s.replace(/%%.*?%%/g, '');
+      // [[note]], [[note|shown]], [[note#part]]; ![[picture.png]] shows the picture
+      s = s.replace(/(!?)\[\[([^[\]|\n]+)(?:\|([^[\]\n]*))?\]\]/g, (all, bang, target, alias) => {
+        const file = target.trim().replace(/#.*$/, '');
+        if (!file) return alias || target;
+        if (bang && IMAGE_EXT.has(extOf(file))) return hold(`<img class="md-img" data-src="${esc(file)}" alt="${esc(alias || file)}">`);
+        return hold(`<a class="md-wiki" data-file="${esc(extOf(file) ? file : file + '.md')}" data-rel="1">`) + (alias || target.trim()) + hold('</a>');
+      });
+      const notes = opts.notes;
+      if (notes) s = s.replace(/\[\^([^\]\s]{1,40})\]/g, (all, id) => {
+        if (!notes.defs.has(id)) return all;
+        if (!notes.order.includes(id)) notes.order.push(id);
+        const n = notes.order.indexOf(id) + 1;
+        return hold(`<sup class="md-fn" data-fn="${n}">${n}</sup>`);
+      });
+    }
     // a Windows path keeps its backslashes: "C:\Users\me\.claude" holds no escaped dot
     const winPaths = [...s.matchAll(WIN_PATH)].map((m) => [m.index, m.index + m[0].length]);
     s = s.replace(/\\([\\`*_{}[\]()#+.!|~>-])/g, (all, c, at) => (c !== '\\' && winPaths.some(([a, b]) => at > a && at < b) ? all : hold(esc(c))));
@@ -925,6 +942,8 @@
     s = s.replace(/!?\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"\n]*")?\)/g, (all, text, url) => {
       const label = text || url;
       if (SAFE_URL.test(url)) return hold(`<a href="${esc(url)}" data-ext="1">`) + label + hold('</a>');
+      // a picture lying next to the note: the page that asked for `rich` loads it
+      if (rich && all[0] === '!' && !/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^#/.test(url)) return hold(`<img class="md-img" data-src="${esc(url)}" alt="${esc(label)}">`);
       if (links && !/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^#/.test(url)) return hold(`<a data-file="${esc(url)}" data-rel="1">`) + label + hold('</a>');
       return label;
     });
@@ -942,8 +961,11 @@
     }
     s = esc(s).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[^\w\\])__([^_\n]+)__(?!\w)/g, '$1<strong>$2</strong>')
       .replace(/~~([^~\n]+)~~/g, '<del>$1</del>').replace(EM_STAR, '$1<em>$2</em>').replace(EM_BAR, '$1<em>$2</em>');
+    if (rich) s = s.replace(/==([^=\n]+)==/g, '<mark>$1</mark>').replace(TAG, '$1<span class="md-tag">#$2</span>');
     return s.replace(/\u0000(\d+)\u0000/g, (_, i) => held[i]);
   }
+  // "#项目/复盘": a tag starts a word and is not a number ("#1")
+  const TAG = /(^|\s)#((?![\d/-]+(?![\w\u3400-\u9fff/-]))[\w\u3400-\u9fff][\w\u3400-\u9fff/-]*)/g;
   const TABLE_ROW = /^\s*\|.*\|\s*$/;
   const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/;
   // A header row and its |---| rule. While a reply is still being written the
@@ -992,10 +1014,17 @@
     }
     // "- [ ] 待办" and "- [x] 做完的" keep their box as a mark in front
     const boxed = (text) => text.replace(/^\[( |x|X)\]\s+/, (_, mark) => (mark === ' ' ? '☐ ' : '☑ '));
+    // rich: the box is drawn by the page, and a finished item says so
+    const item$ = (text) => {
+      const task = opts && opts.rich && /^\[( |x|X)\]\s+/.exec(text);
+      if (!task) return '<li>' + inline(boxed(text), opts);
+      const done = task[1] !== ' ';
+      return `<li class="md-task${done ? ' done' : ''}"><span class="md-box" role="checkbox" aria-checked="${done}" aria-label="${done ? '已完成' : '未完成'}"></span>` + inline(text.slice(task[0].length), opts);
+    };
     const render = (list) => {
       const tag = list.ordered ? 'ol' : 'ul';
       return `<${tag}${list.ordered && list.first !== 1 ? ` start="${list.first}"` : ''}>` + list.items.map((it) =>
-        `<li>${inline(boxed(it.text.reduce((a, b) => a + joinGap(a, b) + b)), opts)}${it.lists.map(render).join('')}</li>`).join('') + `</${tag}>`;
+        `${item$(it.text.reduce((a, b) => a + joinGap(a, b) + b))}${it.lists.map(render).join('')}</li>`).join('') + `</${tag}>`;
     };
     return { html: root.lists.map(render).join('\n'), next: i };
   }
@@ -1003,7 +1032,75 @@
   // terminal, where a line break is usually meant).
   // links: web links and file paths in the text become links too (data-file
   // carries the path; the page decides what opening one means).
+  // rich: what an Obsidian note uses on top of that, for the desktop's reading
+  // view: ==highlight==, task boxes, callouts (> [!note]), properties at the top,
+  // #tags, [[links]], pictures next to the note, footnotes, %%comments%%.
+  // Off unless asked for, so replies and the phone page are written as before.
+  const CALLOUT = { note: 'info', info: 'info', todo: 'info', abstract: 'tip', summary: 'tip', tldr: 'tip', tip: 'tip', hint: 'tip', important: 'tip',
+    success: 'ok', check: 'ok', done: 'ok', question: 'ask', help: 'ask', faq: 'ask', warning: 'warn', caution: 'warn', attention: 'warn',
+    failure: 'bad', fail: 'bad', missing: 'bad', danger: 'bad', error: 'bad', bug: 'bad', example: 'eg', quote: 'quote', cite: 'quote' };
+  const CALLOUT_NAME = { info: '说明', tip: '提示', ok: '完成', ask: '疑问', warn: '注意', bad: '错误', eg: '示例', quote: '引用' };
+  const CALLOUT_ICON = {
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5v.5"/>',
+    tip: '<path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3Z"/>',
+    ok: '<circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/>',
+    ask: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.7"/><path d="M12 17v.5"/>',
+    warn: '<path d="M12 4 2.5 20h19L12 4Z"/><path d="M12 10v4"/><path d="M12 17v.5"/>',
+    bad: '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/>',
+    eg: '<path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4.5 6h.01"/><path d="M4.5 12h.01"/><path d="M4.5 18h.01"/>',
+    quote: '<path d="M10 7H5v6h4c0 2-1 3.5-3 4"/><path d="M19 7h-5v6h4c0 2-1 3.5-3 4"/>',
+  };
+  function callout(head, body, opts) {
+    const kind = CALLOUT[head[1].toLowerCase()] || 'info';
+    const fold = head[2], tag = fold ? 'details' : 'div', title = fold ? 'summary' : 'div';
+    const icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${CALLOUT_ICON[kind]}</svg>`;
+    const text = body.join('\n').trim();
+    return `<${tag} class="md-callout" data-kind="${kind}"${fold === '+' ? ' open' : ''}><${title} class="md-callout-title">${icon}<span>${head[3].trim() ? inline(head[3].trim(), opts) : CALLOUT_NAME[kind]}</span></${title}>`
+      + (text ? `<div class="md-callout-body">${renderMarkdown(text, opts)}</div>` : '') + `</${tag}>`;
+  }
+  // "key: value", "key: [a, b]" and "key:" followed by "- item" lines; anything else is not a properties block.
+  function properties(lines) {
+    const rows = [];
+    for (const line of lines) {
+      if (!line.trim() || /^\s*#/.test(line)) continue;
+      const item = /^\s*-\s+(.*)$/.exec(line), pair = /^([^\s:#-][^:]{0,60}):(?:\s+(.*))?$/.exec(line);
+      if (item && rows.length) rows[rows.length - 1].values.push(item[1]);
+      else if (pair) {
+        const value = (pair[2] || '').trim(), list = /^\[(.*)\]$/.exec(value);
+        rows.push({ key: pair[1].trim(), values: list ? list[1].split(',') : value ? [value] : [] });
+      } else return null;
+    }
+    if (!rows.length) return null;
+    const clean = (v) => v.trim().replace(/^(["'])(.*)\1$/, '$2');
+    return '<div class="md-props"><table><tbody>' + rows.map((row) => `<tr><th>${esc(row.key)}</th><td>` + row.values.map(clean).filter(Boolean).map((v) =>
+      `<span class="md-prop${/^tags?$/i.test(row.key) ? ' md-tag' : ''}">${esc(v)}</span>`).join('') + '</td></tr>').join('') + '</tbody></table></div>';
+  }
+  function renderRich(src, opts) {
+    let lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n');
+    let props = '';
+    if (lines[0].trim() === '---') {
+      const end = lines.findIndex((l, k) => k > 0 && /^(?:---|\.\.\.)\s*$/.test(l));
+      const table = end > 1 && end <= 200 ? properties(lines.slice(1, end)) : null;
+      if (table) { props = table + '\n'; lines = lines.slice(end + 1); }
+    }
+    // footnote texts and whole-line comments are taken out first; a code block keeps every line
+    const notes = { defs: new Map(), order: [] }, body = [];
+    let fence = false, comment = false;
+    for (const line of lines) {
+      if (!comment && /^\s*(```|~~~)/.test(line)) fence = !fence;
+      else if (!fence && /^\s*%%\s*$/.test(line)) { comment = !comment; continue; }
+      if (fence || /^\s*(```|~~~)/.test(line)) { body.push(line); continue; }
+      if (comment) continue;
+      const def = /^\[\^([^\]\s]{1,40})\]:\s*(.*)$/.exec(line);
+      if (def) notes.defs.set(def[1], def[2]); else body.push(line);
+    }
+    const inner = { ...opts, inner: true, notes };
+    let html = props + renderMarkdown(body.join('\n'), inner);
+    if (notes.order.length) html += '\n<section class="md-footnotes"><ol>' + notes.order.map((id, k) => `<li data-fn="${k + 1}">${inline(notes.defs.get(id), { ...inner, notes: null })}</li>`).join('') + '</ol></section>';
+    return html;
+  }
   function renderMarkdown(src, opts) {
+    if (opts && opts.rich && !opts.inner) return renderRich(src, opts);
     const breaks = !!(opts && opts.breaks);
     const lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n');
     while (lines.length > 1 && !lines[lines.length - 1].trim()) lines.pop();
@@ -1027,6 +1124,8 @@
       if (/^\s*>/.test(line)) {
         const q = [];
         while (i < lines.length && /^\s*>/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
+        const head = opts && opts.rich && /^\[!([A-Za-z-]+)\]([+-]?)(.*)$/.exec(q[0]);
+        if (head) { html.push(callout(head, q.slice(1), opts)); continue; }
         // a quote holding a list, a table or several paragraphs is laid out like any other text
         const plain = q.every((l) => l.trim() && !/^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s|```|~~~|>|\|)/.test(l));
         html.push(`<blockquote>${plain ? (breaks ? q.map((l) => inline(l, opts)).join('<br>') : inline(q.join(' '), opts)) : renderMarkdown(q.join('\n'), opts)}</blockquote>`);
