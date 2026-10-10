@@ -22,8 +22,9 @@
       'html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic', 'mp4', 'mov', 'm4v', 'webm', 'mp3', 'm4a', 'wav']),
     skip: Object.freeze(['node_modules', '.git', 'scratchpad', 'tmp', 'temp', 'var/folders', '.cache', 'caches', '__pycache__',
       '.venv', 'venv', 'site-packages', 'test-results', 'playwright-report', '.next', 'dist']),
-    process: Object.freeze(['py', 'pyc', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'json', 'jsonl', 'log', 'sqlite', 'sqlite3', 'db',
-      'sh', 'bash', 'zsh', 'ps1', 'bat', 'cmd', 'lock', 'map', 'css', 'scss', 'yml', 'yaml', 'toml', 'ini', 'env', 'tmp', 'bak', 'swp', 'pid']),
+    process: Object.freeze(['py', 'pyc', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'go', 'rs', 'java', 'c', 'swift', 'sql', 'patch',
+      'json', 'jsonl', 'log', 'sqlite', 'sqlite3', 'db', 'sh', 'bash', 'zsh', 'ps1', 'bat', 'cmd', 'lock', 'map', 'css', 'scss',
+      'yml', 'yaml', 'toml', 'ini', 'env', 'tmp', 'bak', 'swp', 'pid']),
   });
   const MAX_RULES = 200;
 

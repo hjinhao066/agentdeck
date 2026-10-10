@@ -962,7 +962,8 @@ including the conversations from before a context clear. A path 队长 only
 mentions counts when it is a result type (documents, PDFs, Office files, HTML
 reports, pictures, video, audio); a file a receipt hands in counts whatever its
 type (a final .csv or .txt too). Neither counts when it is a process type
-(code, .json, logs, databases, shell scripts…) or sits under node_modules, .git,
+(code: .js, .ts, .py, .go, .rs, .java, .c, .swift, .sql, .patch…; .json, logs,
+databases, shell scripts…) or sits under node_modules, .git,
 tmp, scratchpad or the system temp folders. The three lists are editable from
 the panel's gear (saved as `deliverableRules` only when changed). Each row shows the file name, its
 project (a receipt's own, or the project a folder on its path is named after),
