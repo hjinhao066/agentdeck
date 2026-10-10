@@ -141,6 +141,8 @@ test('each path is its own link, ending where the path ends, in the terminal and
   await test.step('chat', async () => {
     await page.evaluate((i) => jumpToColumn(columns.find((c) => c.id === i)), CHAT);
     await page.evaluate((i) => ChatUI.setMode(i, 'chat'), CHAT);
+    // the terminal's click opened the preview pane: close it, so before and after shots are the same width
+    await page.evaluate(() => SidePane.hide());
     const links = col(CHAT).locator('.reply .chat-link.path');
     await expect(links.first()).toBeVisible();
     await park();
