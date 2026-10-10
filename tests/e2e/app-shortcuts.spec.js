@@ -119,6 +119,54 @@ test('search in a terminal column: ⌘F on a Mac; Ctrl+Shift+F or Ctrl+Alt+F on 
   }
 });
 
+// Real key order from a person: Alt is often let go before the digit. The page
+// cancels Alt+1, so the menu bar never sees the digit and would take the Alt
+// release as a lone Alt press, moving the keyboard to the menu. Playwright's
+// keyboard (CDP) never reaches the menu bar, so this drives the window's own input
+// path with webContents.sendInputEvent, and reads the menu bar through auto-hide:
+// a lone Alt shows a hidden menu bar.
+test('letting Alt go first after Alt+1, Alt+→ or Ctrl+Alt+F leaves the menu bar alone', async () => {
+  test.skip(mac, 'the Windows and Linux menu bar; a Mac has none in the window');
+  const input = (steps) => app.evaluate(async ({ BrowserWindow }, list) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    win.setAutoHideMenuBar(true);
+    win.setMenuBarVisibility(false);
+    await new Promise((r) => setTimeout(r, 100));
+    for (const [type, keyCode, modifiers] of list) {
+      win.webContents.sendInputEvent({ type, keyCode, modifiers });
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    await new Promise((r) => setTimeout(r, 250));
+    return win.isMenuBarVisible();
+  }, steps);
+  try {
+    // Control: Alt alone does show the menu bar, so the signal works here.
+    expect(await input([['keyDown', 'Alt', ['alt']], ['keyUp', 'Alt', []]])).toBe(true);
+    await page.keyboard.press('Escape');
+
+    await focusTerminal('c');
+    expect(await input([['keyDown', 'Alt', ['alt']], ['keyDown', '1', ['alt']], ['keyUp', 'Alt', []], ['keyUp', '1', []]])).toBe(false);
+    await expect.poll(focused).toBe('a');
+    expect(await input([['keyDown', 'Alt', ['alt']], ['keyDown', 'Right', ['alt']], ['keyUp', 'Alt', []], ['keyUp', 'Right', []]])).toBe(false);
+    await expect.poll(focused).toBe('b');
+
+    await page.evaluate(() => { ChatUI.setMode('b', 'term'); focusColumnInput('b'); focusedId = 'b'; });
+    expect(await input([
+      ['keyDown', 'Control', ['control']], ['keyDown', 'Alt', ['control', 'alt']], ['keyDown', 'F', ['control', 'alt']],
+      ['keyUp', 'Alt', ['control']], ['keyUp', 'Control', []], ['keyUp', 'F', []],
+    ])).toBe(false);
+    await expect(page.locator('#searchBar')).toBeVisible();
+    await page.locator('#searchInput').press('Escape');
+    await expect(page.locator('#searchBar')).toBeHidden();
+  } finally {
+    await app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      win.setAutoHideMenuBar(false);
+      win.setMenuBarVisibility(true);
+    });
+  }
+});
+
 test('search all conversations: ⌘K on a Mac, Ctrl+Shift+K on Windows', async () => {
   await focusTerminal('b');
   await page.keyboard.press(keys.searchAll);

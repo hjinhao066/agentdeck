@@ -1,6 +1,8 @@
 // AgentDeck's own window shortcuts: which keydown means which action, and how
 // each one is written for the user. Pure helpers shared by the page and the
-// unit tests. No DOM, no Electron.
+// unit tests. No DOM, no Electron. The one thing it does on load, in the page on
+// Windows and Linux, is install the Alt-release guard (see altReleaseGuard): it
+// must see each keydown before 速记待办's window listeners, which load after it.
 //
 // A Mac keeps ⌘ plus a key. On Windows (and Linux) the ⌘ key is the Windows key,
 // which the system takes for itself (Win+N, Win+1…), and a plain Ctrl+letter
@@ -17,6 +19,8 @@
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.AppShortcutsCore = api;
+  const page = root && root.window === root && root.deck && typeof root.deck.envInfo === 'function' ? root : null;
+  if (page && page.deck.envInfo().platform !== 'darwin') api.installAltReleaseGuard(page);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
@@ -151,5 +155,35 @@
   // "⌘" or "Ctrl+" in front of a key both platforms share (⌘S / Ctrl+S).
   function mod(mac) { return mac ? '⌘' : 'Ctrl+'; }
 
-  return { ACTIONS, match, label, winLetters, mod };
+  // Windows and Linux: Electron's menu bar takes a lone press of Alt (it focuses
+  // the menu, and typing then goes there). A key the page cancels while Alt is
+  // down (Alt+1, Alt+→, Ctrl+Alt+F, a 任务看板 card's Alt+→, Claude Code's Alt+P in
+  // a terminal) never reaches the menu bar, so when Alt is let go before that key
+  // the menu bar counts it as Alt alone. keyup(e) says to cancel that release:
+  // Alt was held with another key. A real lone Alt, and AltGr ("AltGraph"), are
+  // left alone.
+  function altReleaseGuard() {
+    let chord = false;
+    return {
+      keydown(e) {
+        if (e.key === 'Alt') { if (!e.repeat) chord = false; } else if (e.altKey) chord = true;
+      },
+      keyup(e) {
+        if (e.key !== 'Alt') return false;
+        const cancel = chord;
+        chord = false;
+        return cancel;
+      },
+      reset() { chord = false; },
+    };
+  }
+  function installAltReleaseGuard(win) {
+    const guard = altReleaseGuard();
+    win.addEventListener('keydown', (e) => guard.keydown(e), true);
+    win.addEventListener('keyup', (e) => { if (guard.keyup(e)) e.preventDefault(); }, true);
+    win.addEventListener('blur', () => guard.reset());
+    return guard;
+  }
+
+  return { ACTIONS, match, label, winLetters, mod, altReleaseGuard, installAltReleaseGuard };
 });

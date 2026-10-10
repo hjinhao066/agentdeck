@@ -121,6 +121,45 @@ test('Windows: search also answers to Ctrl+Alt+F, since Microsoft Pinyin takes C
   assert.equal(Todo.problem('Mod+Alt+F', true), '');
 });
 
+test('letting Alt go first after Alt+1 does not hand the keyboard to the menu bar', () => {
+  const G = S.altReleaseGuard();
+  const down = (key, mods = {}) => G.keydown({ type: 'keydown', key, altKey: false, ctrlKey: false, repeat: false, ...mods });
+  const up = (key) => G.keyup({ type: 'keyup', key });
+  // Alt+1 with Alt released first (the review's case D), and with the digit released first.
+  down('Alt', { altKey: true }); down('1', { altKey: true });
+  assert.equal(up('Alt'), true);
+  assert.equal(up('1'), false);
+  down('Alt', { altKey: true }); down('1', { altKey: true }); up('1');
+  assert.equal(up('Alt'), true);
+  // Ctrl+Alt+F, and a held Alt that repeats before the arrow.
+  down('Control', { ctrlKey: true }); down('Alt', { altKey: true, ctrlKey: true }); down('f', { altKey: true, ctrlKey: true });
+  assert.equal(up('Alt'), true);
+  down('Alt', { altKey: true }); down('Alt', { altKey: true, repeat: true }); down('ArrowRight', { altKey: true });
+  assert.equal(up('Alt'), true);
+  // Alt alone still opens the menu bar, also right after a chord.
+  down('Alt', { altKey: true });
+  assert.equal(up('Alt'), false);
+  // AltGr typing is not Alt: its release is never cancelled.
+  down('Control', { ctrlKey: true }); down('AltGraph', { altKey: true, ctrlKey: true }); down('{', { altKey: true, ctrlKey: true });
+  assert.equal(up('AltGraph'), false);
+  // A chord interrupted by leaving the window (Alt+Tab) does not carry over.
+  down('Alt', { altKey: true }); down('Tab', { altKey: true }); G.reset();
+  assert.equal(up('Alt'), false);
+});
+
+test('the guard cancels the Alt release in the page, through real listeners', () => {
+  const listeners = {};
+  const win = { addEventListener: (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); } };
+  S.installAltReleaseGuard(win);
+  const fire = (type, init) => { const e = { type, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, altKey: false, ctrlKey: false, repeat: false, ...init }; listeners[type].forEach((fn) => fn(e)); return e; };
+  fire('keydown', { key: 'Alt', altKey: true });
+  fire('keydown', { key: '1', altKey: true });
+  assert.equal(fire('keyup', { key: 'Alt' }).defaultPrevented, true);
+  fire('keydown', { key: 'Alt', altKey: true });
+  assert.equal(fire('keyup', { key: 'Alt' }).defaultPrevented, false);
+  assert.equal(typeof listeners.blur[0], 'function');
+});
+
 test('labels follow the platform: ⌘N on a Mac, Ctrl+Shift+T on Windows', () => {
   const win = {
     newColumn: 'Ctrl+Shift+T', closeColumn: 'Ctrl+Shift+W', search: 'Ctrl+Shift+F 或 Ctrl+Alt+F', broadcast: 'Ctrl+Shift+B',
