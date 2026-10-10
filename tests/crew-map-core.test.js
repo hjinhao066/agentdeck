@@ -1497,17 +1497,23 @@ test('智能一页 at the user\'s zoom finds the whole map a page whenever any a
   }
 });
 
-test('智能一页 at the user\'s zoom does not flip while the window is dragged: one change at most each way over 70px, none from a few pixels back and forth', () => {
-  const sweepAt = (map, widths, h, dpr, pct) => { let current = {}; return widths.map((w) => { const r = C.arrangePage(map, { w, h }, { ...ARRANGE, dpr, zoom: zoomOf(pct) }, current); current = { plan: r.plan, planW: w, dpr }; return arrangement(r.plan); }); };
+// At a zoom the user set nothing grows or shrinks to absorb a window's change, so two arrangements can give way within a
+// few dozen pixels, each because the one before no longer stands (one row stops fitting, then the lanes that took
+// over). What must not happen: a change from a few pixels back and forth, an arrangement coming back once left, or a
+// narrower window finding the map a shorter page than a wider one did (a frame put under the wrong lane: 17/5/3/2 at
+// 125% stood in two lanes at 1170px, one lane at 1160 and two again at 1149).
+test('智能一页 at the user\'s zoom does not jump while the window is dragged: none from a few pixels back and forth, no arrangement back once left, never a shorter page at a narrower width', () => {
+  const track = (map, widths, h, dpr, pct) => { let current = {}; return widths.map((w) => { const r = C.arrangePage(map, { w, h }, { ...ARRANGE, dpr, zoom: zoomOf(pct) }, current); current = { plan: r.plan, planW: w, dpr }; const b = C.fitBounds(map, r.lay, ARRANGE, false); return { w, name: arrangement(r.plan), fits: r.pageFits, h: b.bottom - b.top }; }); };
   for (const dpr of [1, 2]) for (const h of [732, 900]) for (const pct of [80, 100, 125]) for (const spec of [USER_MAP, NUDGED['11-3-1'], NUDGED['2-1-2-1-2-1'], NUDGED['15-3-2-2-1-1']]) {
-    const map = crewOf(spec);
+    const map = crewOf(spec), label = `${Object.values(spec).join('/')} ${dpr}x h${h} at ${pct}%`;
     for (const widths of [widthsFrom(1100, 1170), widthsFrom(1170, 1100), widthsFrom(1400, 1470), widthsFrom(1470, 1400)]) {
-      const seen = sweepAt(map, widths, h, dpr, pct);
-      assert.ok(switches(seen) <= 1, `${Object.values(spec).join('/')} ${dpr}x h${h} at ${pct}%, ${widths[0]} -> ${widths[widths.length - 1]}: ${[...new Set(seen)].join(' / ')}`);
+      const seen = track(map, widths, h, dpr, pct), runs = seen.map((x) => x.name).filter((n, i, a) => !i || n !== a[i - 1]);
+      assert.equal(new Set(runs).size, runs.length, `${label}, ${widths[0]} -> ${widths[widths.length - 1]}: ${runs.join(' / ')}`);
+      for (const a of seen) for (const b of seen) if (b.w < a.w && !a.fits && !b.fits) assert.ok(b.h * C.WRAP_KEEP >= a.h - 0.5, `${label}: ${b.w}px ${b.h.toFixed(0)} tall (${b.name}), ${a.w}px ${a.h.toFixed(0)} (${a.name})`);
     }
     for (let w = 1000; w <= 1900; w += 60) {
-      const seen = sweepAt(map, [w, w + 4, w, w + 4, w, w + 4, w], h, dpr, pct).slice(1);
-      assert.equal(switches(seen), 0, `${Object.values(spec).join('/')} ${dpr}x ${w}x${h} at ${pct}%: ${[...new Set(seen)].join(' <-> ')}`);
+      const seen = track(map, [w, w + 4, w, w + 4, w, w + 4, w], h, dpr, pct).slice(1).map((x) => x.name);
+      assert.equal(switches(seen), 0, `${label}, ${w}px: ${[...new Set(seen)].join(' <-> ')}`);
     }
   }
 });

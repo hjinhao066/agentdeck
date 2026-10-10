@@ -383,7 +383,7 @@ test('状态标签完整显示: every card status is whole at 1920, 1440, 980 an
   expect(errors).toEqual([]);
 });
 
-test('智能一页: one click hands arrangement and zoom back to the window, filling it; what is taller than the page says so at 100%; it can be undone', async () => {
+test('智能一页: one click hands the arrangement back to the window, filling it while no zoom was set; what is taller than the page says so at 100%; it can be undone; a zoom the user sets stays', async () => {
   await launch(BIG);
   await open(1920, 1080, 'dark'); await settled();
   const auto = await read();
@@ -392,11 +392,8 @@ test('智能一页: one click hands arrangement and zoom back to the window, fil
   expect(buttons.map((b) => [b.cm, b.label.split('：')[0], b.hidden])).toEqual([['fit', '智能一页', false], ['relayout', '一键整理', false], ['undo', '撤销', true]]);
   for (const b of buttons) { expect(b.title).toBe(b.label); expect(b.svg).toBe(true); expect(b.text).toBe(''); if (!b.hidden) { expect(b.w).toBeGreaterThanOrEqual(32); expect(b.h).toBeGreaterThanOrEqual(32); } }
 
-  // the user makes the map their own: a frame dragged off, the view zoomed and panned
+  // the user makes the map their own: a frame dragged off, the view panned (a zoom the user sets is theirs to keep: below)
   await dragBy(page.locator('.cm-project[data-project="hermes-savings"] .cm-project-name'), 160, 120);
-  await page.locator('[data-cm="in"]').click(); await page.locator('[data-cm="in"]').click();
-  // (each step goes to the next whole tenth of the map's own 100%, from the zoom that filled the window)
-  const stepped = Math.round((Math.floor(auto.view.scale / 0.7 * 10 + 1e-6) + 2) * 10);
   const vp = await page.locator('.cm-viewport').boundingBox();
   const v0 = await page.evaluate(() => CrewMap.view());
   await page.mouse.move(vp.x + vp.width / 2, vp.y + vp.height / 2);
@@ -407,8 +404,7 @@ test('智能一页: one click hands arrangement and zoom back to the window, fil
   expect(mine.moved).toBe(true);
   expect(mine.saved.projectPositions['hermes-savings']).toBeTruthy();
   expect(mine.saved.plan, 'the arrangement the move was made on is kept under it').toEqual(auto.plan);
-  expect(mine.view.scale, `two steps in: ${stepped}%`).toBeCloseTo(0.7 * stepped / 100, 5);
-  await expect(page.locator('[data-cm="reset"]')).toHaveText(`${stepped}%`);
+  expect(mine.view.scale, 'panned, not zoomed').toBeCloseTo(auto.view.scale, 5);
   await shot('map-smartpage-before-1920-dark');
   // a smaller window: the hand-placed map keeps its ground (same frames, same places) and its view
   await size(1440, 600); await settled();
@@ -482,8 +478,26 @@ test('智能一页: one click hands arrangement and zoom back to the window, fil
   expect(g.view.scale).toBeCloseTo(0.7 * 1.4, 5);
   assertWhole(g); fillsPage(g);
 
-  // the zoom control reads and steps from the map's own 100%: tenths of it, and a click on the number comes back to it
+  // a zoom the user sets is theirs: two steps in (each to the next whole tenth of the map's own 100%), then 智能一页
+  // arranges the map for that zoom and leaves it there (2.0.3 went back to filling the page), saved with the map
   const label = page.locator('[data-cm="reset"]');
+  await page.locator('[data-cm="in"]').click(); await page.locator('[data-cm="in"]').click();
+  const stepped = Math.round((Math.floor(g.view.scale / 0.7 * 10 + 1e-6) + 2) * 10);
+  await expect(label, `two steps in: ${stepped}%`).toHaveText(`${stepped}%`);
+  await page.locator('[data-cm="fit"]').click();
+  await settled();
+  g = await read();
+  await expect(label, '智能一页 keeps the zoom the user set').toHaveText(`${stepped}%`);
+  expect(g.view.scale).toBeCloseTo(0.7 * stepped / 100, 5);
+  expect(await page.evaluate(() => config.crewMap.zoom)).toBeCloseTo(0.7 * stepped / 100, 5);
+  expect(g.moved).toBe(false);
+  assertNeat(g, true);
+  if (g.pageFits) { assertWhole(g); expect(g.hint).toBe(''); } else expect(g.hint).toBe(`按你设的 ${stepped}% 一页放不下：已排到最紧凑，其余部分向下滚动查看`);
+  await shot('map-smartpage-user-zoom-1920-light');
+  // back to the zoom it filled the page at, by hand: 140%
+  await page.locator('[data-cm="out"]').click(); await page.locator('[data-cm="out"]').click();
+
+  // the zoom control reads and steps from the map's own 100%: tenths of it, and a click on the number comes back to it
   await expect(label).toHaveText('140%');
   await label.click();
   await expect(label).toHaveText('100%');
