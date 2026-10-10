@@ -129,6 +129,14 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   never write into a task's folder or its mirror, never drop a waiting decision, and
   never let a decision open a session, create a card or start work. No bulk accept.
   A test profile reads task descriptions only from inside the profile.
+- A command line launched in this run gets no automatic input before the agent has drawn
+  its own prompt below the launch line and held still (`promptSettled`,
+  `MainCore.agentPromptDrawn`); the last run's replay is never the live screen, on any
+  platform (`MainCore.afterReplay`). Text AgentDeck typed that the agent did not take is
+  AgentDeck's own (`entry.autoSent`), never the user's draft. After every start the 队长
+  must be back within a minute and each continued crew task within its limit
+  (`RestartResume.createRestartWatch`); typed text is no proof of that. Whoever is not back
+  is reported once (待我处理, phone, critical Bark via `restart:alarm`), and ticked off later.
 - Automatic sends go through `sendWhenReady`/`agentInForeground`: never type
   prose into a column whose foreground process is a shell (unless it is a plain
   shell column a Schedule targets on purpose). Prompts are never truncated; long
