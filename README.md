@@ -1054,8 +1054,10 @@ an index from before this counts nothing as new). The phone hub does not have it
   a folder of its own to load the pictures and scripts next to it. Leaving the page
   (another file, the source view) ends it.
 - **Markdown is shown in a reading theme** (`preview-themes.js` colours,
-  `preview-themes.css` shapes): Obsidian 默认, Minimal 极简, Things, Catppuccin, Blue
-  Topaz, Gruvbox, each with a light and a dark side that follows the deck. The palette
+  `preview-themes.css` shapes): 星光 (the default: deep indigo, glowing periwinkle,
+  amber), 碳黑, Nord 极地, Obsidian 默认, Minimal 极简, Gruvbox. They are designed dark
+  first, hard-edged and high in contrast (no pastel or pink sets, by the owner's taste);
+  each also has a light side, and the deck's light/dark switch picks which one shows. The palette
   button lists them; one click applies and is remembered (`config.side.mdTheme`), the
   list stays open to compare. Headings 1–6, bold, italic, inline code, links, quotes,
   tables, list marks and highlights each have a colour; every text colour is checked

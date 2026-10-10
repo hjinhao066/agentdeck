@@ -123,14 +123,14 @@ date: 2026-10-09
 
 | 主题 | 风格 | 标题颜色 | 对比度 |
 | :--- | :---: | :---: | ---: |
-| Obsidian 默认 | 中性灰 + 紫 | 3 种 | 4.6 以上 |
-| Catppuccin | 柔和粉彩 | 6 种 | 4.6 以上 |
-| Blue Topaz | 通体蓝调 | 5 种 | 4.6 以上 |
+| 星光 | 深靛蓝 + 琥珀 | 5 种 | 4.6 以上 |
+| 碳黑 | 纯黑 + 电光青 | 4 种 | 4.6 以上 |
+| Nord 极地 | 冷调钢蓝灰 | 5 种 | 4.6 以上 |
 
 \`\`\`js
 // 切换主题：只改一个属性，颜色全部跟着变
 function setTheme(id) {
-  note.dataset.mdTheme = id;   // "catppuccin"
+  note.dataset.mdTheme = id;   // "starlight"
   return save({ mdTheme: id, at: 20261009 });
 }
 \`\`\`
@@ -324,7 +324,7 @@ test('a note is laid out like an Obsidian note: properties, highlight, tasks, ca
   const md = page.locator('#pvBody .pv-md');
   await expect(md.locator('h1')).toHaveText('预览栏改版周报');
   await expect.poll(pageView).toBeNull();       // the web page before it is gone
-  await expect(md).toHaveAttribute('data-md-theme', 'obsidian');
+  await expect(md).toHaveAttribute('data-md-theme', Themes.DEFAULT);
   await expect(md.locator('.md-props tr')).toHaveCount(3);
   await expect(md.locator('.md-props .md-tag')).toHaveText(['AgentDeck', '周报']);
   await expect(md.locator('mark')).toHaveText('最要紧的一条');

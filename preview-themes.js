@@ -17,56 +17,56 @@
   const palette = (line) => { const v = line.trim().split(/\s+/); const out = {}; KEYS.forEach((k, i) => { out[k] = '#' + v[i]; }); return out; };
 
   const THEMES = [
+    // 星光: the deck's own night sky. Deep indigo, periwinkle that glows, amber for what matters.
+    { id: 'starlight', name: '星光', hint: '深靛蓝底，发光的蓝，琥珀点缀',
+      dark: palette(`0b0f1e e4e8f5 98a2c0 262d4a  f5f7ff 8fa6ff f0b450 6fd3e8 a9b6e8 98a2c0  ffd27a 9fd8ff 8fa6ff 8690ad f0b450
+        7fe0c8 161c33 070a15 d6dcf0 8fa6ff 8fd9a8 f0b450 7f8aab  b9c2e0 8fa6ff 121831  ffd27a 161c33 0f1426
+        0b0f1e f0b450 a9bcff 1b2450 8fa6ff 0b0f1e 262d4a  8fa6ff 6fd3e8 6fd99a f0d060 f0b450 ff7b72 b8a6ff 98a2c0`),
+      light: palette(`f7f8fc 1a2140 525d82 d5daea  131a3a 2f47c2 8f5a00 0b6f85 3d4a80 525d82  8a5200 1f5fa8 2f47c2 586280 9a6200
+        0a6b5e e9edf7 eef1f9 1a2140 2f47c2 1f7a45 8f5a00 5c668a  3d4870 4a62e0 eceffb  131a3a e3e8f6 f1f3fa
+        1a2140 ffd778 2a3fb0 dfe5fb 4a62e0 ffffff d5daea  2f47c2 0b6f85 1d7241 7a6000 8f5a00 b43529 5b3fc4 525d82`) },
+    // 碳黑: true black, electric cyan and lime, square corners. A terminal that learned typography.
+    { id: 'carbon', name: '碳黑', hint: '纯黑底，电光青和荧光绿，直角',
+      dark: palette(`0a0a0a e6e6e6 9a9a9a 2a2a2a  ffffff 4dd8ff b6f24a ffb347 c8c8c8 9a9a9a  ffffff ffd166 4dd8ff 8c8c8c 4dd8ff
+        b6f24a 1a1a1a 111111 e0e0e0 4dd8ff b6f24a ffb347 8a8a8a  c4c4c4 4dd8ff 141414  4dd8ff 161616 111111
+        0a0a0a ffd166 4dd8ff 10262e 4dd8ff 0a0a0a 2a2a2a  4dd8ff 5fe0c0 b6f24a ffd166 ffb347 ff6b5e b79cff 9a9a9a`),
+      light: palette(`ffffff 141414 5a5a5a d9d9d9  000000 006a8a 4a6b00 9a5200 3a3a3a 5a5a5a  000000 7a5a00 006a8a 676767 006a8a
+        3f5c00 f0f0f0 f5f5f5 141414 006a8a 3f5c00 9a5200 666666  3a3a3a 0090b8 f4f4f4  000000 ececec f7f7f7
+        141414 ffd84d 005a75 dff1f6 007a9c ffffff d9d9d9  006a8a 00705c 3f5c00 7a5a00 9a5200 b3261e 5b3fc4 5a5a5a`) },
+    // Nord: cold steel blue-grey, frost accents, nothing loud.
+    { id: 'nord', name: 'Nord 极地', hint: '冷调钢蓝灰，冰霜色强调',
+      dark: palette(`2e3440 d8dee9 aab4c6 434c5e  ffffff 88c0d0 81a1c1 a3be8c ebcb8b aab4c6  f4f7fb 92bebd 88c0d0 aeb6c6 88c0d0
+        ebcb8b 3b4252 272c36 d8dee9 81a1c1 a3be8c d08770 8c97ab  c5cedd 88c0d0 353c4a  eceff4 3b4252 323845
+        2e3440 ebcb8b 88c0d0 3a4658 88c0d0 2e3440 434c5e  88c0d0 8fbcbb a3be8c ebcb8b e1a374 e79ca1 bda9d2 aab4c6`),
+      light: palette(`eceff4 2e3440 4c566a d0d6e0  1f2530 2e6c81 3f5f8f 4a6b35 7a5a10 4c566a  1a1f29 2a6865 2c6679 545e71 2f6f85
+        7a5a10 dfe4ec e3e7ee 2e3440 3f5f8f 4a6b35 a04a2a 5a6478  3b4252 5e81ac e3e8f0  2e3440 dde2ea e6eaf0
+        2e3440 ebcb8b 2a5f73 d5e3ea 5e81ac ffffff d0d6e0  2c6679 2a6865 486833 7a5a10 964628 a5343d 5f4a8a 4c566a`) },
     // Obsidian's own look: neutral greys, the purple accent, headings fading from near-white into lavender.
     { id: 'obsidian', name: 'Obsidian 默认', hint: '中性灰底，紫色点睛',
-      dark: palette(`1e1e1e dadada a8a8a8 3a3a3a  e6dcff b79cff 8fb8ff 6fcbd6 c3b7e8 a3a3a3  ffffff f0b8d8 a88bfa 9d9d9d a88bfa
-        ff8fa3 2b2b2b 262626 d4d4d4 c792ea c3e88d f78c6c 8a93a6  b9b3cc 8a5cf5 25232d  e6dcff 2a2733 232323
-        1b1b1b e8c95a c9b6ff 332b4d 8a5cf5 ffffff 3a3a3a  6cb6ff 4fd6c4 6bd67b e8c95a f2a35e ff7b8a b79cff a8a8a8`),
-      light: palette(`ffffff 222222 5c5c5c e0e0e0  2b1a66 6a3fd6 2f5fc4 0f7a80 6b5a9e 666666  000000 a3306f 6a3fd6 656565 6a3fd6
-        c4245c f4f2f7 f6f6f8 2b2b2b 7c3aed 2e7d32 b45309 686f7c  55506b 8a5cf5 f5f2fd  2b1a66 efeafc faf9fd
+      dark: palette(`1e1e1e dadada a8a8a8 3a3a3a  e6dcff b79cff 8fb8ff 6fcbd6 c3b7e8 a3a3a3  ffffff 9fd0ff a88bfa 9d9d9d a88bfa
+        ffb86b 2b2b2b 262626 d4d4d4 c792ea c3e88d f78c6c 8a93a6  b9b3cc 8a5cf5 25232d  e6dcff 2a2733 232323
+        1b1b1b e8c95a c9b6ff 332b4d 8a5cf5 ffffff 3a3a3a  6cb6ff 4fd6c4 6bd67b e8c95a f2a35e ff7b72 b79cff a8a8a8`),
+      light: palette(`ffffff 222222 5c5c5c e0e0e0  2b1a66 6a3fd6 2f5fc4 0f7a80 6b5a9e 666666  000000 1f5fa8 6a3fd6 656565 6a3fd6
+        a84a00 f4f2f7 f6f6f8 2b2b2b 7c3aed 2e7d32 b45309 686f7c  55506b 8a5cf5 f5f2fd  2b1a66 efeafc faf9fd
         222222 ffe58a 5b34c2 ece5ff 7c4dff ffffff e0e0e0  1d63c4 0b7671 187733 8a6100 aa4f09 c02737 6a3fd6 5c5c5c`) },
     // Minimal: almost no colour, one warm accent, the type does the work.
     { id: 'minimal', name: 'Minimal 极简', hint: '几乎不用颜色，一点暖色', quiet: true,
       dark: palette(`262626 d4d4d4 a0a0a0 3f3f3f  f2f2f2 e0e0e0 e6b877 c9c9c9 b3b3b3 a0a0a0  f5f5f5 d9c2a0 e6b877 a6a6a6 a0a0a0
-        e0c9a6 323232 2f2f2f d4d4d4 e6b877 b5c9a1 d9a5a5 9a9a9a  b8b8b8 777777 262626  f2f2f2 303030 2b2b2b
+        e0c9a6 323232 2f2f2f d4d4d4 e6b877 b5c9a1 d9b38c 9a9a9a  b8b8b8 777777 262626  f2f2f2 303030 2b2b2b
         1f1f1f e6c98a e6b877 3a3327 e6b877 1f1f1f 3f3f3f  8fb4d9 8fc9bf a3c98f d9c98f e6b877 e39a9a b9a8d9 a0a0a0`),
       light: palette(`ffffff 2a2a2a 666666 e3e3e3  111111 222222 9a5b00 444444 555555 666666  000000 7a5a2b 955800 676767 666666
         7a4b00 f5f3ef f7f7f5 2a2a2a 9a5b00 4a6b2f a03b3b 6e6e6e  555555 8c8c8c ffffff  111111 f5f5f3 fafaf9
         2a2a2a fbe6a8 7a4b00 f6ecd9 9a5b00 ffffff e3e3e3  2f5f8f 1f6f66 3f6f2a 7a6100 955800 a03b3b 5b4a8f 666666`) },
-    // Things: the to-do app's blue-black and clean white, blue headings, pink for emphasis.
-    { id: 'things', name: 'Things', hint: '蓝黑底，蓝标题，粉色强调',
-      dark: palette(`1c2127 e3e5e8 9aa4b2 2f363f  f5f6f7 4d95f7 f5c84c ff6b81 5ad1a0 9aa4b2  ff82b2 ffb86b 61a1f7 97a2b0 4d95f7
-        7cc7ff 252c35 161a1f d6dbe1 ff82b2 9ad17a f5c84c 8693a3  b3bcc8 4d95f7 212830  f5f6f7 252c35 20262d
-        1c2127 f5d76e 9cc4ff 223450 4d95f7 0b1a2e 2f363f  5298f7 4fd1c5 5ad1a0 f5c84c ffa05c ff6b81 b594f7 9aa4b2`),
-      light: palette(`ffffff 26282b 5f6873 e3e6ea  1b1d1f 1b61c2 9a6a00 c2255c 177a52 5f6873  c2255c a54d0f 1b61c2 5f6871 1b61c2
-        0b5cad eef3f9 f5f6f8 26282b c2255c 2f7d32 916400 656f79  4b535c 2e80f2 f3f7fd  1b1d1f f1f3f6 f9fafb
-        26282b ffe27a 1b55ad e3eefd 2e80f2 ffffff e3e6ea  1b61c2 0b7671 167650 8a6100 aa4f0f c2255c 6741c7 5f6873`) },
-    // Catppuccin (Mocha / Latte) with AnuPpuccin's rainbow headings.
-    { id: 'catppuccin', name: 'Catppuccin', hint: '柔和粉彩，彩虹标题',
-      dark: palette(`1e1e2e cdd6f4 a6adc8 45475a  f38ba8 fab387 f9e2af a6e3a1 74c7ec b4befe  f5c2e7 94e2d5 89b4fa 9ca2b8 cba6f7
-        eba0ac 313244 181825 cdd6f4 cba6f7 a6e3a1 fab387 9399b2  bac2de cba6f7 262637  b4befe 313244 232334
-        1e1e2e f9e2af 89b4fa 2e3350 cba6f7 1e1e2e 45475a  89b4fa 94e2d5 a6e3a1 f9e2af fab387 f38ba8 cba6f7 a6adc8`),
-      light: palette(`eff1f5 4c4f69 5c5f77 ccd0da  d20f39 b63d0c 946200 2e791e 1a6f9e 5860c3  9f2f7c 0f696d 1d52d0 575b6f 7a34d1
-        b3243f e1e4eb e6e9ef 4c4f69 7a34d1 2d751d ad4600 60637c  55586f 8839ef e8e6f3  5b3fc4 dfe2ea e9ecf1
-        3c3f55 f3d683 1e55d6 dbe3fb 8839ef ffffff ccd0da  1e55d6 0f6c70 2b6e1b 7a5600 a34200 b80f31 7a34d1 5c5f77`) },
-    // Blue Topaz: blue through and through, headings dressed up, a coloured table head.
-    { id: 'topaz', name: 'Blue Topaz', hint: '通体蓝调，标题带装饰',
-      dark: palette(`1b2230 d5deeb 9fb0c8 303b4f  8ab8ff 5fd3e8 5fe0b5 c3a6ff ff9ac1 9fb0c8  ffad66 9be28f 7fb5ff 98a6b8 5fa8ff
-        ff8fa8 252e40 161c28 d5deeb 7fb5ff 9be28f ffad66 8494ab  b4c2d6 4d95f7 1f2a3d  ffffff 2459b3 1f2737
-        1b2230 ffd76e a9cdff 223a63 4d95f7 0b1a2e 303b4f  7fb5ff 5fd3e8 5fe0b5 ffd76e ffad66 ff8a8a c3a6ff 9fb0c8`),
-      light: palette(`fbfcfe 2c3a4e 5a6b82 d9e2ef  1b4fbf 1565c0 00796b 7b3fc4 c2185b 546e8a  b33b16 0b743d 1462ba 566577 1b6fd1
-        c7254e f0f3f8 f3f6fb 2c3a4e 1b4fbf 0b8043 b64c0a 5e6e83  44546a 2a7de1 eef5ff  ffffff 2466c9 f3f7fd
-        2c3a4e ffe58f 14509e dcebff 2a7de1 ffffff d9e2ef  1565c0 007568 187733 865e00 ac480a c02727 7b3fc4 57687e`) },
     // Gruvbox: warm paper and retro terminal colours, headings set in the code face.
     { id: 'gruvbox', name: 'Gruvbox', hint: '暖色复古，等宽标题',
-      dark: palette(`282828 ebdbb2 bdae93 504945  fb5846 fabd2f b8bb26 8ec07c 83a598 d3869b  fe8827 d794a7 8eaea1 b2a592 fe8019
-        b8bb26 3c3836 1d2021 ebdbb2 fb4934 b8bb26 d3869b a89984  d5c4a1 928374 32302f  fabd2f 3c3836 2e2c2b
-        282828 fabd2f 8ec07c 35403a fe8019 282828 504945  87a89b 8ec07c b8bb26 fabd2f fe8019 fb786a d58ea1 bdae93`),
-      light: palette(`fbf1c7 3c3836 5a524c d5c4a1  9d0006 8f5200 5e5a00 2f6b4a 076678 8f3f71  a53603 8f3f71 076678 625951 af3a03
-        5e5a00 ebdbb2 f2e5bc 3c3836 9d0006 5e5a00 8f3f71 6b6259  504945 7c6f64 f2e5bc  8b5000 ebdbb2 f6ebc0
-        3c3836 f5c84a 2f6b4a e3e2b5 af3a03 fbf1c7 d5c4a1  076678 2f6b4a 5e5a00 8f5200 aa3803 9d0006 8f3f71 5a524c`) },
+      dark: palette(`282828 ebdbb2 bdae93 504945  fb5846 fabd2f b8bb26 8ec07c 83a598 bdae93  fe8827 8ec07c 8eaea1 b2a592 fe8019
+        b8bb26 3c3836 1d2021 ebdbb2 fb4934 b8bb26 fe8019 a89984  d5c4a1 928374 32302f  fabd2f 3c3836 2e2c2b
+        282828 fabd2f 8ec07c 35403a fe8019 282828 504945  87a89b 8ec07c b8bb26 fabd2f fe8019 fb786a d5c4a1 bdae93`),
+      light: palette(`fbf1c7 3c3836 5a524c d5c4a1  9d0006 8f5200 5e5a00 2f6b4a 076678 5a524c  a53603 2e6848 076678 625951 af3a03
+        5e5a00 ebdbb2 f2e5bc 3c3836 9d0006 5e5a00 af3a03 6b6259  504945 7c6f64 f2e5bc  8b5000 ebdbb2 f6ebc0
+        3c3836 f5c84a 2f6b4a e3e2b5 af3a03 fbf1c7 d5c4a1  076678 2f6b4a 5e5a00 8f5200 aa3803 9d0006 504945 5a524c`) },
   ];
-  const DEFAULT = 'obsidian';
+  const DEFAULT = 'starlight';
   const CALLOUTS = { cInfo: 'info', cTip: 'tip', cOk: 'ok', cAsk: 'ask', cWarn: 'warn', cBad: 'bad', cEg: 'eg', cQuote: 'quote' };
   const CALLOUT_TINT = 0.12;   // how much of its colour a callout's background takes
 

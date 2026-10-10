@@ -116,24 +116,31 @@
 .pv-md[data-md-theme="minimal"] .md-callout { border-radius: 4px; border-left-width: 2px; }
 .pv-md[data-md-theme="minimal"] .md-tag { border-radius: 4px; }
 
-/* Things: ruled headings, round boxes to tick. */
-.pv-md[data-md-theme="things"] h1, .pv-md[data-md-theme="things"] h2 { border-bottom: 1px solid var(--md-border); padding-bottom: 0.3em; }
-.pv-md[data-md-theme="things"] .md-box { border-radius: 50%; }
-.pv-md[data-md-theme="things"] .md-tag { border-radius: 5px; }
-.pv-md[data-md-theme="things"] blockquote, .pv-md[data-md-theme="things"] .md-callout { border-radius: 8px; }
+/* 星光: the title glows over a rule that fades out, the second level stands on a lit bar,
+   an amber mark leads the third. */
+.pv-md[data-md-theme="starlight"] h1 { padding-bottom: 0.4em; border-bottom: 1px solid; border-image: linear-gradient(90deg, var(--md-h2), transparent 85%) 1; text-shadow: 0 0 22px color-mix(in srgb, var(--md-h2) 55%, transparent); }
+.pv-md[data-md-theme="starlight"] h2 { border-left: 3px solid var(--md-h2); padding-left: 0.6em; box-shadow: -8px 0 16px -10px var(--md-h2); }
+.pv-md[data-md-theme="starlight"] h3::before { content: ""; display: inline-block; width: 0.42em; height: 0.42em; margin-right: 0.55em; background: var(--md-h3); transform: rotate(45deg); vertical-align: 0.14em; box-shadow: 0 0 8px var(--md-h3); }
+.pv-md[data-md-theme="starlight"] pre.md-code, .pv-md[data-md-theme="starlight"] .md-table, .pv-md[data-md-theme="starlight"] .md-props { border-radius: 10px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--md-h2) 14%, transparent), 0 8px 24px -16px var(--md-h2); }
+.pv-md[data-md-theme="starlight"] blockquote { box-shadow: -8px 0 16px -10px var(--md-quote-bar); }
+.pv-md[data-md-theme="starlight"] .md-table th { border-bottom-color: var(--md-h2); }
+.pv-md[data-md-theme="starlight"] code { border-radius: 4px; }
+.pv-md[data-md-theme="starlight"] .md-callout { border-radius: 0 10px 10px 0; }
 
-/* Catppuccin: soft and round. */
-.pv-md[data-md-theme="catppuccin"] pre.md-code, .pv-md[data-md-theme="catppuccin"] .md-table, .pv-md[data-md-theme="catppuccin"] .md-props { border-radius: 12px; }
-.pv-md[data-md-theme="catppuccin"] blockquote, .pv-md[data-md-theme="catppuccin"] .md-callout { border-radius: 12px; border-left-width: 4px; }
-.pv-md[data-md-theme="catppuccin"] h1, .pv-md[data-md-theme="catppuccin"] h2, .pv-md[data-md-theme="catppuccin"] h3 { font-weight: 750; }
-.pv-md[data-md-theme="catppuccin"] code { border-radius: 6px; }
+/* 碳黑: square, ruled, a block of colour in front of the title. */
+.pv-md[data-md-theme="carbon"] h1 { border-left: 6px solid var(--md-h2); padding-left: 0.55em; }
+.pv-md[data-md-theme="carbon"] h2 { position: relative; padding-bottom: 0.4em; border-bottom: 1px solid var(--md-border); }
+.pv-md[data-md-theme="carbon"] h2::after { content: ""; position: absolute; left: 0; bottom: -1px; width: 3em; height: 2px; background: var(--md-h2); }
+.pv-md[data-md-theme="carbon"] h6 { text-transform: uppercase; letter-spacing: 0.1em; }
+.pv-md[data-md-theme="carbon"] pre.md-code { border-left: 3px solid var(--md-tok-s); }
+.pv-md[data-md-theme="carbon"] .md-table th { border-bottom: 2px solid var(--md-th); }
+.pv-md[data-md-theme="carbon"] pre.md-code, .pv-md[data-md-theme="carbon"] .md-table, .pv-md[data-md-theme="carbon"] .md-props,
+.pv-md[data-md-theme="carbon"] code, .pv-md[data-md-theme="carbon"] mark, .pv-md[data-md-theme="carbon"] .md-tag, .pv-md[data-md-theme="carbon"] .md-box { border-radius: 2px; }
+.pv-md[data-md-theme="carbon"] blockquote, .pv-md[data-md-theme="carbon"] .md-callout { border-radius: 0; border-left-width: 4px; }
 
-/* Blue Topaz: a centred title over a fading rule, a banded second level, a block in front of the third. */
-.pv-md[data-md-theme="topaz"] h1 { text-align: center; padding-bottom: 0.4em; border-bottom: 2px solid; border-image: linear-gradient(90deg, transparent, var(--md-h1), transparent) 1; }
-.pv-md[data-md-theme="topaz"] h2 { background: var(--md-quote-bg); border-left: 4px solid var(--md-h2); border-radius: 0 6px 6px 0; padding: 0.25em 0.7em; }
-.pv-md[data-md-theme="topaz"] h3::before { content: ""; display: inline-block; width: 0.5em; height: 0.5em; margin-right: 0.5em; border-radius: 2px; background: var(--md-h3); vertical-align: 0.12em; }
-.pv-md[data-md-theme="topaz"] strong { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; text-decoration-color: var(--md-mark-bg); }
-.pv-md[data-md-theme="topaz"] .md-table th { border-bottom: none; }
+/* Nord: calm; the first two levels are ruled. */
+.pv-md[data-md-theme="nord"] h1, .pv-md[data-md-theme="nord"] h2 { border-bottom: 1px solid var(--md-border); padding-bottom: 0.3em; }
+.pv-md[data-md-theme="nord"] pre.md-code, .pv-md[data-md-theme="nord"] .md-table, .pv-md[data-md-theme="nord"] .md-props { border-radius: 6px; }
 
 /* Gruvbox: headings in the code face behind their own marks, square corners. */
 .pv-md[data-md-theme="gruvbox"] h1, .pv-md[data-md-theme="gruvbox"] h2, .pv-md[data-md-theme="gruvbox"] h3,
