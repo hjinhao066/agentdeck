@@ -86,6 +86,20 @@ test('Windows leaves the terminal its keys', () => {
   assert.equal(S.match({ ...ev('T', 'KeyT', { ctrlKey: true, shiftKey: true }), type: 'keyup' }, false), null);
 });
 
+test('a focused control that declares the key keeps it (任务看板 cards move with Alt+←/→)', () => {
+  const card = { getAttribute: (name) => (name === 'aria-keyshortcuts' ? 'Enter Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown' : null) };
+  const alt = (key) => ({ ...ev(key, key, { altKey: true }), target: card });
+  assert.equal(S.match(alt('ArrowRight'), false), null);
+  assert.equal(S.match(alt('ArrowLeft'), false), null);
+  // Keys the card does not list still work from it.
+  assert.deepEqual(S.match({ ...ev('2', 'Digit2', { altKey: true }), target: card }, false), { action: 'column', index: 1 });
+  assert.equal(action({ ...ev('T', 'KeyT', { ctrlKey: true, shiftKey: true }), target: card }, false), 'newColumn');
+  // On a Mac the card's Alt keys never were ⌘ keys.
+  assert.equal(action({ ...ev('ArrowRight', 'ArrowRight', { metaKey: true }), target: card }, true), 'nextColumn');
+  // Elsewhere Alt+→ moves the deck.
+  assert.equal(action({ ...ev('ArrowRight', 'ArrowRight', { altKey: true }), target: { getAttribute: () => null } }, false), 'nextColumn');
+});
+
 test('labels follow the platform: ⌘N on a Mac, Ctrl+Shift+T on Windows', () => {
   const win = {
     newColumn: 'Ctrl+Shift+T', closeColumn: 'Ctrl+Shift+W', search: 'Ctrl+Shift+F', broadcast: 'Ctrl+Shift+B',

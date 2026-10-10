@@ -92,9 +92,23 @@
     return null;
   }
 
+  // The keydown written the aria-keyshortcuts way: "Alt+ArrowLeft", "Control+Shift+T".
+  function ariaCombo(e) {
+    const key = /^[a-z]$/i.test(e.key || '') ? e.key.toUpperCase() : e.key;
+    return [e.ctrlKey && 'Control', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Meta', key].filter(Boolean).join('+');
+  }
+  // A focused control that lists the key in its aria-keyshortcuts keeps it: on
+  // Windows a 任务看板 card moves to the next lane with Alt+→ rather than the
+  // deck moving to the next column.
+  function ownedByTarget(e) {
+    const t = e.target;
+    const list = t && typeof t.getAttribute === 'function' ? t.getAttribute('aria-keyshortcuts') : '';
+    return !!list && list.split(/\s+/).includes(ariaCombo(e));
+  }
+
   // { action, index? } for a keydown that is one of AgentDeck's shortcuts, else null.
   function match(e, mac) {
-    if (!e || (e.type && e.type !== 'keydown')) return null;
+    if (!e || (e.type && e.type !== 'keydown') || ownedByTarget(e)) return null;
     return mac ? macAction(e) : winAction(e);
   }
 
