@@ -46,8 +46,12 @@ function forCaptain(items) {
 }
 
 class TodoAI {
-  constructor({ todos, tasks, deliver, notify, changed = () => {} }) {
+  // hasCaptain: whether this computer has a 队长 to hand a 待办 to. Without one the
+  // item says so (on both computers and the phone) and waits; nothing hands it to the
+  // other computer's 队长. A 队长 starting here scans again and hands it over.
+  constructor({ todos, tasks, deliver, notify, changed = () => {}, hasCaptain = () => true, platform = process.platform }) {
     this.todos = todos; this.tasks = tasks; this.deliver = deliver; this.notify = notify; this.changed = changed;
+    this.hasCaptain = hasCaptain; this.platform = platform;
   }
   scan() {
     if (this.todos.readFiles().some((file) => file.own && !file.doc)) throw Object.assign(new Error('Todo store is damaged.'), { code: 'TODO_STORE_CORRUPT' });
@@ -60,7 +64,7 @@ class TodoAI {
       const rev = revision(item), id = taskId(item);
       let current = item;
       if (item.ai?.revision !== rev) current = this.todos.writeAi(item.id, () => ({
-        revision: rev, taskId: id, ownerDevice: this.todos.deviceId, status: 'queued',
+        revision: rev, taskId: id, ownerDevice: this.todos.deviceId, ownerPlatform: this.platform, status: 'queued',
         submittedAt: this.todos.stamp(), updated: this.todos.stamp(), deliveredAt: null,
         files: [], message: '', exceptionNotifiedAt: null,
       }));
@@ -71,7 +75,17 @@ class TodoAI {
         card = this.tasks.add({ id, project: 'todo', title: item.text, detail: taskDetail(item, id) }).card;
         this.changed();
       }
-      if (!ai.deliveredAt) this.deliver({ item: current, card });
+      if (ai.deliveredAt) continue;
+      const here = this.hasCaptain();
+      if (!here !== (ai.noCaptain === true)) {
+        current = this.todos.writeAi(item.id, (t) => {
+          if (t.ai?.revision !== rev) throw new Error('Todo delivery version changed.');
+          const { noCaptain, ...rest } = t.ai;
+          return { ...rest, ...(here ? {} : { noCaptain: true }), updated: this.todos.stamp(t.ai.updated) };
+        });
+        this.changed();
+      }
+      if (here) this.deliver({ item: current, card });
     }
   }
   acknowledge(id, cardId) {
@@ -80,7 +94,8 @@ class TodoAI {
     this.todos.writeAi(id, (t) => {
       if (t.ai?.taskId !== cardId || t.ai.revision !== revision(t)) throw new Error('Todo delivery version changed.');
       const at = this.todos.stamp(t.ai.updated);
-      return { ...t.ai, deliveredAt: at, updated: at };
+      const { noCaptain, ...rest } = t.ai;
+      return { ...rest, deliveredAt: at, updated: at };
     });
     this.changed();
   }

@@ -105,8 +105,8 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     expect(submitted.ai).toMatchObject({ status: 'queued', taskId: taskId(submitted), deliveredAt: null });
     expect((await items()).find((i) => i.text === '自己去取快递').ai).toBe(null);
     expect((await cards())[0]).toMatchObject({ id: submitted.ai.taskId, project: 'todo', status: 'todo', title: taskBody });
-    // The row says it went to AI; a plain 待办 says nothing.
-    await expect(page.locator('.todo-row', { hasText: original }).locator('.todo-ai-chip')).toHaveText('已交给 AI · 等队长接收');
+    // The row says it went to AI and that this computer has no 队长 yet to take it; a plain 待办 says nothing.
+    await expect(page.locator('.todo-row', { hasText: original }).locator('.todo-ai-chip')).toHaveText('这台电脑没有队长，打开队长后才会交出去');
     await expect(page.locator('.todo-row', { hasText: '自己去取快递' }).locator('.todo-ai')).toHaveCount(0);
     expect(await filed()).toEqual([]);
 

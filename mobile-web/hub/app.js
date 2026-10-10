@@ -1678,10 +1678,10 @@
     return row;
   }
   // A 待办 handed to AI (@ai). The files themselves open from 待我处理.
-  const TODO_AI_LABEL = { working: 'AI 正在办', needs_user: 'AI 在等你', done: 'AI 办完了', failed: 'AI 没办成' };
+  // The words are the desktop's too (Core.todoAiChip); the phone is never the computer that hands it over.
   function todoAi(ai) {
     const box = node('p', 'todo-ai is-' + ai.status);
-    box.append(node('span', 'todo-ai-chip', TODO_AI_LABEL[ai.status] || (ai.delivered ? '已交给 AI · 队长已收到' : '已交给 AI · 等队长接收')));
+    box.append(node('span', 'todo-ai-chip', Core.todoAiChip(ai, false)));
     if (ai.message && ai.status !== 'queued') box.append(node('span', 'todo-ai-msg', ai.message));
     if (ai.files.length) box.append(node('span', 'todo-ai-files', `交回 ${ai.files.length} 个文件：${ai.files.join('、')}（在「待我处理」打开）`));
     return box;

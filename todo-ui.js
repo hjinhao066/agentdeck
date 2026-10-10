@@ -8,6 +8,7 @@
   let host = null;
   let items = [];                 // live items, open first (newest first), then finished
   let loaded = false;
+  let device = '';                // this computer's id: a 待办 it hands over says so when it has no 队长
   let page = null;                // { input, error, list } while the page is open
   let editing = null;             // id of the item whose text is being edited
   let doneOpen = false;
@@ -59,6 +60,7 @@
     try {
       const answer = await window.deck.todos('list');
       items = Array.isArray(answer && answer.items) ? answer.items : [];
+      device = typeof answer?.device === 'string' ? answer.device : '';
       loaded = true;
     } catch (_) { /* Keep what is shown; the next change or page open asks again. */ }
     window.Sidebar.setTodoCount(openCount());
@@ -230,12 +232,13 @@
     return li;
   }
   // A 待办 handed to AI (@ai): what 队长 wrote back, on every computer (it syncs with the item).
-  const AI_LABEL = { working: 'AI 正在办', needs_user: 'AI 在等你', done: 'AI 办完了', failed: 'AI 没办成' };
+  // The words are the phone's too (HubCore.todoAiChip).
+  const AI_STATES = ['working', 'needs_user', 'done', 'failed'];
   function aiLine(t) {
     const ai = t.ai;
-    const status = AI_LABEL[ai.status] ? ai.status : 'queued';
+    const status = AI_STATES.includes(ai.status) ? ai.status : 'queued';
     const box = el('div', 'todo-ai is-' + status);
-    box.append(el('span', 'todo-ai-chip', AI_LABEL[status] || (ai.deliveredAt ? '已交给 AI · 队长已收到' : '已交给 AI · 等队长接收')));
+    box.append(el('span', 'todo-ai-chip', window.HubCore.todoAiChip(ai, !!device && ai.ownerDevice === device)));
     if (ai.message && status !== 'queued') box.append(el('span', 'todo-ai-msg', ai.message));
     const files = status === 'done' && Array.isArray(ai.files) ? ai.files.filter((p) => typeof p === 'string') : [];
     if (files.length) {

@@ -2064,6 +2064,7 @@ function startFleet(configPath) {
     } }));
   todoFailures?.start();
   todoAi = new TodoAI({ todos: todoStore, tasks: taskStore, deliver: deliverTodo,
+    hasCaptain: () => { const cfg = readLocalConfig(); return !!cfg.columns?.some((c) => c.isMain && c.id === cfg.mainSession?.colId); },
     changed: () => { send('todos:changed', {}); send('task-board:changed', {}); },
     notify: (command) => {
       try {

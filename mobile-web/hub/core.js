@@ -534,9 +534,25 @@
   function cleanTodoAi(ai) {
     if (!ai || typeof ai !== 'object' || !TODO_AI.includes(ai.status)) return null;
     return { status: ai.status, delivered: time(ai.deliveredAt), updated: time(ai.updated) ? ai.updated : '',
+      ...(ai.noCaptain === true ? { noCaptain: true } : {}), ...(['darwin', 'win32'].includes(ai.ownerPlatform) ? { ownerPlatform: ai.ownerPlatform } : {}),
       message: typeof ai.message === 'string' ? ai.message.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500) : '',
       files: ai.status !== 'done' || !Array.isArray(ai.files) ? [] : ai.files.filter((f) => typeof f === 'string').slice(0, 10)
         .map((f) => (f.split(/[\\/]/).filter(Boolean).pop() || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200)).filter(Boolean) };
+  }
+  // The line under a 待办 handed to AI while 队长 has not taken it yet; both the
+  // desktop page and the phone read it here. `here`: the page runs on the computer
+  // that hands this 待办 over (no 队长 there means it waits; nothing hands it to the other one).
+  const TODO_AI_DONE = { working: 'AI 正在办', needs_user: 'AI 在等你', done: 'AI 办完了', failed: 'AI 没办成' };
+  function todoAiChip(ai, here) {
+    if (!ai) return '';
+    if (TODO_AI_DONE[ai.status]) return TODO_AI_DONE[ai.status];
+    if (ai.delivered === true || time(ai.deliveredAt)) return '已交给 AI · 队长已收到';
+    if (ai.noCaptain === true) {
+      if (here) return '这台电脑没有队长，打开队长后才会交出去';
+      const name = ai.ownerPlatform === 'darwin' ? 'Mac' : ai.ownerPlatform === 'win32' ? 'Windows' : '记下它的那台电脑';
+      return `${name} 上没有队长，在那台打开队长后才会交出去`;
+    }
+    return '已交给 AI · 等队长接收';
   }
   // The clocks of each part of a 待办 (see mergeTodos), kept when well-formed.
   const TODO_CLOCKS = ['textUpdated', 'doneUpdated', 'deletedUpdated'];
@@ -633,7 +649,7 @@
     return `${name} 没有记下这条（HTTP ${result.status}）。`;
   }
 
-  return { cleanTodos, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt, cardQuestion,
+  return { cleanTodos, todoAiChip, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt, cardQuestion,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, rowHealth, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 
