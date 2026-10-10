@@ -316,7 +316,8 @@
   }
 
   function recallHistory(v, id, dir) {
-    const asked = chatFor(id).turns.map((t) => t.user).reverse();
+    // your own messages only: not 队长's cards and notices, not deliveries with no words of yours
+    const asked = chatFor(id).turns.filter((t) => !t.kind && t.user).map((t) => t.user).reverse();
     if (!asked.length) return;
     v.hist = Math.max(-1, Math.min(asked.length - 1, v.hist + dir));
     v.ta.value = v.hist < 0 ? '' : asked[v.hist];
