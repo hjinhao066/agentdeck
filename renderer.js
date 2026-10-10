@@ -2487,10 +2487,11 @@ const CJK_WORD = /^[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]+$/;
 // spaces through for folder names ("Application Support", "My Project"), so it
 // also took the prose after a path: "…/renderer.js 里的 findLinks", or
 // "…\a.json 和 C", whose "C:" then started no second link. A space stays in a
-// folder name; in the last name only when that name reads as one file name: it
-// ends in an extension, the word before the space has none and no word after it
-// is Chinese ("截屏2026-10-09 下午3.04.12.png" stays whole, "README.md 最急的两件"
-// ends at README.md). A space after a sentence's own punctuation ("a.md, then")
+// folder name. In the last name it ends the path after a word with an extension
+// ("README.md 最急的两件" ends at README.md) or before a Chinese word ("My Project
+// 里面"); otherwise it stays ("截屏2026-10-09 下午3.04.12.png", a folder at the end
+// such as "Application Support"), and English prose after it is settled on click
+// by the main process, which opens the longest path that exists. A space after a sentence's own punctuation ("a.md, then")
 // ends a path anywhere, and so does Chinese glued to an extension with no dot
 // after it ("a.md里面写了"). `sep` is the separator: "/", or "/" and "\" on Windows.
 function pathEnd(text, s, e, sep) {
@@ -2504,8 +2505,9 @@ function pathEnd(text, s, e, sep) {
       if (/[.,;:!?]$/.test(words[w])) cut = at;
       at++;
     }
-    if (cut < 0 && words.length > 1 && (FILE_EXT.test(words[0]) ||
-      i === p.length && (!FILE_EXT.test(seg) || words.slice(1).some((w) => CJK_WORD.test(w))))) cut = words[0].length;
+    if (cut < 0 && words.length > 1 && FILE_EXT.test(words[0])) cut = words[0].length;
+    const cjk = cut < 0 && i === p.length ? words.findIndex((w, k) => k && CJK_WORD.test(w)) : -1;
+    if (cjk > 0) cut = words.slice(0, cjk).join(' ').length;
     if (cut >= 0) { p = p.slice(0, from + cut); break; }
     from = i + 1;
   }

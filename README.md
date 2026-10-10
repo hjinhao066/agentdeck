@@ -1025,8 +1025,10 @@ an index from before this counts nothing as new). The phone hub does not have it
   (`findLinks` in `renderer.js`): a path ends at Chinese or full-width punctuation,
   curly quotes and the space before the words after it, so two paths on one line
   are two links. Spaces stay inside a folder name (`Application Support`,
-  `Program Files (x86)`) and in a file name that reads as one
-  (`截屏2026-10-09 下午3.04.12.png`). `C:\…` paths are links on Windows only, and
+  `Program Files (x86)`), also when that folder ends the path, and in a file name
+  that reads as one (`截屏2026-10-09 下午3.04.12.png`); English words after a path
+  that ends in a folder are settled on click, which opens the longest path that
+  exists. `C:\…` paths are links on Windows only, and
   keep their backslashes in rendered Markdown (`C:\Users\me\.claude`).
 - Cmd/Ctrl minus, plus and zero adjust the terminal and chat text together (8–32,
   default 13). The native View menu uses the same control; it does not zoom the

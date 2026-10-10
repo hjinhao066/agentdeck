@@ -27,6 +27,11 @@ const MAC = [
   ['详见 /Users/jinhao/agentdeck/README.md。最急的两件：', ['/Users/jinhao/agentdeck/README.md']],
   ['改了 /Users/jinhao/agentdeck/renderer.js 里的 findLinks', ['/Users/jinhao/agentdeck/renderer.js']],
   ['open /Users/me/My Project/a.md 这里', ['/Users/me/My Project/a.md']],
+  // a folder at the end keeps the space in its name; prose after it is Chinese, or settled on click
+  ['cd ~/Library/Application Support', ['~/Library/Application Support']],
+  ['项目在 /Users/me/My Project', ['/Users/me/My Project']],
+  ['项目在 /Users/me/My Project 里面', ['/Users/me/My Project']],
+  ['备份在 /Users/jinhao/Library/Application Support/AgentDeck 目录', ['/Users/jinhao/Library/Application Support/AgentDeck']],
   ['/Users/jinhao/a/one.md 和 /Users/jinhao/b/two.md', ['/Users/jinhao/a/one.md', '/Users/jinhao/b/two.md']],
   ['see /Users/x/a.md and /Users/x/b.md', ['/Users/x/a.md', '/Users/x/b.md']],
   ['/Users/jinhao/a/one.md、/Users/jinhao/b/two.md', ['/Users/jinhao/a/one.md', '/Users/jinhao/b/two.md']],
