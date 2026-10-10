@@ -46,6 +46,9 @@
     <label for="csThreshold">上下文阈值（k tokens，默认 150）</label>
     <input id="csThreshold" type="number" min="1" step="1" required />
     <p class="hint">仅 Claude Code 队长空闲且输入框为空时执行：存看板 → 收到「已存档」→ /clear → 重发提示词并读看板继续。顶部可取消后续步骤。</p>
+    <label for="captainAutoCompact">Claude 自动压缩窗口（tokens，100000–1000000，默认 200000；0 或留空 = 不设置）</label>
+    <input id="captainAutoCompact" type="number" min="0" max="1000000" step="1" inputmode="numeric" autocomplete="off" aria-describedby="captainAutoCompactNote" />
+    <p id="captainAutoCompactNote" class="hint">只对队长的 Claude 生效：上下文涨到这个窗口附近，Claude 自己压缩一次（实测约在窗口减 2 万多 token 处触发，压缩后摘要约 1 万 token）。队员不受影响。小于 100000 按 100000 算；新启动、清空、Relay 或重启后的队长才会带上。</p>
     <h3>队长交接</h3>
     <label for="handoffBudget">交接总览长度上限（字，3000–20000，默认 6000）</label>
     <input id="handoffBudget" type="number" min="3000" max="20000" step="500" inputmode="numeric" required autocomplete="off" aria-describedby="handoffBudgetNote" />

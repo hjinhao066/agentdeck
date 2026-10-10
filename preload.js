@@ -96,7 +96,7 @@ contextBridge.exposeInMainWorld('deck', {
   chatgptWebCancel: (id) => ipcRenderer.invoke('chatgpt-web:cancel', { id }),
   chatgptWebStatus: (id) => ipcRenderer.invoke('chatgpt-web:status', { id }),
 
-  ptySpawn: (id, cwd, cols, rows, managed, seatId, configDir, crew) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId, configDir, crew }),
+  ptySpawn: (id, cwd, cols, rows, managed, seatId, configDir, crew, captain) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId, configDir, crew, captain }),
   claudeSeats: (fresh) => ipcRenderer.invoke('seats:list', { fresh: fresh === true }),
   tokenUsage: (fresh) => ipcRenderer.invoke('token-usage:get', { fresh: fresh === true }),
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),

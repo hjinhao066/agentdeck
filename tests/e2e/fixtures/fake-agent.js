@@ -8,6 +8,7 @@ const provider = process.argv.includes('--provider=codex') ? 'Codex CLI' : 'Clau
 if (process.env.AGENTDECK_TEST_SEATS_ENV_FILE) {
   require('fs').appendFileSync(process.env.AGENTDECK_TEST_SEATS_ENV_FILE, JSON.stringify({
     colId: process.env.AGENTDECK_COL_ID, configDir: process.env.CLAUDE_CONFIG_DIR || null,
+    autoCompact: process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || null,
     authOverridePresent: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_SECURESTORAGE_CONFIG_DIR'].some((key) => !!process.env[key]),
   }) + '\n');
 }

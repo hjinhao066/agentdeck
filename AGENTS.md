@@ -183,6 +183,11 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - Clearing the 队长's context keeps the old chat as a `captainArchive` file under
   the old id. The 队长 column shows those read-only from the chats already loaded
   (no terminal restart, no new main-process read); they never enter its model context.
+- The 队长's own terminal (the column the renderer flags `captain` to `pty:spawn`, never a worker or 小队长) starts
+  with `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (`AgentSessions.captainEnvironment`, setting `captainAutoCompactWindow`,
+  default 200000, 0/empty = not set) and its Claude launch line gets `--settings` with a PreCompact hook that adds
+  `MainCore.COMPACT_NOTE` to every compaction (`captainLaunchCommand`). Nothing else gets either; a value the user
+  already exports and a launch line that already passes `--settings` are left alone.
 - Receipts come from authenticated worker complete/ask/progress commands and
   retain their original text and paths. Never parse screen receipt/question
   blocks. After a finished turn has waited three minutes without a command,

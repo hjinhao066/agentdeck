@@ -191,6 +191,20 @@ test('settings change threshold and disable the saver persistently', async () =>
   expect(archivePrompts()).toHaveLength(0);
 });
 
+test('settings: the auto-compact window starts at 200000, a small number becomes Claude\'s floor, 0 or empty turns it off', async () => {
+  await launch();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.locator('#captainAutoCompact')).toHaveValue('200000');
+  const saved = () => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).captainAutoCompactWindow;
+  for (const [typed, stored] of [['60000', 100000], ['350000', 350000], ['', 0], ['0', 0], ['2000000', 1000000]]) {
+    await page.locator('#captainAutoCompact').fill(typed);
+    await page.getByRole('button', { name: '保存设置' }).click();
+    await expect.poll(saved).toBe(stored);
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+    await expect(page.locator('#captainAutoCompact')).toHaveValue(String(stored));
+  }
+});
+
 test('background receipts and ledger deliver only 300 characters and five paths; read keeps the full reply', async () => {
   await launch();
   const result = await page.evaluate(async () => {
