@@ -61,10 +61,13 @@ test('real claude: after each restart the resumed 队长 takes its restart notic
   fs.writeFileSync(path.join(profile, 'seats-home', '.claude', '.credentials.json'), '{}');
   fs.writeFileSync(path.join(profile, '.zshrc'), '');
   const cmd = `"${wrapper}" --dangerously-skip-permissions`;
+  // The 队长's own conversation, already there (like the real one): every start resumes it by its id.
+  const SESSION = '66666666-6666-4666-8666-666666666666';
+  execSync(`"${wrapper}" -p "first turn" --session-id ${SESSION}`, { cwd: profile, stdio: 'ignore', timeout: 120000 });
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, captainTokenSaver: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 1,
     mainSession: { colId: CAPTAIN, cmd, gen: 1, fresh: false, crewMarked: true, tasks: [], pending: [], inflight: [], waitlist: [] },
-    columns: [{ id: CAPTAIN, title: '队长', isMain: true, cmd, cwd: profile }] }));
+    columns: [{ id: CAPTAIN, title: '队长', isMain: true, cmd, cwd: profile, modelSessionId: SESSION, modelSessionOwner: CAPTAIN, modelSessionCwd: profile }] }));
   const env = { ...process.env, ZDOTDIR: profile };
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   delete env.ELECTRON_RUN_AS_NODE;
@@ -80,12 +83,10 @@ test('real claude: after each restart the resumed 队长 takes its restart notic
   let app;
   const timings = [];
   try {
-    // First start: a new conversation gets the core prompt.
+    // First start: nothing says this conversation got the prompt yet, so it gets the core prompt.
     app = await launch();
-    await expect.poll(() => api.requests.filter((r) => r.body?.tools).length, { timeout: 120000 }).toBeGreaterThan(0);
-    const sessionId = await app.page.evaluate((id) => columns.find((c) => c.id === id).modelSessionId, CAPTAIN);
-    expect(sessionId).toMatch(/^[0-9a-f-]{36}$/);
-    await expect.poll(() => app.page.evaluate(() => window.MainSession.state().briefed?.colId), { timeout: 60000 }).toBe(CAPTAIN);
+    await expect.poll(() => app.page.evaluate(() => window.MainSession.state().briefed?.colId), { timeout: 120000 }).toBe(CAPTAIN);
+    await expect.poll(() => api.userTexts().some((t) => t.startsWith('你是 AgentDeck')), { timeout: 60000 }).toBe(true);
     await app.page.waitForTimeout(3000);
     await quitAndWait(app.application);
     app = null;
