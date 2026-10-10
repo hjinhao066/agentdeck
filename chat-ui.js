@@ -504,7 +504,10 @@
     ico.innerHTML = host.ICONS.globe;
     const text = el('span', 'lc-text');
     const path = (m[2] || '').replace(/\/+$/, '');
-    text.append(el('span', 'lc-title', m[1] || url), el('span', 'lc-sub', path ? decodeURI(path).slice(0, 80) : '网页预览'));
+    // a malformed escape ("/repos/%s", "/100%") is shown as written: decodeURI throws on it
+    let shown = path;
+    try { shown = decodeURI(path); } catch (_) {}
+    text.append(el('span', 'lc-title', m[1] || url), el('span', 'lc-sub', path ? shown.slice(0, 80) : '网页预览'));
     main.append(ico, text);
     main.addEventListener('click', (e) => window.SidePane.openLink({ kind: 'url', text: url }, e, v.id));
     const pick = svgButton('icon-btn lc-open', 'more', '打开方式');
