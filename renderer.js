@@ -561,10 +561,19 @@ const WORKING_RE = /^\s*[│┃|]?\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800
 // Claude/Grok permission prompts always render a "❯ 1." option list; y/n
 // prompts show "(y/n)"; Antigravity's approval footer is "Enter to confirm".
 // Claude's startup menus also come without row numbers (its one-time "Make auto mode your default
-// permission mode?" menu, whose "No, keep bypass permissions" row is idle-looking text): the row the
-// ❯ cursor stands on, a whole row that is nothing but one of their options, is the menu. The same
-// words in a reply (a sentence, a quote, a list item) are not.
-const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|select\s+login\s+method|^[\s│┃]*❯\s*(?:Yes, set auto mode as my default(?: permission mode)?|No, keep [a-z][a-z ]{0,30}?|No, exit|Yes, I accept)[\s│┃]*$/im;
+// permission mode?" menu, whose "No, keep bypass permissions" row is idle-looking text; the bypass
+// warning's "No, exit" / "Yes, I accept"). Such a menu is its two option rows one under the other, each
+// row nothing but the option (a box edge aside), the ❯ cursor on one of them. One ❯ row alone is not:
+// Claude 2.1 shows the user's earlier prompts with the same ❯ ("❯ No, keep it"), and replies may quote
+// the words in any form.
+const NEEDS_INPUT_RE = new RegExp([
+  /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|select\s+login\s+method/.source,
+  ...[['Yes, set auto mode as my default(?: permission(?: mode)?)?(?:[ \\t│┃]*\\n[ \\t│┃]*(?:permission )?mode)?', 'No, keep [a-z][a-z ]{0,30}?'],
+    ['No, exit', 'Yes, I accept']].flatMap(([first, second]) => [
+    `^[ \\t│┃]*❯[ \\t]*${first}[ \\t│┃]*\\n[ \\t│┃]*${second}[ \\t│┃]*$`,
+    `^[ \\t│┃]*${first}[ \\t│┃]*\\n[ \\t│┃]*❯[ \\t]*${second}[ \\t│┃]*$`,
+  ]),
+].join('|'), 'im');
 const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|\bBuild anything\b|\bPlan, search, build anything\b|\bAdd a follow-up\b|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
 // Can this column take a prompt now? Busy beats idle. Cursor's prompt row is
 // read by MainCore.cursorActivity, which also copes with a wrapped prompt.

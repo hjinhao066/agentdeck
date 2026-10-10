@@ -212,3 +212,27 @@ test('the real menus still read as menus: cursor on either row, with or without 
     assert.equal(rctx.menuOnScreen(lines(screen), '任务正文'), true);
   }
 });
+
+// Second review 2026-10-09: Claude 2.1 shows the user's earlier prompts in the transcript with the same ❯
+// as a menu cursor. An idle session whose history held "❯ No, keep it", "❯ Yes, I accept" or "❯ No, exit"
+// read as 停在确认 and a tell's Enter was refused (release read done). A menu is two option rows of the same
+// menu one under the other; one ❯ row alone is a prompt from the history.
+for (const old of ['❯ No, keep it', '❯ Yes, I accept', '❯ No, exit', '❯ No, keep bypass permissions', '❯ Yes, set auto mode as my default permission mode']) {
+  test(`an earlier prompt "${old}" in the transcript is not a menu`, async () => {
+    const idle = [old, '', '⏺ OK, done as you said.', '  Yes, I accept the plan above.', '', '────────', '❯ ', '────────', '  ⏵⏵ bypass permissions on (shift+tab to cycle)'];
+    assert.equal(rctx.classify(idle.join('\n'), { state: 'done', hasWorked: true }, 'claude'), 'done');
+    assert.equal(rctx.menuOnScreen(lines(idle), '下一步'), false);
+    const { context, sent } = sender(false, [...idle.slice(0, -4), '────────', '❯ 下一步', '────────', '  ⏵⏵ bypass permissions on']);
+    assert.ok(await context.sendPrompt({ id: 'w', cmd: 'claude' }, '下一步', null, {}));
+    assert.equal(sent.filter((d) => d === '\r').length, 1);
+  });
+}
+test('a menu needs its other option right next to the cursor row', () => {
+  const R = vm.runInContext('NEEDS_INPUT_RE', rctx);
+  assert.equal(R.test(['❯ No, exit', '  Yes, I accept'].join('\n')), true);
+  assert.equal(R.test(['  No, exit', '❯ Yes, I accept'].join('\n')), true);
+  // the other option two rows away, or a different menu's option next to it, is not one menu
+  assert.equal(R.test(['❯ No, exit', '', '  Yes, I accept'].join('\n')), false);
+  assert.equal(R.test(['❯ No, exit', '  No, keep bypass permissions'].join('\n')), false);
+  assert.equal(R.test(['❯ No, keep it', '⏺ Kept.'].join('\n')), false);
+});
