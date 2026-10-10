@@ -156,10 +156,15 @@ const lastReal = (records) => (records || []).filter((t) => !bookkeeping(t)).at(
 
 // Whether the session is running, has ended, or was interrupted. A terminal
 // that still exists says nothing about whether its task is finished.
-function sessionState(ctx, id) {
+// host: the machine the card says the session runs on (session_host / dispatch_host). This machine
+// sees only its own terminals, so a session on the other one is out of sight, not gone.
+function sessionState(ctx, id, host) {
   if (!id) return { code: 'none', group: 'ended', label: '无' };
   const live = ctx.sessions.get(id);
   const last = lastReal(ctx.bySession.get(id));
+  if (!live && host && ctx.host && String(host).toLowerCase() !== ctx.host.toLowerCase()) {
+    return { code: 'remote', group: 'running', label: `在另一台机器 ${one(host, 40)} 上，本机看不到它的终端，待核实` };
+  }
   if (!live) {
     if (!ctx.archived.has(id)) return { code: 'gone', group: 'ended', label: '已结束·会话已不存在' };
     return captainStopped(last) ? { code: 'archived', group: 'interrupted', label: '被中断·队长叫停并归档' } : { code: 'archived', group: 'ended', label: '已结束·已归档，tell 可恢复' };
@@ -176,7 +181,7 @@ function sessionState(ctx, id) {
   return { code: 'idle', group: 'ended', label: '已结束·终端空闲' };
 }
 // Someone is on it right now: nobody else should be started on the same work.
-const holdsWork = (state) => ['working', 'input', 'asking', 'idle-open', 'resuming'].includes(state.code);
+const holdsWork = (state) => ['working', 'input', 'asking', 'idle-open', 'resuming', 'remote'].includes(state.code);
 
 function receiptText(receipt) {
   if (!receipt) return '';
@@ -225,7 +230,7 @@ function deriveCard(card, ctx) {
   const reviews = reviewsOf(card, ctx);
   const round = card.review_round || 0;
   const bound = card.session_id || '';
-  const boundState = sessionState(ctx, bound);
+  const boundState = sessionState(ctx, bound, card.session_host);
   const attemptOpen = !!bound && !card.attempt_closed;
   const current = bound ? lastReal(own.filter((t) => t.colId === bound && (!card.attempt_id || !t.boardAttempt || t.boardAttempt === card.attempt_id))) : null;
   const queued = ctx.waitlist.find((w) => w.metadata?.boardId === card.id);
@@ -240,7 +245,7 @@ function deriveCard(card, ctx) {
     if (!id) return;
     const known = roles.find((r) => r.id === id);
     if (known) { if (note && !known.note) known.note = note; return; }
-    roles.push({ role: name, id, state: sessionState(ctx, id), note: note || '' });
+    roles.push({ role: name, id, state: sessionState(ctx, id, id === bound ? card.session_host : id === card.dispatch_session_id ? card.dispatch_host : ''), note: note || '' });
   };
 
   // ---- verdict: board facts first, then reviews the board never saw ----
@@ -297,9 +302,10 @@ function deriveCard(card, ctx) {
     } else if (attemptOpen && captainStopped(current)) set('stopped', 'paused', '暂停（已被队长叫停）');
     else if (misfiled && holdsWork(boundState)) set('reviewing', 'review', '待验收（审查中）');
     else if (attemptOpen && boundState.code === 'resuming') set('resuming', 'doing', '执行中（重启后程序自动续接中）');
+    else if (attemptOpen && boundState.code === 'remote') set('doing', 'doing', `执行中（${boundState.label}）`);
     else if (attemptOpen && holdsWork(boundState)) set('doing', card.rework_count > 0 ? 'rework' : 'doing', card.rework_count > 0 ? `返工（第 ${card.rework_count} 次返工执行中）` : '执行中');
     else if (queued || card.dispatch_wait) set('queued', 'doing', '执行中（排队等空位或额度）');
-    else if (card.dispatch_session_id && holdsWork(sessionState(ctx, card.dispatch_session_id))) set('dispatching', 'doing', '执行中（调度会话正在派活）');
+    else if (card.dispatch_session_id && holdsWork(sessionState(ctx, card.dispatch_session_id, card.dispatch_host))) set('dispatching', 'doing', '执行中（调度会话正在派活）');
     else set('orphan', 'doing', '执行中（没有有效执行者）');
   } else if (card.flag === 'blocked' || deps.length) set('blocked', 'todo', '待执行（等前置卡）');
   // A rejection nobody acted on outranks whatever the card says.

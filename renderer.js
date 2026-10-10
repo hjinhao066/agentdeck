@@ -563,7 +563,20 @@ const WORKING_RE = /^\s*[│┃|]?\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800
 // also…?" at the end of a normal reply must NOT hold a column red forever.
 // Claude/Grok permission prompts always render a "❯ 1." option list; y/n
 // prompts show "(y/n)"; Antigravity's approval footer is "Enter to confirm".
-const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|select\s+login\s+method/im;
+// Claude's startup menus also come without row numbers (its one-time "Make auto mode your default
+// permission mode?" menu, whose "No, keep bypass permissions" row is idle-looking text; the bypass
+// warning's "No, exit" / "Yes, I accept"). Such a menu is its two option rows one under the other, each
+// row nothing but the option (a box edge aside), the ❯ cursor on one of them. One ❯ row alone is not:
+// Claude 2.1 shows the user's earlier prompts with the same ❯ ("❯ No, keep it"), and replies may quote
+// the words in any form.
+const NEEDS_INPUT_RE = new RegExp([
+  /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|select\s+login\s+method/.source,
+  ...[['Yes, set auto mode as my default(?: permission(?: mode)?)?(?:[ \\t│┃]*\\n[ \\t│┃]*(?:permission )?mode)?', 'No, keep [a-z][a-z ]{0,30}?'],
+    ['No, exit', 'Yes, I accept']].flatMap(([first, second]) => [
+    `^[ \\t│┃]*❯[ \\t]*${first}[ \\t│┃]*\\n[ \\t│┃]*${second}[ \\t│┃]*$`,
+    `^[ \\t│┃]*${first}[ \\t│┃]*\\n[ \\t│┃]*❯[ \\t]*${second}[ \\t│┃]*$`,
+  ]),
+].join('|'), 'im');
 const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|\bBuild anything\b|\bPlan, search, build anything\b|\bAdd a follow-up\b|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
 // Can this column take a prompt now? Busy beats idle. Cursor's prompt row is
 // read by MainCore.cursorActivity, which also copes with a wrapped prompt.
@@ -599,6 +612,9 @@ function classify(text, entry, cmd, isCaptain = false, withoutBackground = false
   }
   if (WORKING_RE.test(MainCore.claudeStatusRowsBlanked(text, cmd)) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
+  // Scrolled up in Claude's fullscreen view: the spinner is off screen, not gone. A working turn
+  // stays working until the view is back at the bottom and shows how the turn really stands.
+  if (entry?.state === 'working' && MainCore.claudeScrolledUp(text, cmd)) return 'working';
   if (!isCaptain && !withoutBackground && MainCore.claudeBackgroundTasks(text, cmd)) return 'working';
   // After submission, an unrecognised/empty Cursor screen is initialization
   // or work without a ready prompt, never evidence that the turn finished.
@@ -2321,6 +2337,7 @@ function buildColumn(col, isFresh) {
           const entry = terms.get(col.id);
           if (entry) {
             entry.hasWorked = true;
+            entry.idleTicks = 0;   // a new turn: the done debounce starts over (see ChatUI.sendPrompt)
             entry.lastOutputAt = Date.now();
             window.deck.notifyCancel({ id: col.id });
           }
@@ -4040,6 +4057,9 @@ const deckHost = {
   // 队长
   createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, ptyBackgroundWork,
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
+  menuOnScreen,
+  // How the terminal stands right now, read again instead of taken from the last status tick.
+  liveState: (col) => { const e = terms.get(col.id); return e?.alive ? classify(liveStatusText(e.term), e, col.cmd, !!col.isMain) : 'exited'; },
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), ClaudeSeats.described(config.claudeSeats), claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
@@ -4135,7 +4155,7 @@ function statusScreen(term) {
     const line = buf.getLine(y);
     // (as wide as the terminal is: a full-screen TUI's row keeps its old length when the terminal narrows)
     const text = line ? line.translateToString(false, 0, term.cols) : '';
-    if (line?.isWrapped && lines.length) {
+    if (line?.isWrapped && lines.length && !chromeRowBreak(buf.getLine(y - 1)?.translateToString(false, 0, term.cols) || '', text)) {
       // a wide character (中文) that did not fit at the end of the row above went down whole: the cell it left
       // there (empty in xterm, a space from the Windows console between two wide characters) is no space in the
       // text; nor are the blank cells after it once the window has grown since (the console paints spaces to the
@@ -4160,6 +4180,34 @@ function statusScreen(term) {
     text = nl >= 0 ? text.slice(nl + 1) : '';
   }
   return text.trimEnd();
+}
+// The Windows console (ConPTY) sends some full-screen TUI rows as a soft wrap of the row above:
+// a box rule that fills the width and the "❯ " row under it, or a padded row and Claude's spinner
+// row ("✽ Skedaddling… (4s)"). Joined, the rule swallows the prompt and the spinner sits mid-line,
+// so nothing anchored at a row's start sees them and a working Claude reads as done. Text really
+// wraps at its last cell; a rule above, or a row that ended in blank cells above TUI chrome, did not.
+function chromeRowBreak(above, row) {
+  // Claude's spinner row ("✶ Metamorphosing… (3m 11s · …") is never the tail of a sentence, whatever stands above it.
+  return /^\s*[─━═]{3,}\s*$/.test(above) || /^\s*[─━═]{3,}\s*$/.test(row) || /^\s*[✻✽✳✶✢✺∴·*]\s+\S+…\s*\(/.test(row) ||
+    (/\s{2,}$/.test(above) && /^\s*(?:[✻✽✳✶✢✺∴·*]\s+\S|[❯›](?:\s|$)|⎿\s|⏺\s|⏵⏵)/.test(row));
+}
+// A menu or confirmation is on the terminal right now (its own reading, not the last status tick).
+// Rows that are the text just pasted (shown in the input box) are not the agent asking anything.
+function menuOnScreen(term, sent = '') {
+  const flat = String(sent).replace(/\s+/g, ' ');
+  const rows = statusScreen(term).split('\n').slice(-20).filter((row) => {
+    const t = row.replace(/^\s*[│┃]?\s*❯\s?/, '').replace(/\s*[│┃]\s*$/, '').trim().replace(/\s+/g, ' ');
+    return !(t.length >= 3 && flat.includes(t));
+  });
+  return NEEDS_INPUT_RE.test(rows.join('\n'));
+}
+// The screen the status light reads. On Windows nothing names the foreground process: a PowerShell
+// prompt at the bottom means the agent has exited, and a menu it was showing when it died still
+// stands above that prompt. It is history, not a question waiting for an answer.
+function liveStatusText(term) {
+  if (env.platform !== 'win32') return statusScreen(term);
+  const text = MainCore.afterReplay(statusScreen(term), env.platform);
+  return MainCore.isWindowsShellPrompt(text) ? MainCore.windowsAgentOutput(text) : text;
 }
 // Background shell commands under a column's terminal, for the automatic archive
 // (pty-work.js in the main process). An answer is used for PTY_WORK_MS, a busy one
@@ -4522,7 +4570,7 @@ battery.every('statusTick', () => {
     // 40-line window this is a no-op.
     text = MainCore.afterReplay(text, env.platform);
     const cmd = columns.find((c) => c.id === id)?.cmd;
-    const liveText = env.platform === 'win32' ? MainCore.afterReplay(statusScreen(entry.term), env.platform) : statusScreen(entry.term);
+    const liveText = liveStatusText(entry.term);
     // Cursor activity/readiness must share the live screen with its status dot;
     // the bounded reply tail can reach into old scrollback after a TUI clear.
     const cursorScreen = /\bcursor-agent\b/i.test(cmd || '') ? liveText : text;

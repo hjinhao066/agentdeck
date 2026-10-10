@@ -2531,6 +2531,18 @@
       if (!ended || turn && !turn.done && !task.processEnded) continue;
       const anchor = entry.state === 'done' ? ended : Math.max(ended, entry.lastOutputAt || 0);
       if (Date.now() - anchor < STOP_QUIET) continue;
+      // Last look before calling a Claude turn over: its full-screen rows as they are, one per row (the status
+      // light reads them with soft wraps joined). A spinner or a scrolled-up view there means it is still at it.
+      // On Windows a PowerShell prompt at the bottom means Claude has exited (or crashed): whatever it drew
+      // above the prompt is history, as for the status light, and must not hold the task open.
+      if (/\bclaude\b/i.test(col?.cmd || '') && entry.term && host.dumpScreen && host.screenState) {
+        let rows = host.dumpScreen(entry.term, 40);
+        if (host.platform === 'win32' && M.isWindowsShellPrompt(rows)) rows = M.windowsAgentOutput(rows);
+        if (host.screenState(rows, { ...entry, state: 'working' }, col.cmd) === 'working') {
+          task.endedAt = 0;
+          continue;
+        }
+      }
       settle(task, { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' });
     }
   }
@@ -3292,6 +3304,11 @@
         if (col.executor === 'chatgpt-web') throw new Error('ChatGPT 网页会话不接受按键回答，请在网页处理需要用户操作的提示。');
         const entry = host.terms.get(col.id);
         if (!entry || entry.state !== 'input') throw new Error(`「${host.columnLabel(col)}」现在没有停在确认提示上；要给它指令用 tell。`);
+        // The status tick can be seconds old, and an agent that exited leaves its last menu on screen above
+        // the shell prompt: keys would go to the shell. Read the terminal again before pressing anything.
+        if ((host.liveState && host.liveState(col) !== 'input') || (host.platform !== 'win32' && host.agentInForeground && !(await host.agentInForeground(col, false)))) {
+          throw new Error(`「${host.columnLabel(col)}」已经不在确认提示上（agent 可能已退出、回到了 shell），一个键也没有按；先 peek 看看。`);
+        }
         const key = String(message.key || '').trim().toLowerCase();
         const { keys, submit } = M.answerKeys(key, { appCursor: entry.term?.modes?.applicationCursorKeysMode === true });
         // One press at a time: a menu redraws between arrow keys, and keys that arrive together can be dropped.

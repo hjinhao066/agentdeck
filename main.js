@@ -25,7 +25,7 @@ const { createCodexLauncher } = require('./codex-launch');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
 const PerpetualCaptainCore = require('./perpetual-captain-core');
-const { seatEnvironment, credentialLocation, initializeOnboarding, trustWorktree: trustClaudeWorktree, registerSeatsIpc, seatInfo, recordedAccount, readUsage } = require('./claude-seats-main');
+const { seatEnvironment, credentialLocation, initializeOnboarding, trustWorktree: trustClaudeWorktree, declineAutoModeNudge, registerSeatsIpc, seatInfo, recordedAccount, readUsage } = require('./claude-seats-main');
 const { registerTokenUsageIpc } = require('./token-usage-main');
 const { createWarmupService } = require('./quota-warmup-service');
 const { createQuotaWarmupRunner } = require('./quota-warmup-main');
@@ -399,12 +399,18 @@ handleMain('pty:prepare-launch', async (_event, { id, command }) => {
   const trustHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   // A token renewal in progress on this column's seat is written before its Claude starts.
   if (seatGate && column?.claudeSeatId) await seatGate.launch(column.claudeSeatId, () => {});
+  // Claude's one-time "Make auto mode your default?" menu starts on Yes: answer it No for this seat first.
+  if (ClaudeSeatsCore.claudeLaunch(command) && ptySeatDefs.has(id)) {
+    const declined = await declineAutoModeNudge(ptySeatDefs.get(id), trustHome);
+    if (!declined.ok) nlog(`auto mode nudge not declined: ${declined.reason}`);
+  }
   const prepared = prepareWorkspaceTrust(command, column, cwd, trustHome);
   if (prepared.warning) send('toast', { text: prepared.warning });
   return codexLauncher.prepare(prepared.command, cwd);
 });
 
 const ptySeats = new Map();
+const ptySeatDefs = new Map(); // columnId -> the seat its shell was started for
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
 const receiptSessions = new Map(); // every column: submission only, never control
@@ -500,6 +506,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir, crew) {
   ptys.set(id, p);
   ptyLaunchDirs.set(id, dir);
   ptySeats.set(id, binding);
+  ptySeatDefs.set(id, selectedSeat);
   p.onData((data) => { const sequence = bufferAppend(id, data); send('pty:data', { id, data, sequence }); });
   p.onExit(({ exitCode, signal }) => {
     // Ignore a late exit from an older PTY generation. This matters if a
@@ -510,6 +517,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir, crew) {
       ptys.delete(id);
       ptyLaunchDirs.delete(id);
       ptySeats.delete(id);
+      ptySeatDefs.delete(id);
       managedSessions.delete(id);
       receiptListeners?.remove(id);
       receiptSessions.delete(id);
@@ -539,6 +547,7 @@ function killPty(id, keepReplay) {
   ptyLaunchDirs.delete(id);
   ptyBuffers.delete(id);
   ptySeats.delete(id);
+  ptySeatDefs.delete(id);
   managedSessions.delete(id);
   receiptListeners?.remove(id);
   receiptSessions.delete(id);

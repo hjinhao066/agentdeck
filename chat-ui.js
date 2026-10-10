@@ -1353,6 +1353,8 @@
     let seen = null, seenSince = 0;
     const look = () => {
       if (host.terms.get(col.id) !== entry || !entry.alive || entry.state === 'input' || entry.sendingPrompt) return;
+      // a menu that came up since (Claude's startup questions) would take this Enter as its answer
+      if (host.menuOnScreen && host.menuOnScreen(entry.term, text)) return;
       const screen = host.dumpScreen(entry.term, 80);
       if (!C.promptLeftInBox(screen, text)) return;
       // Quiet: no output, or a screen standing still. An idle Claude Code keeps writing a cursor-position
@@ -1419,12 +1421,29 @@
       } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)
         || (viaConpty && (entry.lastOutputAt || 0) <= pastedAt && Date.now() - pastedAt < 3000)
         || (Date.now() - pastedAt < PASTE_READ_MAX && C.pasteBusy(host.dumpScreen(entry.term, 6)))));
+      // A menu that came up after the readiness check (Claude's one-time startup questions) has
+      // its default row selected: this Enter would answer it. Leave it for whoever handles menus.
+      if (host.menuOnScreen && host.menuOnScreen(entry.term, text)) {
+        if (turn) {
+          const open = pending.get(col.id);
+          if (open && open.turn === turn) { try { open.marker?.dispose(); } catch (_) {} pending.delete(col.id); }
+          Object.assign(turn, { reply: '', done: true, interrupted: true, end: Date.now() });
+          refreshTurn(col.id, turn);
+          scheduleSave(col.id);
+        }
+        host.showToast(`没发出去：「${host.columnLabel(col)}」停在一个确认菜单上，回车没有按下去`);
+        return false;
+      }
       if (!o.silent && window.MainSession) window.MainSession.onContextCommandSent(col, text);
       window.deck.ptyInput(col.id, '\r');
       watchSubmission(col, entry, text);
       host.manualPromptSent(col.id, turn, o.userInitiated === true);
       entry.state = 'working';
       entry.backgroundOnly = false;   // the turn just sent is real work, until the next status tick says otherwise
+      // The done debounce starts over for this turn: a column that sat idle has counted many idle ticks,
+      // and the agent needs a moment to draw its spinner. Without this the first tick read the old idle
+      // prompt as done and closed the turn 1-4 s after it was sent.
+      entry.idleTicks = 0;
       entry.hasWorked = true;
       entry.lastOutputAt = Date.now();
       if (isCursor) {

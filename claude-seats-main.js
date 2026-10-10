@@ -148,6 +148,45 @@ async function trustWorktree(seat, home, dir, { root, platform = process.platfor
     return { ok: false, reason: String(e && e.message || e).slice(0, 200) };
   }
 }
+// Claude Code 2.1.29x asks once per seat "Make auto mode your default permission mode?" right after
+// it starts, and its default row is "Yes, set auto mode as my default permission mode": an Enter that
+// AgentDeck sends to submit a task picks it, writes permissions.defaultMode "auto" into the user's
+// settings.json and turns the bypass session into auto mode. Declining it in Claude only records
+// hasSeenAutoDefaultNudge in the seat's global file; AgentDeck records that same answer (No, keep
+// the current mode) before each Claude launch, so the question never appears. Never throws.
+async function declineAutoModeNudge(seat, home) {
+  try {
+    const loc = credentialLocation(seat, home);
+    try {
+      if (JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8').replace(/^\uFEFF/, '')).hasSeenAutoDefaultNudge === true) return { ok: true, changed: false };
+    } catch (e) {
+      if (e.code === 'ENOENT') return { ok: false, reason: '席位还没有配置文件' };   // not set up: Claude onboards first, no nudge
+    }
+    return await withFileLock(loc.metadataPath, () => {
+      let existing, mode = 0o600;
+      try {
+        const stat = fs.statSync(loc.metadataPath);
+        if (stat.size > 8 * 1024 * 1024) return { ok: false, reason: '席位配置文件太大' };
+        mode = stat.mode & 0o777;
+        existing = JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8').replace(/^\uFEFF/, ''));
+      } catch (_) { return { ok: false, reason: '席位配置文件读不了，没有改动' }; }   // damaged JSON is never overwritten
+      if (!existing || typeof existing !== 'object' || Array.isArray(existing)) return { ok: false, reason: '席位配置文件格式不对，没有改动' };
+      if (existing.hasSeenAutoDefaultNudge === true) return { ok: true, changed: false };
+      existing.hasSeenAutoDefaultNudge = true;
+      const temp = loc.metadataPath + `.agentdeck-tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+      try {
+        fs.writeFileSync(temp, JSON.stringify(existing, null, 2), { mode, flag: 'wx' });
+        fs.renameSync(temp, loc.metadataPath);
+      } catch (e) {
+        try { fs.unlinkSync(temp); } catch (_) {}
+        return { ok: false, reason: '写席位配置文件失败：' + e.code };
+      }
+      return { ok: true, changed: true };
+    });
+  } catch (e) {
+    return { ok: false, reason: String(e && e.message || e).slice(0, 200) };
+  }
+}
 const AUTH_ENV = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'CLAUDE_CODE_HOST_CREDS_FILE', 'CLAUDE_CODE_HOST_GATEWAY_LINEAGE'];
 function seatEnvironment(env, seat, home) {
@@ -405,4 +444,4 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
 
   });
 }
-module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, seatEnvironment, credentialHealth, credentialStatus, credentialFileStatus, readAuthStatus, authStatusCache, seatInfo, recordedAccount, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };
+module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, declineAutoModeNudge, seatEnvironment, credentialHealth, credentialStatus, credentialFileStatus, readAuthStatus, authStatusCache, seatInfo, recordedAccount, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };

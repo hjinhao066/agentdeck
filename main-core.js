@@ -987,6 +987,18 @@
     if (top < 0 || !/^\s*╭─+╮\s*$/.test(lines[top])) return lines;
     return [...lines.slice(0, top), ...lines.slice(bottom + 1)];
   }
+  // Claude 2.1's fullscreen view, scrolled up (wheel or PageUp), keeps its input box and footer but
+  // the spinner and status rows scroll away with the transcript. A pill just above the box says so:
+  // "3 new messages (ctrl+End) ↓" while output keeps coming, "Jump to bottom ↓" otherwise (shorter
+  // forms in narrow columns, cut at the right edge). It is drawn over the transcript's bottom row,
+  // so text can stand left of it. With it on screen, no spinner says nothing about the turn.
+  const CLAUDE_SCROLL_PILL = /(?:^|\s)(?:[1-9]\d* new messages?|Jump to bottom)(?:\s*$|\s*↓|\s+\((?:ctrl\+E|click|fn)|:\s*\S+ to scroll)/i;
+  function claudeScrolledUp(screen, cmd) {
+    if (cmd && !/\bclaude\b/i.test(cmd)) return false;
+    const lines = String(screen || '').split('\n').slice(-12);
+    const rule = lines.findLastIndex((line) => /^\s*[─━]{3,}/.test(line));   // the input box's bottom edge
+    return rule > 0 && lines.slice(Math.max(0, rule - 6), rule).some((line) => CLAUDE_SCROLL_PILL.test(line));
+  }
   function claudeBackgroundTasks(screen, cmd) {
     if (cmd && !/\bclaude\b/i.test(cmd)) return false;
     const lines = withoutLiveBox(String(screen || '').split('\n')).slice(-20);
@@ -1209,7 +1221,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, CORE_LIMIT, BRIEFING_TOPICS, PROVIDERS, ROUTING, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, briefingMark, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, drawsOutput, claudeBackgroundTasks, claudeStatusRowsBlanked, backgroundCommandStatus, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, CORE_LIMIT, BRIEFING_TOPICS, PROVIDERS, ROUTING, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, briefingMark, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, drawsOutput, claudeBackgroundTasks, claudeScrolledUp, claudeStatusRowsBlanked, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, resourceKind, loginNudgeShown, LOGIN_NUDGE_MARK, statusLabel, ledgerText, subCaptainBrief, readText, resetNote, relayNote, restartNote, restartNotice, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };
