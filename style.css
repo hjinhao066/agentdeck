@@ -3421,8 +3421,10 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 }
 :root:not([data-theme="light"]) #crewMap .cm-title { font-weight: 640; }
 :root:not([data-theme="light"]) #crewMap .cm-agent .cn-badge {
-  height: 20px; box-sizing: border-box; padding: 0 6px 0 5px; gap: 4px; align-items: center;
-  border-radius: 999px; background: rgba(5, 7, 18, .42); border: 1px solid rgba(214, 222, 255, .12);
+  /* the rim is drawn inside (a shadow, not a border) and the padding kept tight: on a card whose status is long
+     (等终端就绪) the account tag beside it still keeps a few letters */
+  height: 20px; box-sizing: border-box; padding: 0 5px 0 4px; gap: 3px; align-items: center;
+  border-radius: 999px; background: rgba(5, 7, 18, .42); border: 0; box-shadow: inset 0 0 0 1px rgba(214, 222, 255, .12);
 }
 :root:not([data-theme="light"]) #crewMap .cm-agent .agent-provider-icon[data-icon-provider] { color: #e8936f; }
 :root:not([data-theme="light"]) #crewMap .cm-agent .cn-badge .agent-model-label { color: var(--cm-text); font-weight: 600; }

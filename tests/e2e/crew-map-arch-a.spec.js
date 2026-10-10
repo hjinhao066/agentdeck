@@ -156,7 +156,9 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
   await open(1280, H0, 'dark'); await settled();
   const base = await read();
   expect(base.scale).toBeCloseTo(0.7, 5);
-  expect(base.card.w6.y, 'two rows').toBeGreaterThan(base.card.w0.bottom);
+  // (3.1) the frame stands its running work newest first and the failure (w6) last: the first row starts with the newest
+  const first = Object.entries(base.card).sort(([, a], [, b]) => a.y - b.y || a.x - b.x)[0][0];
+  expect(base.card.w6.y, 'two rows').toBeGreaterThan(base.card[first].bottom);
   expect(base.card.w6.bottom).toBeGreaterThan(base.vp.bottom);
   // Size the window so the edge would land 5px under the first row (1.1.8 left a row 4.4px
   // above the tray), then 5px inside it, then every 4px from 32px above it to 32px below: no card
@@ -164,14 +166,14 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
   // plainly cut by 24px or more). (Where the map settles depends on every row near the edge, not
   // only the first: at 560 another row may already have moved it.)
   const flush = (gap) => gap < 16 * 0.7 - 0.5 && gap > -24 * 0.7 + 0.5;
-  const height = (nudge) => H0 - Math.round(base.vp.bottom - (base.card.w0.bottom + nudge));
+  const height = (nudge) => H0 - Math.round(base.vp.bottom - (base.card[first].bottom + nudge));
   const seen = { whole: 0, cut: 0 };
   for (const h of new Set([height(5), height(-5), ...Array.from({ length: 17 }, (_, i) => height(-32 + i * 4))])) {
     await open(1280, h, 'dark'); await settled();
     const g = await read();
     expect(g.scale).toBeCloseTo(0.7, 5);
     for (const [id, c] of Object.entries(g.card)) { const gap = g.vp.bottom - c.bottom; expect(flush(gap), `${h}: ${id} ends ${gap.toFixed(1)}px above the tray`).toBe(false); }
-    const gap = g.vp.bottom - g.card.w0.bottom;
+    const gap = g.vp.bottom - g.card[first].bottom;
     if (gap >= 0) seen.whole++; else seen.cut++;
     expect(g.cap.y, '队长 stays whole').toBeGreaterThanOrEqual(g.vp.y + 8 - 0.5);
     expect(g.tray.y).toBeGreaterThanOrEqual(g.vp.bottom - 0.5);

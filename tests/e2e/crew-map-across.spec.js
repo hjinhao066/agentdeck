@@ -209,7 +209,9 @@ test('24 sessions in 6 projects: 智能一页 puts them on one page where it can
     expect(g.plan.caps).toEqual({ agentdeck: 3, 秋招: 1, 'kenke-auto': 1, 'fuqing-inventory': 1, 'daily-progress': 1, '': 1 });
     const wide = (key) => new Set(g.nodes.filter((n) => n.project === key).map((n) => n.x)).size;
     expect(ORDER.map(wide), `${w}: cards abreast in each frame`).toEqual([3, 1, 1, 1, 1, 1]);
-    expect(new Set(g.nodes.filter((n) => n.project === 'agentdeck').map((n) => n.y)).size, 'fifteen cards: five rows').toBe(5);
+    // (3.1) inside the frame the thirteen still open stand first, five rows (智能一页 weighs the frame as one flow, so
+    // its choice stays three wide); the two that have ended start a sixth row of their own
+    expect(new Set(g.nodes.filter((n) => n.project === 'agentdeck').map((n) => n.y)).size, 'fifteen cards: five rows of open work, one of ended').toBe(6);
     // read like text, the projects stand in their own order; the first ones across the top on one line
     expect(g.order, `${w}: in order, from the left`).toEqual(ORDER);
     const tops = g.plan.lanes.map((lane) => g.groups.find((f) => f.key === lane[0]).y);
