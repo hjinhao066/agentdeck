@@ -67,8 +67,10 @@
   function provisionalStop(task) {
     return !!task && task.status === 'stopped' && !!task.receipt && task.receipt.source === 'fallback' && !task.receipt.failed;
   }
+  // A session that started an installation is continued like any other: the installer ends the app, so its
+  // task is exactly the kind a restart interrupts, and its post-install check has no one else (10-10 2.0.6).
   function shouldResume(task) {
-    if (!task || task.pendingInstall) return false;
+    if (!task) return false;
     if (provisionalStop(task)) return true;
     // failed / stopped / done stay closed unless this app marked a checkpoint.
     // quota and asking are still the same job; a crash never rewrites them.
@@ -76,7 +78,7 @@
     return OPEN.includes(task.status);
   }
   function holdsAcrossRestart(task) {
-    return !!task && !task.pendingInstall && (OPEN.includes(task.status) || isCheckpointClosure(task) || provisionalStop(task));
+    return !!task && (OPEN.includes(task.status) || isCheckpointClosure(task) || provisionalStop(task));
   }
   function shouldPark(task) {
     if (!task || task.pendingInstall) return false;
@@ -181,6 +183,14 @@
     const lines = [mode === 'resume' ? trueResumeNote(provider) : resendNote(provider)];
     if (input && input.retry) lines.push('这是同一次续接的再次送达。若你已经收到过同样的说明，不要另开任务。');
     lines.push('AgentDeck 刚重启。从停下的地方接着干。停在安全点不要用 complete；那会把卡片标成已完成。');
+    const install = input && input.install;
+    if (install) {
+      const version = String(install.targetVersion || '').trim();
+      const summary = String(install.summary || '').trim();
+      lines.push(summary
+        ? '你启动的安装已有结果：' + summary + '\n不要重新安装；接着做装后核对。'
+        : '你在重启前启动了' + (version ? ' AgentDeck ' + version + ' ' : '安装') + '的安装，程序随安装重启了；安装结果由程序核对后报给队长。不要重新安装；自己核对运行版本，接着做装后核对。');
+    }
     if (mode === 'resend') {
       lines.push('卡片任务：' + String(input && input.title || '（无标题）').replace(/\s+/g, ' ').trim().slice(0, 120));
       const body = String(input && input.task || '').trim();
