@@ -216,3 +216,67 @@ test('an installation awaiting runtime verification is never re-dispatched or ch
   assert.equal(R.shouldPark(pending), false);
   assert.deepEqual(R.planResume([crew('installer')], [pending], {}, 'reboot'), []);
 });
+
+// 10-09 12:10–12:15: before installing 2.0.3 the Captain told nine sessions to stop at a safe point. Five
+// wrote their progress and ended the turn; three minutes later each read 已结束，未提交回执 (the provisional
+// no-receipt fallback, status stopped), the quit did not park them and the restart left them alone.
+const fallbackStop = (colId, extra = {}) => task(colId, 'stopped', '已结束，未提交回执', {
+  receipt: { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' }, ...extra });
+
+test('a task closed only by the three-minute no-receipt fallback is parked for a restart like an open one', () => {
+  assert.equal(R.shouldPark(fallbackStop('safe')), true);
+  assert.equal(R.shouldPark(task('stop', 'stopped', '队长已请求中断当前操作。', { receipt: { summary: '队长已请求中断当前操作。', failed: '', source: 'captain-stop' } })), false);
+  assert.equal(R.shouldPark(task('done', 'done', '功能已做完并推送')), false);
+  assert.equal(R.shouldPark(task('fail', 'failed', '', { receipt: { summary: '', failed: '额度用尽', source: 'quota' } })), false);
+  assert.equal(R.shouldPark(fallbackStop('install', { pendingInstall: { id: 'i' } })), false);
+  assert.deepEqual(R.planPark([crew('safe'), crew('done'), crew('live'), crew('stop')], [
+    fallbackStop('safe'), task('done', 'done', '功能已做完'), task('live', 'working'),
+    task('stop', 'stopped', '队长已请求中断当前操作。', { receipt: { summary: '队长已请求中断当前操作。', failed: '', source: 'captain-stop' } }),
+  ]).map((p) => [p.id, p.idle === true]), [['safe', true], ['live', false]]);
+  // A crash never parks: a fallback stop on its own is still not resumed at the next start.
+  assert.equal(R.shouldResume(fallbackStop('safe')), false);
+});
+
+// After a restart the Captain is back only when it does something itself (works, or runs a command) after its
+// notice went in: on 10-09 the notice was typed into its terminal and sat unsent for four hours.
+test('the restart watch reports a Captain not back within a minute, once, and its recovery', () => {
+  const w = R.createRestartWatch({ startedAt: 1000 });
+  w.expect('cap', 'captain', '队长', 1000);
+  w.sent('cap', 3000);
+  assert.deepEqual(w.due(60_000), []);
+  const due = w.due(61_000);
+  assert.deepEqual(due.map((d) => [d.id, d.kind, d.sentAt]), [['cap', 'captain', 3000]]);
+  assert.deepEqual(w.due(70_000), [], 'alarmed once');
+  assert.deepEqual(w.recovered(), []);
+  w.confirm('cap', 80_000);
+  assert.deepEqual(w.recovered().map((d) => d.id), ['cap']);
+  assert.deepEqual(w.recovered(), [], 'recovery is reported once');
+});
+
+test('a Captain that works within the minute is never reported; work before its notice went in does not count', () => {
+  const w = R.createRestartWatch({ startedAt: 0 });
+  w.expect('cap', 'captain', '队长', 0);
+  w.confirm('cap', 2000);
+  assert.equal(w.pending('cap'), true, 'nothing went in yet');
+  w.sent('cap', 5000);
+  w.confirm('cap', 4000);
+  assert.equal(w.pending('cap'), true, 'an observation older than the send is no proof');
+  w.confirm('cap', 7000);
+  assert.equal(w.pending('cap'), false);
+  assert.deepEqual(w.due(10 * 60_000), []);
+});
+
+test('the restart watch reports crew whose continue message never went in, went in without effect, or failed', () => {
+  const w = R.createRestartWatch({ startedAt: 0 });
+  for (const id of ['quiet', 'late', 'failed', 'fine', 'dropped']) w.expect(id, 'crew', id, 0);
+  w.sent('quiet', 10_000); w.sent('fine', 10_000); w.sent('failed', 10_000);
+  w.confirm('fine', 15_000);
+  w.fail('failed', '新会话的重发指令也未能送达');
+  w.drop('dropped');
+  assert.deepEqual(w.due(20_000).map((d) => [d.id, d.reason]), [['failed', '新会话的重发指令也未能送达']]);
+  assert.deepEqual(w.due(99_000).map((d) => d.id), [], 'a sent message has 90 s');
+  assert.deepEqual(w.due(100_000).map((d) => d.id), ['quiet']);
+  assert.deepEqual(w.due(179_000).map((d) => d.id), []);
+  assert.deepEqual(w.due(180_000).map((d) => d.id), ['late'], 'a message that never went in has three minutes');
+  assert.equal(w.pending('dropped'), false);
+});

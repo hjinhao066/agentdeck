@@ -27,12 +27,15 @@ function world(t, extra = {}) {
 }
 
 function boot(w) {
-  const sends = [], toasts = [], timers = [], restarts = [];
-  const app = { w, sends, toasts, timers, restarts, blockedList: null, now: Date.now() };
+  const sends = [], toasts = [], timers = [], restarts = [], alarms = [], resolved = [], barks = [];
+  const app = { w, sends, toasts, timers, restarts, alarms, resolved, barks, blockedList: null, now: Date.now() };
   const window = {
     MainCore: M, RestartResume: R,
-    ChatUI: { updateCard() {}, addCard() {}, turnsOf: () => [] },
+    ChatUI: { updateCard() {}, addCard() {}, turnsOf: () => [], readFooter: () => null },
+    // 待我处理 (sidebar and phone) and the urgent phone push, as the restart watch uses them.
+    AttentionUI: { alarm(item) { alarms.push(item); return { id: 'at-alarm-' + alarms.length }; }, resolveAlarm(id, note) { resolved.push({ id, note }); } },
     deck: {
+      restartAlarm: async (message, key) => { barks.push({ message, key }); return { ok: true }; },
       onTaskStart() {}, onTaskReview() {}, onTaskRework() {},
       restartManifestLoad: () => w.manifest,
       restartManifestSave(doc) { w.manifest = JSON.parse(JSON.stringify(doc)); return true; },
@@ -41,7 +44,7 @@ function boot(w) {
     },
   };
   const context = vm.createContext({ window, document: {}, console, Date: class extends Date { static now() { return app.now; } }, setTimeout(fn, ms) { const timer = { fn, ms, cancelled: false }; timers.push(timer); return timer; }, clearTimeout(timer) { if (timer) timer.cancelled = true; } });
-  const source = fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8').replace('  window.MainSession = {', '  window.__test = { setHost(h) { host = h; }, loadResumeManifest, flushResume, dispatch, pendingInstruction };\n  window.MainSession = {');
+  const source = fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8').replace('  window.MainSession = {', '  window.__test = { setHost(h) { host = h; }, loadResumeManifest, flushResume, dispatch, pendingInstruction, startup(id) { startupBrief = id; briefing = id; } };\n  window.MainSession = {');
   vm.runInContext(source, context);
   const host = {
     config: w.config, columns: () => w.config.columns,
@@ -358,4 +361,125 @@ test('a crew column with no task record (respawned under a new id, or its old re
   assert.equal(app.api.restartLaunch(w.col, true).mode, 'leave');
   w.col.modelSessionId = '11111111-1111-4111-8111-111111111111'; w.col.modelSessionOwner = w.col.id; w.col.modelSessionCwd = '';
   assert.equal(app.api.restartLaunch(w.col, false).mode, 'leave');
+});
+
+
+// 10-09 12:10: told to stop at a safe point before the 2.0.3 install, this session wrote its progress and ended
+// the turn. Three minutes later the no-receipt fallback closed the task (已结束，未提交回执) and at 12:15 the quit
+// did not park it, so the restart never continued it (ledger: 未开始) until the Captain woke it by hand at 16:12.
+test('a crew task closed by the no-receipt fallback after its safe-point progress is parked silently and continued after the restart', async (t) => {
+  const w = world(t, { task: { status: 'stopped', doneAt: 5, progress: '停在安全点：修复已推送 00e23a3，下一步写在 progress.md',
+    receipt: { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' } } });
+  w.config.mainSession.pending.push({ taskId: 'task', colId: 'worker', title: '修复登录', ts: 5, summary: '已结束，未提交回执', files: [], failed: '', source: 'fallback' });
+  let app = w.boot();
+  await app.api.parkForRestart();
+  assert.equal(app.sends.length, 0, 'nothing is typed into a session that has already stopped');
+  assert.equal(app.task().status, 'paused');
+  assert.equal(app.task().receipt.checkpoint, true);
+  assert.deepEqual(w.config.mainSession.pending.filter((p) => p.taskId === 'task'), [], 'its 已结束 notice is no longer what happened');
+  app = app.persist();
+  await app.resume();
+  const text = await app.deliver();
+  assert.match(text, /AgentDeck 刚重启/);
+  assert.match(text, /停在安全点：修复已推送 00e23a3/, 'its own progress is the last receipt');
+  assert.doesNotMatch(text, /最后回执：已结束，未提交回执/);
+  assert.equal(app.task().status, 'working');
+});
+
+// A restarted app with a Captain in the deck. Its restart notice is "sent" when typed into the terminal; the
+// Captain is back only when it works or runs a command after that.
+function withCaptain(t, extra = {}) {
+  const w = world(t, extra);
+  w.config.columns.unshift({ id: 'captain', isMain: true, title: '队长', cmd: 'claude --dangerously-skip-permissions --effort high', role: 'manual' });
+  const app = w.boot();
+  // What the Captain's own heartbeat asks of the page; nothing here is typed anywhere.
+  Object.assign(app.host, { userComposing: () => false, agentInForeground: async () => false, captainColumnVisible: () => false });
+  app.cap = () => w.config.columns.find((c) => c.id === 'captain');
+  app.tickAll = async (ms) => {
+    app.now += ms;
+    for (const [id, entry] of app.host.terms) app.api.onTick(id, entry);
+    await tick();
+  };
+  return app;
+}
+
+// 10-09 12:15:27: the restart notice went into the Captain's terminal while its Claude was still starting; the
+// Enter was lost, the text sat in the input box, and nobody knew until the user pressed Enter at 16:12:33.
+test('a Captain not back at work a minute after the restart is reported once on 待我处理, the phone and Bark, and ticked off when it is back', async (t) => {
+  const app = withCaptain(t, { task: { status: 'done', receipt: { summary: '做完了', files: [], failed: '', explicit: true, source: 'command' } } });
+  app.internals.startup('captain');
+  app.api.noteColdColumn(app.cap(), false, true);
+  const notice = app.sends.find((s) => s.col.id === 'captain');
+  assert.ok(notice, 'the restart notice is on its way');
+  await app.deliver(notice);
+  await app.tickAll(30_000);
+  assert.equal(app.alarms.length, 0);
+  await app.tickAll(31_000);
+  assert.equal(app.alarms.length, 1, 'one minute after the start the Captain has done nothing');
+  assert.match(app.alarms[0].title, /队长/);
+  assert.equal(app.alarms[0].session, 'captain');
+  assert.equal(app.barks.length, 1, 'an urgent phone push');
+  assert.match(app.barks[0].message, /队长/);
+  await app.tickAll(120_000);
+  assert.equal(app.alarms.length, 1, 'reported once');
+  assert.equal(app.barks.length, 1);
+  app.host.terms.get('captain').state = 'working';
+  await app.tickAll(1500);
+  assert.deepEqual(app.resolved.map((r) => r.id), ['at-alarm-1'], 'its item is ticked off once the Captain works');
+});
+
+test('a Captain that starts working on its notice is never reported', async (t) => {
+  const app = withCaptain(t, { task: { status: 'done', receipt: { summary: '做完了', files: [], failed: '', explicit: true, source: 'command' } } });
+  app.internals.startup('captain');
+  app.api.noteColdColumn(app.cap(), false, true);
+  await app.deliver(app.sends.find((s) => s.col.id === 'captain'));
+  await app.tickAll(3000);
+  app.host.terms.get('captain').state = 'working';
+  await app.tickAll(1500);
+  await app.tickAll(10 * 60_000);
+  assert.equal(app.alarms.length, 0);
+  assert.equal(app.barks.length, 0);
+});
+
+test('a crew session whose continue message went in but that never started is reported; one that works is not', async (t) => {
+  const w = world(t, { col: { cmd: 'claude' } });
+  const app = w.boot();
+  app.tickAll = async (ms) => {
+    app.now += ms;
+    for (const [id, entry] of app.host.terms) app.api.onTick(id, entry);
+    await tick();
+  };
+  const other = { id: 'worker-2', captainCrew: true, cmd: 'claude', role: 'manual' };
+  app.w.config.columns.push(other);
+  app.w.config.mainSession.tasks.push({ id: 'task-2', colId: 'worker-2', gen: 1, status: 'working', title: '写文档', startedAt: 1 });
+  app.host.terms.set('worker-2', { alive: true, state: 'done', lastScreen: '' });
+  app.internals.loadResumeManifest();
+  app.api.noteColdColumn(app.col(), false); app.api.noteColdColumn(other, false);
+  app.internals.flushResume(); await tick();
+  for (const send of app.sends.filter((s) => s.col.captainCrew)) await app.deliver(send);
+  app.host.terms.get('worker-2').state = 'working';
+  await app.tickAll(1500);
+  await app.tickAll(60_000);
+  assert.equal(app.alarms.length, 0);
+  await app.tickAll(31_000);
+  assert.equal(app.alarms.length, 1);
+  assert.match(app.alarms[0].title, /1 个队员/);
+  assert.match(app.alarms[0].detail, /（worker）/);
+  assert.doesNotMatch(app.alarms[0].detail, /worker-2/);
+  assert.equal(app.barks.length, 1);
+  assert.ok(w.config.mainSession.pending.some((p) => p.colId === 'worker' && p.source === 'restart-watch'), 'the 队长 hears it too and can wake it');
+});
+
+test('a 队长 replaced within the minute (a Relay, a cleared context) or one a Relay is still starting is not reported', async (t) => {
+  for (const change of ['replaced', 'relay']) {
+    const app = withCaptain(t, { task: { status: 'done', receipt: { summary: '做完了', files: [], failed: '', explicit: true, source: 'command' } } });
+    app.internals.startup('captain');
+    app.api.noteColdColumn(app.cap(), false, true);
+    await app.deliver(app.sends.find((s) => s.col.id === 'captain'));
+    if (change === 'replaced') app.w.config.mainSession.colId = 'captain-2';
+    else app.w.config.mainSession.relayStartup = { attempt: { colId: 'captain', deadline: app.now + 180_000 }, failures: [], stopped: false };
+    await app.tickAll(61_000);
+    assert.equal(app.alarms.length, 0, change);
+    assert.equal(app.barks.length, 0, change);
+  }
 });
