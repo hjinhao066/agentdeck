@@ -4679,6 +4679,8 @@ document.getElementById('bcastClose').onclick = () => closeBroadcast();
 const searchBar = document.getElementById('searchBar');
 const searchInput = document.getElementById('searchInput');
 const searchInfo = document.getElementById('searchInfo');
+searchInput.title = `列内搜索 (${keyLabel('search')})`;
+searchInput.setAttribute('aria-label', searchInput.title);
 let searchColId = null;
 const SEARCH_DECOR = {
   decorations: {

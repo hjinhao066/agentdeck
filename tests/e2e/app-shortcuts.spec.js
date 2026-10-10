@@ -56,7 +56,9 @@ test('the help page and tooltips name this platform\'s keys', async () => {
     await expect(help.locator('[data-shortcut="newColumn"]')).toHaveText('Ctrl+Shift+T');
     await expect(help.locator('[data-shortcut="column"]')).toHaveText('Alt+1…9');
     await expect(help.locator('[data-shortcut="prevColumn"]')).toHaveText('Alt+←');
-    await expect(help.locator('[data-shortcut="search"]').first()).toHaveText('Ctrl+Shift+F');
+    await expect(help.locator('[data-shortcut="search"]').first()).toHaveText('Ctrl+Shift+F 或 Ctrl+Alt+F');
+    await expect(help).toContainText('改按 Ctrl+Alt+F');
+    await expect(help).toContainText('关掉简繁切换');
     await expect(help.locator('[data-shortcut="crewMap"]')).toHaveText('Ctrl+Shift+M');
     await expect(help).toContainText('资源管理器');
     expect(await help.evaluate((n) => n.textContent.includes('⌘') || n.textContent.includes('⇧') || n.textContent.includes('访达'))).toBe(false);
@@ -100,6 +102,21 @@ test('new and close: ⌘N / ⌘W on a Mac, Ctrl+Shift+T / Ctrl+Shift+W on Window
   await page.keyboard.press(keys.close);
   await expect.poll(count).toBe(3);
   expect(await page.evaluate((id) => columns.some((c) => c.id === id), added)).toBe(false);
+});
+
+test('search in a terminal column: ⌘F on a Mac; Ctrl+Shift+F or Ctrl+Alt+F on Windows', async () => {
+  const bar = page.locator('#searchBar');
+  const presses = mac ? ['Meta+KeyF'] : ['Control+Shift+KeyF', 'Control+Alt+KeyF'];
+  for (const press of presses) {
+    await page.evaluate(() => { ChatUI.setMode('b', 'term'); focusColumnInput('b'); focusedId = 'b'; });
+    await expect(bar).toBeHidden();
+    await page.keyboard.press(press);
+    await expect(bar).toBeVisible();
+    await expect(page.locator('#searchInput')).toBeFocused();
+    await expect(page.locator('#searchInput')).toHaveAttribute('title', mac ? '列内搜索 (⌘F)' : '列内搜索 (Ctrl+Shift+F 或 Ctrl+Alt+F)');
+    await page.keyboard.press('Escape');
+    await expect(bar).toBeHidden();
+  }
 });
 
 test('search all conversations: ⌘K on a Mac, Ctrl+Shift+K on Windows', async () => {

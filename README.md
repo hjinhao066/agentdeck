@@ -84,7 +84,7 @@ keys of the platform you are on. The table lives in `app-shortcuts-core.js`.
 | --- | --- | --- |
 | New conversation (column) | ⌘N | Ctrl+Shift+T |
 | Close the column | ⌘W | Ctrl+Shift+W |
-| Search in the column | ⌘F | Ctrl+Shift+F |
+| Search in the column | ⌘F | Ctrl+Shift+F or Ctrl+Alt+F |
 | Broadcast to every column | ⌘B | Ctrl+Shift+B |
 | Crew map (终端架构图) | ⌘⇧B | Ctrl+Shift+M |
 | Jump to a column waiting for you | ⌘J | Ctrl+Shift+J |
@@ -98,9 +98,10 @@ keys of the platform you are on. The table lives in `app-shortcuts-core.js`.
 | Quick to-do (changeable) | ⌘⇧N | Ctrl+Shift+N |
 | Copy the terminal selection | ⌘C | Ctrl+Shift+C (or Ctrl+C with a selection) |
 
-Microsoft Pinyin's Simplified/Traditional switch also uses Ctrl+Shift+F; with it
-on, the input method takes the key first. Turn it off in the input method's
-settings (按键) to search with Ctrl+Shift+F.
+Microsoft Pinyin switches Simplified and Traditional Chinese with Ctrl+Shift+F
+by default and takes the key first, so search also answers to Ctrl+Alt+F (free in
+PowerShell, Claude Code and Windows Terminal; F3 is PowerShell's CharacterSearch).
+To use Ctrl+Shift+F, turn the switch off in the input method's settings (按键).
 
 ## Layout
 

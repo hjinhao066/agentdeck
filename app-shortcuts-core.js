@@ -20,13 +20,17 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  // win: the KeyboardEvent.code pressed with Ctrl+Shift; winAlt: pressed with Alt.
-  // Reading the physical key keeps Shift (Ctrl+Shift+/ is "?") and the keyboard
-  // layout from changing the shortcut.
+  // win: the KeyboardEvent.code pressed with Ctrl+Shift; winAlt: pressed with Alt;
+  // winCtrlAlt: a second key, pressed with Ctrl+Alt. Reading the physical key keeps
+  // Shift (Ctrl+Shift+/ is "?") and the keyboard layout from changing the shortcut.
+  // Search has the second key because Microsoft Pinyin switches Simplified and
+  // Traditional Chinese with Ctrl+Shift+F and takes that key first. Ctrl+Alt+F is
+  // free in PowerShell, Claude Code and Windows Terminal; F3 is not (PowerShell's
+  // CharacterSearch).
   const ACTIONS = {
     newColumn:   { mac: '⌘N', win: 'KeyT', name: '新对话' },
     closeColumn: { mac: '⌘W', win: 'KeyW', name: '关闭当前列' },
-    search:      { mac: '⌘F', win: 'KeyF', name: '列内搜索' },
+    search:      { mac: '⌘F', win: 'KeyF', winCtrlAlt: 'KeyF', name: '列内搜索' },
     broadcast:   { mac: '⌘B', win: 'KeyB', name: '广播输入' },
     crewMap:     { mac: '⌘⇧B', win: 'KeyM', name: '终端架构图' },
     help:        { mac: '⌘/', win: 'Slash', name: '快捷键说明' },
@@ -81,8 +85,16 @@
       for (const [action, a] of Object.entries(ACTIONS)) if (a.win === code) return { action };
       return null;
     }
-    // Alt alone: Ctrl+Alt is AltGr on many European layouts (AltGr+7 types {),
-    // and the number pad is left alone, where Alt+digits types a character code.
+    // Ctrl+Alt is AltGr on many European layouts (AltGr+F types [ in Hungarian):
+    // the second key counts only when it types nothing but its own letter.
+    if (e.ctrlKey && e.altKey && !e.shiftKey) {
+      for (const [action, a] of Object.entries(ACTIONS)) {
+        if (a.winCtrlAlt && a.winCtrlAlt === code && lower(e.key) === code.slice(3).toLowerCase()) return { action };
+      }
+      return null;
+    }
+    // Alt alone: AltGr (Ctrl+Alt) never gets here, and the number pad is left
+    // alone, where Alt+digits types a character code.
     if (e.altKey && !e.ctrlKey && !e.shiftKey) {
       const digit = /^Digit([1-9])$/.exec(code);
       if (digit) return { action: 'column', index: Number(digit[1]) - 1 };
@@ -113,21 +125,25 @@
   }
 
   // How the shortcut is written in tooltips and the help page: ⌘N on a Mac,
-  // Ctrl+Shift+T on Windows.
+  // Ctrl+Shift+T on Windows; both keys when there are two (Ctrl+Shift+F 或 Ctrl+Alt+F).
   function label(action, mac) {
     const a = ACTIONS[action];
     if (!a) return '';
     if (mac) return a.mac;
     if (a.winAlt) return 'Alt+' + WIN_KEY_NAMES[a.winAlt];
-    return 'Ctrl+Shift+' + (WIN_KEY_NAMES[a.win] || a.win.replace(/^Key/, ''));
+    const name = (code) => WIN_KEY_NAMES[code] || code.replace(/^Key/, '');
+    const main = 'Ctrl+Shift+' + name(a.win);
+    return a.winCtrlAlt ? `${main} 或 Ctrl+Alt+${name(a.winCtrlAlt)}` : main;
   }
 
-  // The Ctrl+Shift letters AgentDeck uses on Windows, as "Shift+X" → name, for 速记待办.
+  // The Ctrl+letters AgentDeck uses on Windows, as "Shift+X" / "Alt+X" → name, for 速记待办.
   function winLetters() {
     const out = {};
     for (const a of Object.values(ACTIONS)) {
       const m = /^Key([A-Z])$/.exec(a.win || '');
       if (m) out['Shift+' + m[1]] = a.name;
+      const alt = /^Key([A-Z])$/.exec(a.winCtrlAlt || '');
+      if (alt) out['Alt+' + alt[1]] = a.name;
     }
     return out;
   }

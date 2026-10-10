@@ -100,9 +100,30 @@ test('a focused control that declares the key keeps it (任务看板 cards move 
   assert.equal(action({ ...ev('ArrowRight', 'ArrowRight', { altKey: true }), target: { getAttribute: () => null } }, false), 'nextColumn');
 });
 
+test('Windows: search also answers to Ctrl+Alt+F, since Microsoft Pinyin takes Ctrl+Shift+F', () => {
+  const ca = { ctrlKey: true, altKey: true };
+  assert.equal(action(ev('f', 'KeyF', ca), false), 'search');
+  assert.equal(action(ev('F', 'KeyF', ca), false), 'search'); // Caps Lock
+  assert.equal(action(ev('F', 'KeyF', { ctrlKey: true, shiftKey: true }), false), 'search');
+  // AltGr is Ctrl+Alt: when the key types a character (AltGr+F is [ in Hungarian), it is typing.
+  assert.equal(S.match(ev('[', 'KeyF', ca), false), null);
+  // No other Ctrl+Alt key is ours (Windows Terminal switches tabs with Ctrl+Alt+1…9),
+  // nor Ctrl+Alt+Shift+F, nor F3 (PowerShell's CharacterSearch).
+  for (const [key, code] of [['t', 'KeyT'], ['1', 'Digit1'], ['ArrowLeft', 'ArrowLeft'], ['k', 'KeyK']]) {
+    assert.equal(S.match(ev(key, code, ca), false), null, code);
+  }
+  assert.equal(S.match(ev('F', 'KeyF', { ctrlKey: true, altKey: true, shiftKey: true }), false), null);
+  assert.equal(S.match(ev('F3', 'F3'), false), null);
+  // A Mac keeps ⌘F only.
+  assert.equal(S.match(ev('f', 'KeyF', ca), true), null);
+  // 速记待办 cannot take it either.
+  assert.match(Todo.problem('Mod+Alt+F', false), /列内搜索/);
+  assert.equal(Todo.problem('Mod+Alt+F', true), '');
+});
+
 test('labels follow the platform: ⌘N on a Mac, Ctrl+Shift+T on Windows', () => {
   const win = {
-    newColumn: 'Ctrl+Shift+T', closeColumn: 'Ctrl+Shift+W', search: 'Ctrl+Shift+F', broadcast: 'Ctrl+Shift+B',
+    newColumn: 'Ctrl+Shift+T', closeColumn: 'Ctrl+Shift+W', search: 'Ctrl+Shift+F 或 Ctrl+Alt+F', broadcast: 'Ctrl+Shift+B',
     crewMap: 'Ctrl+Shift+M', help: 'Ctrl+Shift+/', zoom: 'Ctrl+Shift+Enter', jumpWaiting: 'Ctrl+Shift+J',
     reload: 'Ctrl+Shift+R', searchAll: 'Ctrl+Shift+K', sidePane: 'Ctrl+Shift+\\',
     column: 'Alt+1…9', prevColumn: 'Alt+←', nextColumn: 'Alt+→',
