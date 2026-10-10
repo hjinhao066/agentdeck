@@ -683,7 +683,7 @@ function applyMotion(off, redraw) {
   });
   if (!redraw) return;
   saveConfig();
-  TaskBoardUI.redraw(); // the lights on its lines are drawn by script; the map's are all in the stylesheet
+  TaskBoardUI.redraw(); // the lights on its lines are drawn by script; the map's light (crew-fx.js) watches data-motion itself
 }
 document.querySelectorAll('[data-motion-toggle]').forEach((b) => b.addEventListener('click', () => { if (!systemCalm.matches && !battery.active()) applyMotion(!config.calmMotion, true); }));
 systemCalm.addEventListener('change', () => applyMotion(config.calmMotion, true));
