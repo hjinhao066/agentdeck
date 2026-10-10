@@ -103,6 +103,16 @@ by default and takes the key first, so search also answers to Ctrl+Alt+F (free i
 PowerShell, Claude Code and Windows Terminal; F3 is PowerShell's CharacterSearch).
 To use Ctrl+Shift+F, turn the switch off in the input method's settings (按键).
 
+Ctrl+V pastes the clipboard into a terminal on Windows and Linux (`paste-retry-core.js`).
+Clipboard history, Ditto and PixPin open the clipboard the moment it changes and a read
+made then comes back empty, so an empty read is tried again every 50 ms for about half a
+second, then Chromium's own paste is asked to deliver the text, and if that finds nothing
+either the column shows 「粘贴失败」 for a few seconds (the clipboard is never left unread
+in silence). A second Ctrl+V meanwhile adds nothing, and keys typed meanwhile follow the
+paste in order. Ctrl+Shift+V, right-click paste, dropped files and bracketed paste are
+unchanged. Electron 44's clipboard is asynchronous, so the deck reads it through the
+`clipboard:read` channel (`clipboard:read-sync` answers only a test profile).
+
 ## Layout
 
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in

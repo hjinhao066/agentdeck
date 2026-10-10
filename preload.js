@@ -37,6 +37,10 @@ contextBridge.exposeInMainWorld('deck', {
   // it. A failed write throws: a copy button must not report success for it.
   clipboardWrite: (t) => { if (ipcRenderer.sendSync('clipboard:write-sync', t) !== true) throw new Error('Clipboard write failed.'); },
   clipboardRead: () => ipcRenderer.sendSync('clipboard:read-sync') || '',
+  // The real read (Electron's clipboard is asynchronous): the text, or '' when it cannot be read.
+  clipboardReadText: async () => { const text = await ipcRenderer.invoke('clipboard:read'); return typeof text === 'string' ? text : ''; },
+  // Chromium's own paste into the focused field (it arrives as a paste event); true if it ran.
+  clipboardNativePaste: async () => (await ipcRenderer.invoke('clipboard:native-paste')) === true,
   // Resolve a dropped File's real filesystem path (File.path is deprecated).
   getPathForFile: (file) => webUtils.getPathForFile(file),
   // Retired bridge: main only removes old spools; it never writes new ones.

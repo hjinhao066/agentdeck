@@ -2195,9 +2195,15 @@ function buildColumn(col, isFresh) {
       // any future bindings keep their behavior.
       if (e.type === 'keydown' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
           (e.key === 'v' || e.key === 'V' || e.code === 'KeyV')) {
-        const text = window.deck.clipboardRead();
-        if (text) term.paste(text);
-        else pasteImageAsPath(); // clipboard holds an image (screenshot) → paste its temp-file path
+        // Windows/Linux: an empty clipboard is read again for half a second (other
+        // programs read it the moment it changes), then Chromium's own paste, then a
+        // visible hint. A Mac keeps the single read. An image (screenshot) becomes
+        // its temp-file path either way.
+        if (env.platform !== 'darwin') ctrlV.press();
+        else {
+          const text = window.deck.clipboardRead();
+          if (text) term.paste(text); else pasteImageAsPath();
+        }
         e.preventDefault();
         return false;
       }
@@ -2365,7 +2371,10 @@ function buildColumn(col, isFresh) {
       // While AgentDeck types a receipt or a task into this box (up to 3 s
       // while the agent keeps drawing), your keys wait and follow right after its Enter. The wheel,
       // pointer moves and the terminal's own replies do not wait (ChatCore.passesInputHold).
-      term.onData((d) => { if (entry.injecting && !ChatCore.passesInputHold(d)) held.push(d); else forwardInput(d); });
+      term.onData((d) => {
+        if (ctrlV.hold(d)) return; // a Ctrl+V is still waiting for the clipboard: this key follows it
+        if (entry.injecting && !ChatCore.passesInputHold(d)) held.push(d); else forwardInput(d);
+      });
     }
     term.onResize(({ cols, rows }) => window.deck.ptyResize(col.id, cols, rows));
     if (deckEl.firstElementChild === wrap) { if (!ChatUI.focusInput(col.id)) term.focus(); focusedId = col.id; } // focus leftmost on boot
@@ -2402,6 +2411,45 @@ function buildColumn(col, isFresh) {
       if (p) { term.focus(); window.deck.ptyInput(col.id, shellQuote(p) + ' '); }
       return !!p;
     }).catch(() => false);
+    // Ctrl+V (see the key handler above): the retry ladder lives in paste-retry-core.js.
+    const pasteHint = document.createElement('div');
+    pasteHint.className = 'paste-hint';
+    pasteHint.setAttribute('role', 'status');
+    pasteHint.hidden = true;
+    termEl.appendChild(pasteHint);
+    let pasteHintTimer;
+    // Chromium's own paste, asked of the main process: the text it delivers comes back as
+    // the page's paste event. It is taken here (not left to xterm) so the core pastes it in
+    // order with the keys that waited; an image or an empty clipboard is left alone.
+    const nativePaste = () => new Promise((resolve) => {
+      let timer;
+      const onPaste = (ev) => {
+        const text = ev.clipboardData ? ev.clipboardData.getData('text/plain') : '';
+        if (!text) return;
+        ev.preventDefault(); ev.stopPropagation();
+        finish(text);
+      };
+      const finish = (text) => { clearTimeout(timer); termEl.removeEventListener('paste', onPaste, true); resolve(text); };
+      termEl.addEventListener('paste', onPaste, true);
+      timer = setTimeout(() => finish(''), 300);
+      term.focus();
+      window.deck.clipboardNativePaste().then((ran) => { if (!ran) finish(''); }, () => finish(''));
+    });
+    const ctrlV = PasteRetryCore.create({
+      readText: () => window.deck.clipboardReadText(),
+      readImage: pasteImageAsPath,
+      pasteText: (text) => term.paste(text),
+      pasteNative: nativePaste,
+      onFail: () => {
+        pasteHint.textContent = '粘贴失败：剪贴板读不到内容（可能被别的程序占用），请再按一次 Ctrl+V';
+        pasteHint.hidden = false;
+        clearTimeout(pasteHintTimer);
+        pasteHintTimer = setTimeout(() => { pasteHint.hidden = true; }, 5000);
+      },
+      sendHeld: forwardInput,
+      passes: ChatCore.passesInputHold,
+    });
+    disposers.push(() => { clearTimeout(pasteHintTimer); ctrlV.cancel(); });
     termEl.addEventListener('paste', (e) => {
       const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
       if (!items.some((it) => it.kind === 'file' && /^image\//.test(it.type))) return;

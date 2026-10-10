@@ -1,0 +1,155 @@
+const { test, expect, _electron: electron } = require('@playwright/test');
+const closeElectron = require('./fixtures/close-electron');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+// Ctrl+V in a terminal column when the clipboard reads empty. Another program (clipboard
+// history, Ditto, PixPin) has the clipboard open for a moment each time it changes, and a
+// read made then comes back empty. A test profile keeps its own in-memory clipboard, so the
+// busy moment is simulated where the read happens: the main process answers 'clipboard:read'
+// with '' until a deadline. The key must read again for about half a second, then ask
+// Chromium to paste, then say so. Chromium's paste is a stand-in that delivers TEXT as a paste
+// event (the real one reads the user's clipboard, which a test never touches).
+// The program in the column writes down every byte it receives.
+test.skip(process.platform === 'darwin', 'a Mac keeps the single clipboard read');
+test.describe.configure({ mode: 'serial' });
+
+const ROOT = path.resolve(__dirname, '../..');
+const ID = 'paste';
+const TEXT = 'PASTE-RETRY-8842';
+let app, page, profile, keyLog;
+
+const received = () => (fs.existsSync(keyLog) ? Buffer.from(fs.readFileSync(keyLog, 'utf8').replace(/\s+/g, ''), 'hex').toString('latin1') : '');
+const count = (text) => received().split(text).length - 1;
+const setClipboard = (text) => page.evaluate((t) => window.deck.clipboardWrite(t), text);
+// The main-process stand-ins are installed by the first test that needs them, so the first test
+// runs against the real handlers.
+const installStandIns = () => app.evaluate(({ ipcMain }, text) => {
+  if (globalThis.__standIns) return;
+  globalThis.__standIns = true;
+  globalThis.__clipBusyUntil = 0;
+  globalThis.__clip = '';
+  globalThis.__nativeCalls = 0;
+  globalThis.__nativeWorks = false;
+  ipcMain.on('clipboard:write-sync', (e, t) => { if (typeof t === 'string') globalThis.__clip = t; });
+  ipcMain.removeHandler('clipboard:read');
+  ipcMain.handle('clipboard:read', () => (Date.now() < globalThis.__clipBusyUntil ? '' : globalThis.__clip));
+  ipcMain.removeHandler('clipboard:native-paste');
+  ipcMain.handle('clipboard:native-paste', (e) => {
+    globalThis.__nativeCalls++;
+    if (!globalThis.__nativeWorks) return true; // Chromium ran, but the clipboard gave it nothing
+    e.sender.executeJavaScript(`(() => {
+      const data = new DataTransfer(); data.setData('text/plain', ${JSON.stringify(text)});
+      document.querySelector('.xterm-helper-textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    })()`);
+    return true;
+  });
+}, TEXT);
+const busyFor = (ms) => app.evaluate((_, n) => { globalThis.__clipBusyUntil = Date.now() + n; }, ms);
+const nativeWorks = (on) => app.evaluate((_, v) => { globalThis.__nativeWorks = v; globalThis.__nativeCalls = 0; }, on);
+const nativeCalls = () => app.evaluate(() => globalThis.__nativeCalls);
+const hintVisible = () => page.evaluate((id) => { const h = terms.get(id).el.querySelector('.paste-hint'); return !!h && !h.hidden && h.textContent; }, ID);
+const ctrlVInPage = () => page.evaluate((id) => {
+  terms.get(id).el.querySelector('textarea').dispatchEvent(new KeyboardEvent('keydown', { key: 'v', code: 'KeyV', ctrlKey: true, bubbles: true, cancelable: true }));
+}, ID);
+
+test.beforeAll(async () => {
+  profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-paste-retry-'));
+  keyLog = path.join(profile, 'keys.log');
+  const cmd = `node "${path.join(__dirname, 'fixtures', 'key-recorder.js')}"`;
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, fitWindow: true, fitCols: 2, globalViewMode: 'term',
+    columns: [{ id: ID, title: 'Key recorder', cmd, cwd: profile, role: 'manual', view: 'term' }] }));
+  const env = { ...process.env, AGENTDECK_TEST_KEY_LOG: keyLog };
+  for (const key of Object.keys(env)) if ((key.startsWith('AGENTDECK_') && key !== 'AGENTDECK_TEST_KEY_LOG') || key === 'ELECTRON_RUN_AS_NODE') delete env[key];
+  app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
+  page = await app.firstWindow();
+  // the recorder has drawn its first line: it is running and reading keys
+  await expect.poll(() => page.evaluate((id) => {
+    if (typeof terms === 'undefined' || !terms.get(id)) return false;
+    const b = terms.get(id).term.buffer.active;
+    for (let y = 0; y < b.length; y++) if ((b.getLine(y)?.translateToString(true) || '').includes('COPY-ME-4721')) return true;
+    return false;
+  }, ID), { timeout: 60000 }).toBe(true);
+  await page.evaluate((id) => terms.get(id).term.focus(), ID);
+  await expect.poll(async () => { await page.keyboard.press('x'); return received().includes('x'); }, { timeout: 15000 }).toBe(true);
+});
+test.afterAll(async () => {
+  if (app) await closeElectron(app);
+  if (profile) fs.rmSync(profile, { recursive: true, force: true });
+});
+test.beforeEach(async () => {
+  if (await app.evaluate(() => !!globalThis.__standIns)) { await busyFor(0); await nativeWorks(false); }
+  await page.evaluate((id) => { const hint = terms.get(id).el.querySelector('.paste-hint'); if (hint) hint.hidden = true; terms.get(id).term.focus(); }, ID);
+  fs.writeFileSync(keyLog, '');
+});
+
+test('the clipboard is free: Ctrl+V pastes the text once, with no second try', async () => {
+  await setClipboard(TEXT);
+  await page.keyboard.press('Control+V');
+  await expect.poll(() => count(TEXT)).toBe(1);
+  await page.waitForTimeout(800);
+  expect(count(TEXT)).toBe(1);
+  expect(await hintVisible()).toBe(false);
+});
+
+test('busy for a moment: the paste lands once, and a second Ctrl+V meanwhile adds nothing', async () => {
+  await installStandIns();
+  await setClipboard(TEXT);
+  await busyFor(300);
+  await page.keyboard.press('Control+V');
+  await ctrlVInPage(); // pressed again while the first one still waits
+  await expect.poll(() => count(TEXT), { timeout: 5000 }).toBe(1);
+  await page.waitForTimeout(800);
+  expect(count(TEXT)).toBe(1);
+  expect(await nativeCalls()).toBe(0);
+  expect(await hintVisible()).toBe(false);
+});
+
+test('a key typed while Ctrl+V waits follows the paste', async () => {
+  await installStandIns();
+  await setClipboard(TEXT);
+  await busyFor(300);
+  await page.keyboard.press('Control+V');
+  await page.keyboard.type('qz');
+  await expect.poll(() => received().length, { timeout: 5000 }).toBe(TEXT.length + 2);
+  expect(received()).toBe(`${TEXT}qz`);
+});
+
+test('busy the whole time and Chromium pastes: the fallback pastes once', async () => {
+  await installStandIns();
+  await setClipboard(TEXT);
+  await nativeWorks(true);
+  await busyFor(60000);
+  await page.keyboard.press('Control+V');
+  await expect.poll(() => count(TEXT), { timeout: 5000 }).toBe(1);
+  await page.waitForTimeout(800);
+  expect(count(TEXT)).toBe(1);
+  expect(await nativeCalls()).toBe(1);
+  expect(await hintVisible()).toBe(false);
+});
+
+test('busy the whole time and Chromium cannot paste either: a hint in the column, typed keys kept', async () => {
+  await installStandIns();
+  await setClipboard(TEXT);
+  await busyFor(60000);
+  await page.keyboard.press('Control+V');
+  await page.keyboard.type('k');
+  await expect.poll(hintVisible, { timeout: 5000 }).toContain('粘贴失败');
+  expect(await nativeCalls()).toBe(1);
+  expect(received()).toBe('k');
+  // the clipboard is free again: the next press pastes
+  await busyFor(0);
+  await page.keyboard.press('Control+V');
+  await expect.poll(() => count(TEXT), { timeout: 5000 }).toBe(1);
+});
+
+test('an empty clipboard that stays empty ends in the same hint and no stray input', async () => {
+  await installStandIns();
+  await setClipboard('');
+  await page.keyboard.press('Control+V');
+  await expect.poll(hintVisible, { timeout: 5000 }).toContain('粘贴失败');
+  await page.waitForTimeout(300);
+  expect(received()).toBe('');
+});

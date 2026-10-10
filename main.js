@@ -1536,7 +1536,22 @@ app.whenReady().then(async () => {
     if (tudArg) testClipboard = text; else clipboard.writeText(text);
     e.returnValue = true;
   });
-  onMain('clipboard:read-sync', (e) => { e.returnValue = tudArg ? testClipboard : clipboard.readText(); });
+  // Electron 44's clipboard reads are asynchronous (readText() returns a Promise), so a
+  // synchronous reply cannot carry the text: only a test profile has an answer here. The
+  // deck reads through 'clipboard:read' below. An unreadable clipboard answers '' (a
+  // read can fail while another program holds the clipboard open), never an error.
+  onMain('clipboard:read-sync', (e) => { e.returnValue = tudArg ? testClipboard : ''; });
+  handleMain('clipboard:read', async () => {
+    if (tudArg) return testClipboard;
+    try { const text = await clipboard.readText(); return typeof text === 'string' ? text : ''; } catch (_) { return ''; }
+  });
+  // Ctrl+V found nothing to read: let Chromium paste into the focused field itself, which
+  // reaches the page as an ordinary paste event. A test profile reads no real clipboard.
+  handleMain('clipboard:native-paste', (e) => {
+    if (tudArg || !e.sender || e.sender.isDestroyed()) return false;
+    e.sender.paste();
+    return true;
+  });
   onMain('env-info-sync', (e) => { e.returnValue = {
     platform: process.platform, home: HOME, version: app.getVersion(),
     build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),
