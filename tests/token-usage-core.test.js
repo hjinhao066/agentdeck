@@ -180,7 +180,7 @@ test('names: model ids read as people say them', () => {
   assert.equal(C.providerOf('codex'), 'openai');
 });
 
-test('daily sums and a day\'s stack: biggest model at the bottom, models without a colour merged into one 其他模型 segment placed by size', () => {
+test('daily sums and a day\'s stack: biggest model on top (the order the legend and the tooltip read), models without a colour merged into one 其他模型 segment placed by size', () => {
   const ts = new Date(2026, 9, 8, 12).getTime();
   const rec = (source, model, input) => ({ source, model, ts, input, output: 0, cacheRead: 0, cacheWrite: 0 });
   const days = C.dailySums([rec('claude', 'a', 10), rec('claude', 'a', 5), rec('codex', 'b', 40), rec('claude', 'c', 3), rec('claude', 'd', 2), { ...rec('claude', 'old', 9), ts: ts - 30 * 86400000 }], '2026-10-01', '2026-10-08');
@@ -190,11 +190,12 @@ test('daily sums and a day\'s stack: biggest model at the bottom, models without
   assert.equal(C.dayTotal(day), 60);
   assert.deepEqual(C.providerTotals(day), { anthropic: 20, openai: 40, google: 0, other: 0 });
   const segs = C.stack(day, { 'codex:b': 'green', 'claude:a': 'rust' });
-  assert.deepEqual(segs.map((s) => [s.key, s.total]), [['codex:b', 40], ['claude:a', 15], ['other', 5]]);
-  assert.deepEqual(segs[2].members, ['claude:c', 'claude:d']);
-  // a merged 其他模型 bigger than a coloured model sits below it
+  // bottom to top: smallest first, so the biggest is the top segment under the total
+  assert.deepEqual(segs.map((s) => [s.key, s.total]), [['other', 5], ['claude:a', 15], ['codex:b', 40]]);
+  assert.deepEqual(segs[0].members, ['claude:c', 'claude:d']);
+  // a merged 其他模型 bigger than a coloured model sits above it
   const big = C.stack(day, { 'codex:b': 'green', 'claude:d': 'sky' });
-  assert.deepEqual(big.map((s) => s.key), ['codex:b', 'other', 'claude:d']);
+  assert.deepEqual(big.map((s) => s.key), ['claude:d', 'other', 'codex:b']);
 });
 
 test('colours: six models get their own, picked by size with each provider preferring its family; the rest are 其他模型; a colour follows its model', () => {

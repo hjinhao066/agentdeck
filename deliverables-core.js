@@ -133,6 +133,20 @@
     return out;
   }
 
+  // A receipt card's files as the user reads them: the results to look at, in
+  // the receipt's order, and the code (scripts, tests, data, logs: the process
+  // types) that the card folds behind one line. Only the type decides here, so
+  // a screenshot in a scratch folder is still shown.
+  function splitReceiptFiles(files, rules) {
+    const results = [], code = [];
+    for (const raw of files || []) {
+      const path = String(raw);
+      const name = segments(path).pop() || '';
+      (rules.process.includes(C.extOf(name)) ? code : results).push(path);
+    }
+    return { results, code };
+  }
+
   function normalizeItem(raw) {
     if (!raw || typeof raw !== 'object' || typeof raw.path !== 'string' || typeof raw.key !== 'string') return null;
     const item = {
@@ -154,7 +168,20 @@
     const same = s.rules === key;
     const items = (Array.isArray(s.items) ? s.items : []).map(normalizeItem).filter((i) => i && isDeliverable(i.path, rules, i.from === 'receipt'));
     const scanned = same && Array.isArray(s.scanned) ? s.scanned.filter((id) => typeof id === 'string' && id.length <= 160) : [];
-    return { v: 1, rules: key, scanned: [...new Set(scanned)], items };
+    return { v: 1, rules: key, scanned: [...new Set(scanned)], items, ...(Number.isFinite(s.seen) && s.seen > 0 ? { seen: s.seen } : {}) };
+  }
+
+  // The head button's number: the files that came in since the panel last
+  // showed them (index.seen: the newest time it showed). An index without the
+  // mark (saved by an older version, or empty) counts from what it holds, or
+  // from now, so nothing already there reads as new.
+  const newest = (items) => items.reduce((m, i) => Math.max(m, i.ts || 0), 0);
+  function markSeen(index, now = Date.now()) {
+    const seen = Math.max(index.seen || 0, newest(index.items)) || now;
+    return seen === index.seen ? index : { ...index, seen };
+  }
+  function unseenCount(index) {
+    return index.seen ? index.items.filter((i) => i.ts > index.seen).length : 0;
   }
 
   // Fold what was just found into the index: one item per path (Windows paths
@@ -210,6 +237,6 @@
 
   return {
     DEFAULT_RULES, parseList, normalizeRules, isDefault, rulesKey, isDeliverable, guessProject, trimProse,
-    fromReplies, fromReceipts, normalizeIndex, mergeIndex, dayLabel, byDay,
+    fromReplies, fromReceipts, splitReceiptFiles, normalizeIndex, mergeIndex, markSeen, unseenCount, dayLabel, byDay,
   };
 });

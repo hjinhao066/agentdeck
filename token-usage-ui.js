@@ -1,8 +1,8 @@
 // Token 用量 view, inside the 任务看板 page (its fourth tab): how many tokens
 // this machine's agents burned each day, per model. Laid out like OpenRouter's
 // usage page: the range total on top with the split by provider, then one
-// stacked column per day (the day's biggest model at the bottom, smaller ones
-// above, the day's total on the cap), a legend, and the chosen day's table
+// stacked column per day (the day's biggest model on top, as the legend and
+// the tooltip list it first, smaller ones below, the day's total on the cap), a legend, and the chosen day's table
 // with every model's input / output / cache numbers. Hovering a column shows
 // that day's models; a click (or ←/→ on the chart) picks the day for the
 // table. Numbers come from window.deck.tokenUsage (token-usage-main.js); all

@@ -75,6 +75,16 @@ async function shoot(name) {
   await page.screenshot({ path: path.join(dir, name + '.png'), animations: 'disabled', scale: 'css' });
 }
 
+// One part of the page, where it stands (the receipt cards sit up the conversation).
+async function shootPart(name, part) {
+  if (!shots) return;
+  const dir = path.join(shots, stage);
+  fs.mkdirSync(dir, { recursive: true });
+  await park();
+  await part.scrollIntoViewIfNeeded();
+  await part.screenshot({ path: path.join(dir, name + '.png'), animations: 'disabled' });
+}
+
 test('the panel lists the result files newest first by day, and leaves process files out', async () => {
   await expect(panel()).toBeVisible();
   await expect(toggle()).toHaveAttribute('aria-pressed', 'true');
@@ -205,6 +215,66 @@ test('the panel folds away and stays folded; the reading column then has the roo
   await expect(panel()).toBeVisible();
   expect(await page.evaluate(() => config.chatDeliverablesOpen)).toBe(true);
   await expect(toggle()).toHaveAttribute('title', '收起交付文件');
+});
+
+// A receipt card in the conversation: the files to look at first, code, tests,
+// data and logs folded behind one line that opens them in place.
+test('a receipt card shows its results first and folds the code files behind 另有 N 个代码文件', async () => {
+  await page.evaluate((i) => document.querySelectorAll(`.column[data-col-id="${i}"] .task-run[aria-expanded="false"]`).forEach((b) => b.click()), CAPTAIN);
+  const card = col().locator('.task-turn[data-turn="k-login"] .task-card');
+  await expect(card).toBeVisible();
+  const files = card.locator('.task-files').first();
+  // the description and both screenshots, in the receipt's order; no code among them
+  const shown = files.locator(':scope > .att');
+  await expect(shown).toHaveCount(3);
+  expect(await shown.evaluateAll((n) => n.map((x) => x.title.split(/[\\/]/).pop()))).toEqual(['登录流程说明.md', 'home-dark.png', 'home-light.png']);
+  const more = files.locator('.task-code-toggle');
+  await expect(more).toHaveText('另有 2 个代码文件');
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  const code = files.locator('.task-code');
+  await expect(code).toBeHidden();
+  await shootPart('receipt-files-folded-dark', card);
+  await more.click();
+  await expect(code).toBeVisible();
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  expect(await code.locator('.att').evaluateAll((n) => n.map((x) => x.title.split(/[\\/]/).pop()))).toEqual(['app.js', 'run.log']);
+  await shootPart('receipt-files-open-dark', card);
+  // it closes from the keyboard
+  await more.focus();
+  await page.keyboard.press('Enter');
+  await expect(code).toBeHidden();
+  // a receipt with nothing but results has no fold line
+  await expect(col().locator('.task-turn[data-turn="k-brand"] .task-code-toggle')).toHaveCount(0);
+});
+
+// The number on the head button: only files that came in while the panel was folded away.
+test('the head button counts the files that came in while the panel was away, then clears', async () => {
+  // everything already there has been shown: no number
+  await panel().getByRole('button', { name: '收起交付文件' }).click();
+  await expect(panel()).toBeHidden();
+  await expect(toggle().locator('.dlv-badge')).toBeHidden();
+  await expect(toggle()).toHaveAttribute('title', '交付文件');
+  const fresh = path.join(out, '客户门户', '上线验收.pdf');
+  fs.writeFileSync(fresh, '%PDF-1.4\n');
+  await page.evaluate(({ id, file }) => {
+    const c = columns.find((x) => x.id === id);
+    c.lastReceipt = { summary: '上线验收单做好了。', files: [file, file.replace(/上线验收\.pdf$/, 'check.js')], explicit: true, source: 'command', ts: Date.now() };
+    ChatDeliverables.refresh();
+  }, { id: LOGIN, file: fresh });
+  await expect(toggle().locator('.dlv-badge')).toHaveText('1');
+  await expect(toggle()).toHaveAttribute('title', '交付文件（1 个新的）');
+  await shootPart('head-badge-new-dark', col().locator('.col-head'));
+  // opening the panel shows it; folded again, the number is gone and stays gone after a reload of the index
+  await toggle().click();
+  await expect(panel()).toBeVisible();
+  await expect(row('上线验收.pdf')).toHaveCount(1);
+  await panel().getByRole('button', { name: '收起交付文件' }).click();
+  await expect(toggle().locator('.dlv-badge')).toBeHidden();
+  await page.evaluate(() => ChatDeliverables.refreshNow());
+  await expect(toggle().locator('.dlv-badge')).toBeHidden();
+  expect(await page.evaluate(() => config.chatDeliverables.seen)).toBeGreaterThan(0);
+  await toggle().click();
+  await expect(panel()).toBeVisible();
 });
 
 test('new receipts and replies join the list; the index is saved with what it read', async () => {
@@ -347,8 +417,8 @@ test('a narrow window keeps the conversation whole: the panel slides over it on 
   await page.setViewportSize({ width: 1100, height: 760 });
   await expect(panel()).toBeHidden();
   await expect(toggle()).toHaveAttribute('aria-pressed', 'false');
-  // the button says how many files there are
-  await expect(toggle().locator('.dlv-badge')).toHaveText(/^\d+$/);
+  // nothing came in since the panel last showed its files: no number on the button
+  await expect(toggle().locator('.dlv-badge')).toBeHidden();
   const chatW = await col().locator('.chat-scroll').evaluate((c) => c.getBoundingClientRect().width);
   await toggle().click();
   await expect(panel()).toBeVisible();

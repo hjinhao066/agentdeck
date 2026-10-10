@@ -101,7 +101,16 @@
     panel.chat.classList.toggle('dlv-open', open);
     panel.chat.classList.toggle('dlv-docked', panel.docked);
     panel.aside.classList.toggle('overlay', !panel.docked);
-    label(panel.toggle, open ? '收起交付文件' : '交付文件' + (panel.items.length ? `（${panel.items.length} 个）` : ''));
+    // The number on the button: files that came in while the panel was away.
+    const index = host.config.chatDeliverables;
+    if (open && index) {
+      const next = D.markSeen(index);
+      if (next !== index) { host.config.chatDeliverables = next; host.saveConfig(); }
+    }
+    const fresh = index ? D.unseenCount(host.config.chatDeliverables) : 0;
+    panel.badge.textContent = fresh > 99 ? '99+' : String(fresh);
+    panel.badge.hidden = !fresh;
+    label(panel.toggle, open ? '收起交付文件' : '交付文件' + (fresh ? `（${fresh} 个新的）` : ''));
     panel.toggle.setAttribute('aria-pressed', String(open));
     panel.toggle.setAttribute('aria-expanded', String(open));
   }
@@ -155,7 +164,8 @@
       found.push(...D.fromReplies(turns, { text: shownText(turns), findLinks: host.findLinks, rules, colId: main.id, chatId: main.id }));
     }
     found.push(...D.fromReceipts(receipts(main), rules));
-    const next = D.mergeIndex(index, found, { home: host.home, projects: projectNames() });
+    let next = D.mergeIndex(index, found, { home: host.home, projects: projectNames() });
+    if (!next.seen) next = D.markSeen(next);   // the first count: what is already there is not new
     if (JSON.stringify(next) !== JSON.stringify(host.config.chatDeliverables)) {
       host.config.chatDeliverables = next;
       host.saveConfig();
@@ -186,8 +196,6 @@
     const at = document.activeElement && body.contains(document.activeElement) ? document.activeElement.dataset.fk : '';
     const top = body.scrollTop;
     panel.count.textContent = String(items.length);
-    panel.badge.textContent = items.length > 99 ? '99+' : String(items.length);
-    panel.badge.hidden = !items.length;
     body.textContent = '';
     if (!items.length) {
       const empty = el('div', 'dlv-empty');
