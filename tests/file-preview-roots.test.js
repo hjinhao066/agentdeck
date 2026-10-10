@@ -665,7 +665,8 @@ test('the phone route uses the Settings folders, the default until Settings hold
 });
 
 test('a Mac temp path under /private is not a .private folder; a private folder anywhere below still is', () => {
-  for (const name of ['/private/tmp/agentdeck/report.md', '/private/var/folders/l8/x/T/agentdeck-preview-1/reports/review.md'])
+  for (const name of ['/private/tmp/agentdeck/report.md', '/private/var/folders/l8/x/T/agentdeck-preview-1/reports/review.md',
+    '/private/var/folders/l8/x/T/TemporaryItems/NSIRD_screencaptureui_a1/Screenshot.png'])
     assert.equal(secretPath(name, { home: '/Users/me', platform: 'darwin' }), false, name);
   for (const name of ['/private/tmp/p/.private/login.md', '/private/tmp/p/private/notes.md', '/Users/me/p/private/notes.md'])
     assert.equal(secretPath(name, { home: '/Users/me', platform: 'darwin' }), true, name);
