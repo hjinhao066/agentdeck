@@ -23,6 +23,7 @@ AgentDeck 仓库里直接带着几处第三方图标和代码（不是通过 `np
 - 版权行（来自 LICENSE）：
   - `Copyright (c) 2026 Lucide Icons and Contributors`
   - Feather 派生部分：`Copyright (c) 2013-present Cole Bemis`
+  - 图标路径取自的历史版本（lucide-static 0.100.0 至 0.500.0 包内的 LICENSE，三者相同）的版权行：`Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.`
 - Feather 派生图标（LICENSE 列表里的，适用其中的 MIT 条款）：chevron-left、chevron-right、chevron-up、chevron-down、x、plus、minus、check、help-circle、more-horizontal、sidebar（即 panel-left）、arrow-up、terminal、code。
 - 路径核对：上面列出的图标（unlink 除外）与 lucide-static 历史版本中的同名图标逐字一致，核对范围为 lucide-static 的 14 个版本，从 0.100.0 到 1.55.0。齿轮 `settings` 的路径只与 0.500.0 及更早版本一致，新版已改画。
 
