@@ -182,11 +182,15 @@
   }
 
   const host = (name) => String(name || '').trim().toLowerCase().replace(/\.(local|lan)$/, '');
-  // dispatch_claim.owner is os.hostname() of the machine that claimed the card.
+  // dispatch_claim.owner is os.hostname() of the machine that claimed the card: the card ran there, and its files are there.
+  function ownerMachine(card, machines) {
+    const owner = card && card.dispatch_claim && card.dispatch_claim.owner;
+    return owner && machines.find((m) => m.hostname && host(m.hostname) === host(owner)) || null;
+  }
   function ownerLabel(card, machines) {
     const owner = card && card.dispatch_claim && card.dispatch_claim.owner;
     if (!owner) return '';
-    const match = machines.find((m) => m.hostname && host(m.hostname) === host(owner));
+    const match = ownerMachine(card, machines);
     return match ? match.label : String(owner).slice(0, 40);
   }
 
@@ -602,7 +606,7 @@
     return `${name} 没有记下这条（HTTP ${result.status}）。`;
   }
 
-  return { cleanTodos, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
+  return { cleanTodos, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, rowHealth, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 

@@ -1567,7 +1567,7 @@
   function renderBoard() {
     const sources = machines.filter((m) => m.cards);
     const cards = Core.mergeCards(sources).filter((card) => !card.archived);
-    const known = machines.map((m) => ({ label: m.label, hostname: m.hostname || m.meta.hostname }));
+    const known = machines.map((m) => ({ id: m.id, label: m.label, hostname: m.hostname || m.meta.hostname }));
     if (!changed($('projects'), [boardFilter, cards, known, machines.map((m) => [m.state, !!m.cards])])) return;
     const missing = machines.filter((m) => !m.cards);
     $('board-sources').textContent = !sources.length ? '还没有读到任何一台电脑的看板。'
@@ -1601,7 +1601,9 @@
       heading.append(node('h2', '', project), node('span', '', tasks.length + ' 项'));
       section.append(heading);
       for (const task of tasks.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || urgentTask(b) - urgentTask(a))) {
-        const card = node('article', 'task-card'); card.dataset.status = task.status; card.dataset.machine = task.seenOn || '';
+        // A path in the card opens from the computer that claimed it; an unclaimed card, from the copy shown.
+        const ran = Core.ownerMachine(task, known);
+        const card = node('article', 'task-card'); card.dataset.status = task.status; card.dataset.machine = ran ? ran.id : task.seenOn || '';
         card.style.setProperty('--lane', String(used.findIndex(([status]) => status === task.status) + 1 || 1));
         const top = node('div', 'task-top');
         if (urgentTask(task)) { card.dataset.priority = 'high'; top.append(priorityMark()); }
