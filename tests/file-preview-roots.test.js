@@ -229,6 +229,9 @@ test('an NTFS data stream is never read, and "a.md:12" on Windows is always a.md
   assert.deepEqual([line.text, line.line], ['游乐场报告', 12]);
   const column = await s.read(report + ':12:3', { texts: s.named(report) });
   assert.deepEqual([column.text, column.line], ['游乐场报告', 12]);
+  // a receipt that names a.md:40 names a.md
+  assert.equal((await s.read(report + ':12', { texts: s.named(report + ':40') })).text, '游乐场报告');
+  assert.equal((await s.read(report, { texts: s.named(report + ':40:2') })).text, '游乐场报告');
   // names Windows trims: ".env." would open .env
   s.put('aiproject/Playground/.env', 'SECRET');
   for (const raw of [s.at('aiproject/Playground/.env.'), report + '.', report + ' . ', s.at('aiproject/Playground.') + '\\demo\\report.md']) {

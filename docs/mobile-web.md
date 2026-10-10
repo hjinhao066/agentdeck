@@ -259,8 +259,16 @@ iOS 内嵌 PDF 只显示第一页，所以不用 iframe）、图片、纯文本�
 谁能读什么（`file-preview-core.js`，电脑端判定，网页不参与）：
 - 只读。只允许：队长回复、队员回执、看板回执、「待我处理」里点名过的路径（手机上自己打的字不算），点名的文件夹至少在家目录下两层才连带里面的文件；
   或在 `~/reports`、`~/.agents/boards` 里。
-- 先解析真实路径（`..`、符号链接都展开）再判断；点名一个符号链接不等于点名它指向的文件。系统目录一律不给。
-- 密钥类一律拒绝，点名也不行：`.ssh`、`.gnupg`、`.aws` 等目录，`.agents-vault-pass`、`.env*`、`id_*`、`*.pem/*.key` 等，名字以 token/secret/credentials/auth 结尾的文件，
+- 点名的文件要在家目录、临时目录，或「设置 → 手机网页端 → 手机可预览的其他文件夹」里。这一项 Windows 默认是
+  `D:\aiproject\Playground`（下面全部）和 `D:\aiproject\*\reports`（任意一层项目目录的 reports 下面全部），Mac 默认为空。每行一个完整路径，
+  至少两层，`*` 只能代表一整层文件夹，网络路径、`\\?\`、`..` 都不收；清空就是不额外放开。存在 `config.json` 的 `mobileWeb.previewRoots`，
+  没有这个键时用默认值。`*` 前面那段解析真实路径，后面按真实路径逐层比对，所以项目目录本身是 junction 时，它指向的地方不算在内。
+- 先解析真实路径（`..`、符号链接、Windows junction、8.3 短文件名都展开）再判断；点名一个符号链接不等于点名它指向的文件。系统目录一律不给。
+  Windows 上大小写不分、正反斜杠混用都按同一路径处理；`\\?\`、`\\.\`、UNC（`\\电脑\共享`）路径、NTFS 备用数据流（`a.md:xxx`、`a.md::$DATA`）
+  和 Windows 会自动去掉的结尾点或空格（`.env.`）一律拒绝；`a.md:12` 在 Windows 上永远是 `a.md` 的第 12 行。
+- 密钥类一律拒绝，点名也不行：`.ssh`、`.gnupg`、`.aws`、`secrets`、`.secrets`、`credentials` 等目录，`.agents-vault-pass`、`.env*`、`auth.json`、
+  `id_rsa*`、`id_ed25519*`、`*.pem/*.key/*.p12/*.pfx` 等，文件名里任何位置带 token、secret、credential 的文件（`token-usage.md` 也算），名字以 auth/password 等结尾的文件，
   `.claude*`、`.codex`、`.gemini`、`.config` 等目录里除文档和图片外的文件，`~/.config/agentdeck-remote`、AgentDeck 自己的数据目录，以及 shell 配置和历史。
+- 桌面右侧预览栏走同一套拒绝规则（`localRefusal`）：密钥类文件和上面那些 Windows 路径不显示；位置不限，因为是本机用户自己点的。用编辑器打开不受影响。
 - 未点名的路径不管存不存在都答「不在范围内」，不泄露是否存在。
 - 回答只有 JSON（入口代理只放行 JSON），路径放在 POST 正文里，不进网址和日志。

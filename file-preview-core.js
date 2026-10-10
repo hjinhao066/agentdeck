@@ -185,6 +185,8 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], extra
   const temps = (await Promise.all([tmp, ...(platform === 'win32' ? [] : ['/tmp'])].map(real))).filter(Boolean);
   const extras = await realExtra(cleanRoots(extra, platform).roots, real);
   const mentioned = mentionedPaths(texts, { home });
+  // A Windows name cannot hold a colon, so a named "a.md:12" names a.md.
+  if (platform === 'win32') for (const entry of [...mentioned]) if (/:\d+(?::\d+)?$/.test(entry)) mentioned.add(entry.replace(/:\d+(?::\d+)?$/, ''));
   // "a.md:12" is the file a.md unless a file really carries that name.
   let target = await real(lexical);
   if (platform !== 'win32') {
