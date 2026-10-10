@@ -1440,6 +1440,10 @@
       host.manualPromptSent(col.id, turn, o.userInitiated === true);
       entry.state = 'working';
       entry.backgroundOnly = false;   // the turn just sent is real work, until the next status tick says otherwise
+      // The done debounce starts over for this turn: a column that sat idle has counted many idle ticks,
+      // and the agent needs a moment to draw its spinner. Without this the first tick read the old idle
+      // prompt as done and closed the turn 1-4 s after it was sent.
+      entry.idleTicks = 0;
       entry.hasWorked = true;
       entry.lastOutputAt = Date.now();
       if (isCursor) {

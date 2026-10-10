@@ -2531,6 +2531,13 @@
       if (!ended || turn && !turn.done && !task.processEnded) continue;
       const anchor = entry.state === 'done' ? ended : Math.max(ended, entry.lastOutputAt || 0);
       if (Date.now() - anchor < STOP_QUIET) continue;
+      // Last look before calling a Claude turn over: its full-screen rows as they are, one per row (the status
+      // light reads them with soft wraps joined). A spinner or a scrolled-up view there means it is still at it.
+      if (/\bclaude\b/i.test(col?.cmd || '') && entry.term && host.dumpScreen && host.screenState &&
+          host.screenState(host.dumpScreen(entry.term, 40), { ...entry, state: 'working' }, col.cmd) === 'working') {
+        task.endedAt = 0;
+        continue;
+      }
       settle(task, { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' });
     }
   }

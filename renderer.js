@@ -2319,6 +2319,7 @@ function buildColumn(col, isFresh) {
           const entry = terms.get(col.id);
           if (entry) {
             entry.hasWorked = true;
+            entry.idleTicks = 0;   // a new turn: the done debounce starts over (see ChatUI.sendPrompt)
             entry.lastOutputAt = Date.now();
             window.deck.notifyCancel({ id: col.id });
           }
@@ -4168,7 +4169,8 @@ function statusScreen(term) {
 // so nothing anchored at a row's start sees them and a working Claude reads as done. Text really
 // wraps at its last cell; a rule above, or a row that ended in blank cells above TUI chrome, did not.
 function chromeRowBreak(above, row) {
-  return /^\s*[─━═]{3,}\s*$/.test(above) || /^\s*[─━═]{3,}\s*$/.test(row) ||
+  // Claude's spinner row ("✶ Metamorphosing… (3m 11s · …") is never the tail of a sentence, whatever stands above it.
+  return /^\s*[─━═]{3,}\s*$/.test(above) || /^\s*[─━═]{3,}\s*$/.test(row) || /^\s*[✻✽✳✶✢✺∴·*]\s+\S+…\s*\(/.test(row) ||
     (/\s{2,}$/.test(above) && /^\s*(?:[✻✽✳✶✢✺∴·*]\s+\S|[❯›](?:\s|$)|⎿\s|⏺\s|⏵⏵)/.test(row));
 }
 // A menu or confirmation is on the terminal right now (its own reading, not the last status tick).
