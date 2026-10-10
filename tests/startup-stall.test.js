@@ -143,10 +143,15 @@ test('Cursor that draws its prompt after 110 seconds gets the task', async () =>
   assert.equal(w.delivered.length, 1); assert.equal(task.status, 'working');
 });
 
-test('normal start is unchanged: Claude that paints its banner is served at once', async () => {
+// 10-09: a send the moment the shell handed the terminal to `claude` reached a Claude still starting; its Enter
+// was lost and the text waited in the box. A started agent is served once its own prompt has held still for
+// 1.5 seconds (renderer promptSettled), so a normal start is served within two seconds, never before.
+test('normal start: Claude that paints its prompt is served within two seconds, once that prompt has held still', async () => {
   const fast = world(); const a = fast.dispatch(BODY);
   fast.screen(echo('claude --model opus') + BANNER);
-  await fast.advance(2_000);
+  await fast.advance(1_000);
+  assert.deepEqual(fast.delivered, [], 'not while the prompt has only just appeared');
+  await fast.advance(1_000);
   assert.deepEqual(fast.delivered, [BODY]);
   assert.equal(a.status, 'working');
 });

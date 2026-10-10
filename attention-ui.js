@@ -194,6 +194,24 @@
     if (created) save();
     return { done: true, result: created ? `已登记到「待我处理」：${item.id}，结果汇报（来自 ${from.label}）。` : `「待我处理」里已有同样一条未解决的：${item.id}，没有重复登记。` };
   }
+  // The restart watch (MainSession): the 队长 or crew sessions did not come back after a start. Filed by the
+  // program, not by 队长 (which may be the one that is stuck); the phone shows it like any 要你处理, and the
+  // urgent push goes out from main.js. Ticked off with a note once they are back.
+  function alarm(input) {
+    try {
+      const { item, created } = A.add(load(), { kind: 'need', type: 'other', title: input.title, ask: input.ask, detail: input.detail,
+        session: input.session && host.columns().some((c) => c.id === input.session) ? input.session : '',
+        sessionTitle: input.sessionTitle, source: 'notify' }, Date.now());
+      if (created) save();
+      return item;
+    } catch (_) { return null; }
+  }
+  function resolveAlarm(id, note) {
+    try {
+      const { changed } = A.resolve(load(), id, 'session', note, Date.now());
+      if (changed) save();
+    } catch (_) { /* already gone */ }
+  }
   // notify-user: the alert goes out as before; the user also finds it here.
   function fromNotify(text) {
     try {
@@ -648,7 +666,7 @@
   }
 
   window.AttentionUI = {
-    init, render, refresh, paintBadge, counts, captain, automation, fromNotify, reply, tick, tickReports, reopen, markRead,
+    init, render, refresh, paintBadge, counts, captain, automation, fromNotify, alarm, resolveAlarm, reply, tick, tickReports, reopen, markRead,
     mobileView, mobileWrite, sessionWaiting,
     open: () => { if (!visible()) host.togglePage('attention'); },
   };

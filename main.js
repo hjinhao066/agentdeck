@@ -1494,6 +1494,18 @@ app.whenReady().then(async () => {
     return sendRelayBark({ message, title: 'AgentDeck · 永动机', level: 'active' });
   });
 
+  // The restart watch (MainSession): the 队长 is not back at work a minute after a start, or crew sessions did
+  // not take their continue message. The same local + critical Bark route as notify-user --urgent, which no
+  // 队长 has to run: the 队长 may be the one that is stuck. The page files the 待我处理 item itself.
+  handleMain('restart:alarm', async (_e, { message, key } = {}) => {
+    const captain = notificationConfig.columns?.find((c) => c.isMain && c.id === notificationConfig.mainSession?.colId);
+    if (!notifyUser || !captain || typeof message !== 'string' || !message.trim() || message.length > 1000 ||
+      typeof key !== 'string' || !/^restart-[a-z0-9-]{1,80}$/.test(key)) throw new Error('无效的重启报警');
+    const result = await notifyUser({ callerId: captain.id, id: key, message, urgent: true,
+      bark: { message, title: 'AgentDeck · 重启没接上', level: 'critical', dedupeKey: key } }, false, key, true);
+    return { ok: result.ok !== false, message: result.message };
+  });
+
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
@@ -1544,6 +1556,8 @@ app.whenReady().then(async () => {
   onMain('clipboard:read-sync', (e) => { e.returnValue = tudArg ? testClipboard : clipboard.readText(); });
   onMain('env-info-sync', (e) => { e.returnValue = {
     platform: process.platform, home: HOME, version: app.getVersion(),
+    // test profiles only: the restart watch's limits, shortened
+    testRestartWatchMs: tudArg && Number(process.env.AGENTDECK_TEST_RESTART_WATCH_MS) > 0 ? Number(process.env.AGENTDECK_TEST_RESTART_WATCH_MS) : 0,
     build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),
   }; });
   // 版本更新 page: the release notes packaged with this build. Read only, from

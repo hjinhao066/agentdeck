@@ -41,9 +41,18 @@ if (process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE) {
     statusWidth: process.env.CCSTATUSLINE_WIDTH,
   }));
 }
+// --startup-ms=N: like Claude Code coming back with --resume, it takes N ms before its prompt is up and only
+// says "Resuming conversation…" meanwhile, below the terminal's last screen. What is typed in that time ends up
+// in its input box once the box is drawn, but the Enter typed with it is lost: the text waits there, unsent, for
+// the next Enter. Every such keystroke is written to AGENTDECK_TEST_EARLY_INPUT_FILE, so a test can tell it was
+// typed too early. It draws in the main screen: a full-screen Claude that has run a while leaves its saved replay
+// the same way, its switch to the alternate screen long gone from the last 200 KB of output, so the replay
+// paints its last idle prompt into the main screen.
+const startupMs = Number((process.argv.find((a) => a.startsWith('--startup-ms=')) || '').slice('--startup-ms='.length)) || 0;
+let inBox = '';
 // A TUI redraws the current screen; old prompts must not look like a live menu.
 const delayedStart = process.argv.includes('--delayed-start');
-if (!delayedStart) process.stdout.write('\x1b[?1049h');
+if (!delayedStart && !startupMs) process.stdout.write('\x1b[?1049h');
 process.on('exit', () => process.stdout.write('\x1b[?1049l'));
 const captainStatusline = process.argv.includes('--captain-statusline');
 let model = captainStatusline ? 'Opus 5.5' : 'Fake';
@@ -87,7 +96,7 @@ function box() {
     return;
   }
   const w = Math.max(20, Math.min(60, (process.stdout.columns || 80) - 2));
-  process.stdout.write('\n' + '─'.repeat(w) + '\n> \n' + '─'.repeat(w) + '\n');
+  process.stdout.write('\n' + '─'.repeat(w) + '\n> ' + inBox + '\n' + '─'.repeat(w) + '\n');
   const extra = process.env.AGENTDECK_TEST_LONG_STATUS ? ' | Total: 211.5M | Cost: $35.33 | Weekly: 13.0% | LastField: complete' : '';
   const context = process.argv.includes('--token-saver') ? `${contextUsed / 1000}k/1000k` : '23%';
   process.stdout.write('\x1b[33mContext: ' + context + '\x1b[0m | \x1b[31mSession: 26.0%\x1b[0m' + extra + '\n');
@@ -105,6 +114,7 @@ let timer = null;
 function answer() {
   const text = lines.join('\n');
   lines = [];
+  inBox = '';
   // Test-only capture verifies delivery before ConPTY wraps/redraws the screen.
   if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
   if (process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE, JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, text }) + '\n');
@@ -296,7 +306,10 @@ function listen() {
     // --swallow-first-enter: the first task's Enter is lost while the TUI is busy, so its text stays in
     // the input box; the next Enter submits it.
     let swallowed = process.argv.includes('--swallow-first-enter') ? null : undefined;
-    readline.createInterface({ input: process.stdin, terminal: true }).on('line', (line) => {
+    const rl = readline.createInterface({ input: process.stdin, terminal: true });
+    // Text typed while starting is in the box as if typed there; only the next Enter sends it.
+    if (inBox) rl.write(inBox);
+    rl.on('line', (line) => {
       if (swallowed && !line.trim() && !lines.length) { lines = swallowed; swallowed = undefined; answer(); return; }
       if (!line.trim() && !lines.length) return;
       lines.push(line);
@@ -352,4 +365,19 @@ if (process.argv.includes('--claude-trust-menu')) {
   };
   process.stdin.on('data', confirmTrust);
 } else if (delayedStart) setTimeout(start, 6000);
-else start();
+else if (startupMs) {
+  process.stdout.write('Resuming conversation…\n');
+  let early = '';
+  const hold = (data) => { early += String(data); };
+  process.stdin.setRawMode(true);
+  process.stdin.on('data', hold);
+  setTimeout(() => {
+    process.stdin.removeListener('data', hold);
+    process.stdin.setRawMode(false);
+    const typed = early.replace(/\x1b\[20[01]~/g, '');
+    if (typed && process.env.AGENTDECK_TEST_EARLY_INPUT_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_EARLY_INPUT_FILE, JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, text: typed }) + '\n');
+    // its Enter was lost; the rest stays in the box
+    inBox = typed.replace(/[\r\n]+/g, ' ').trim();
+    start();
+  }, startupMs);
+} else start();

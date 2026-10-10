@@ -19,9 +19,34 @@ test('replayed TUI chrome is excluded until fresh output follows the current rep
     assert.equal(M.terminalActivity(M.afterReplay(replay, 'win32')), '');
   }
   assert.equal(M.afterReplay('Claude Code\n✻ Doing…', 'win32'), 'Claude Code\n✻ Doing…');
-  const current = 'Claude Code\n── 上次输出回放，进程已结束──\nPS C:\\test>';
-  assert.equal(M.afterReplay(current, 'darwin'), current);
+  // macOS reads the same separators. Until 10-09 it knew only the old one, so after a restart the previous
+  // run's idle Claude screen still counted as live and the restart notice was typed into a Claude still starting.
+  const current = 'Claude Code\n── 上次输出回放，进程已结束──\njinhao@mac ~ %';
+  assert.equal(M.afterReplay(current, 'darwin'), 'jinhao@mac ~ %');
   assert.equal(M.afterReplay('old\n以上为上次会话的输出\nlive', 'darwin'), 'live');
+});
+
+// 10-09 12:15:27: AgentDeck restarted with the 队长 and three crew sessions. Their screens still showed the
+// replay of the last run, the idle Claude prompt included, and `claude --resume` had just become the foreground
+// process: the restart notice and the continue messages were typed before the new Claude had drawn anything.
+// Its Enter was lost and the text waited in the input box for hours. A launched agent's prompt counts only
+// once the agent itself has drawn it below the launch line.
+test('a freshly launched agent counts as drawn only once its own prompt is on screen below the launch line', () => {
+  const RULE = '─'.repeat(50);
+  const launch = 'jinhao@mac ~ % claude --resume 7fed3f06-b16c-46d3-ba00-dfa8310c9b8b --dangerously-skip-permissions; node "$AGENTDECK_BOARD_CLI" session-exit --code "$?"';
+  const replay = ['⏺ 上次的回复', RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on (shift+tab to cycle)', '── 上次输出回放，进程已结束（模型上下文将通过 CLI 恢复）──'].join('\n');
+  const claude = [RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n');
+  const live = (screen) => M.afterReplay(screen, 'darwin');
+  assert.equal(M.agentPromptDrawn(live(replay + '\n' + launch), 'claude'), false, 'only the launch line is new');
+  assert.equal(M.agentPromptDrawn(live(replay + '\njinhao@mac ~ %'), 'claude'), false, 'the shell has not even started it');
+  assert.equal(M.agentPromptDrawn(live(replay + '\n' + launch + '\n▗ ▗   ▖ ▖ Claude Code v2.1.295'), 'claude'), false, 'a banner is not a prompt');
+  assert.equal(M.agentPromptDrawn(live(replay + '\n' + launch + '\n▗ ▗   ▖ ▖ Claude Code v2.1.295\n' + claude), 'claude'), true);
+  // a shell prompt drawn as ❯ (powerlevel10k, starship) is the launch line, not the agent
+  assert.equal(M.agentPromptDrawn('❯ claude --resume 7fed3f06-b16c-46d3-ba00-dfa8310c9b8b; node "$AGENTDECK_BOARD_CLI" session-exit --code "$?"', 'claude'), false);
+  // a full-screen TUI hides the launch line: what it draws is all there is
+  assert.equal(M.agentPromptDrawn(claude, 'claude'), true);
+  assert.equal(M.agentPromptDrawn('OpenAI Codex (v0.160.0)\n\n› Ask Codex to do anything\n\n  ⏎ send   ⌃J newline   100% context left', 'codex'), true);
+  assert.equal(M.agentPromptDrawn('', 'claude'), false);
 });
 
 test('context tokens come from an explicit used/total status, not percentages or session quotas', () => {

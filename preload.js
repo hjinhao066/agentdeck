@@ -122,6 +122,7 @@ contextBridge.exposeInMainWorld('deck', {
   claudeWarmupIdle: (colId, idle) => ipcRenderer.invoke('seats:warmup-idle', { colId, idle }),
   recordClaudeSeatUsage: (colId, seatId, configDir, usage) => ipcRenderer.invoke('seats:record-usage', { colId, seatId, usage, configDir }),
   captainRelayNotify: (colId, message, urgent = false) => ipcRenderer.invoke('captain:relay-notify', { colId, message, urgent }),
+  restartAlarm: (message, key) => ipcRenderer.invoke('restart:alarm', { message, key }),
 
   prepareLaunch: (id, command) => ipcRenderer.invoke('pty:prepare-launch', { id, command }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
