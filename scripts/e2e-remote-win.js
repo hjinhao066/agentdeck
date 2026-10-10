@@ -50,6 +50,7 @@ const makeRunId = (sha, now = new Date()) =>
   `${now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${sha.slice(0, 7)}-${crypto.randomBytes(2).toString('hex')}`;
 
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const isAncestor = (commit, of) => { try { git('merge-base', '--is-ancestor', commit, of); return true; } catch { return false; } };
 const ssh = (host, command, options = {}) =>
   execFileSync('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', host, command], { encoding: 'utf8', ...options });
 const scp = (...args) => execFileSync('scp', ['-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', ...args], { stdio: ['ignore', 'inherit', 'inherit'] });
@@ -128,7 +129,9 @@ async function main(argv = process.argv.slice(2)) {
     git('update-ref', tempRef, sha);
     const bundle = path.join(tmp, 'commit.bundle');
     const known = knownBases(o.host);
-    const needBundle = !known.includes(sha); // Windows may already hold this exact commit
+    // Windows already holds the commit when it is one of its tips or an ancestor of one (a release
+    // baseline, say): there is nothing to send, and git refuses to write an empty bundle.
+    const needBundle = !known.some((tip) => tip === sha || isAncestor(sha, tip));
     if (needBundle) git('bundle', 'create', bundle, tempRef, ...known.map((b) => `^${b}`));
     const job = makeJob({ runId, sha, ref: tempRef, winBase, needBundle, specs: o.specs, playwrightArgs: o.playwrightArgs, install: o.install });
     fs.writeFileSync(path.join(tmp, 'job.json'), JSON.stringify(job, null, 2));
