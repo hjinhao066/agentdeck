@@ -10,7 +10,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
-const { createQueue, QueueTimeout } = require('./e2e-queue-core');
+const { createQueue, QueueTimeout, TAG_VAR, isAlive, runMembers } = require('./e2e-queue-core');
 
 const ROOT = path.resolve(__dirname, '..');
 const say = (message) => console.log(`[e2e-queue] ${message}`);
@@ -46,63 +46,7 @@ function playwrightCommand(args) {
   return [process.execPath, cli, 'test', ...args];
 }
 
-const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const TAG_VAR = 'AGENTDECK_E2E_RUN_TAG';
-
-// One read of the process table: pid, parent, process group and start time.
-function processTable() {
-  const result = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,pgid=,lstart='], { encoding: 'utf8' });
-  const rows = [];
-  for (const line of (result.stdout || '').split('\n')) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
-    if (m) rows.push({ pid: +m[1], ppid: +m[2], pgid: +m[3], start: m[4] });
-  }
-  return rows;
-}
-
-// Processes that carry this run's tag in their environment. A helper that detached from
-// the process group and whose parent already exited can no longer be found through the
-// process tree, but it still has the environment it was started with.
-function taggedPids(tag) {
-  const needle = `${TAG_VAR}=${tag}`;
-  const found = [];
-  if (fs.existsSync('/proc/self/environ')) {
-    for (const name of fs.readdirSync('/proc')) {
-      if (!/^\d+$/.test(name)) continue;
-      try { if (fs.readFileSync(`/proc/${name}/environ`, 'latin1').split('\0').includes(needle)) found.push(+name); } catch {}
-    }
-    return found;
-  }
-  const result = spawnSync('ps', ['-E', '-A', '-ww', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
-  for (const line of (result.stdout || '').split('\n')) {
-    const m = /^\s*(\d+)\s/.exec(line);
-    if (m && new RegExp(`(^|\\s)${needle}(\\s|$)`).test(line)) found.push(+m[1]);
-  }
-  return found;
-}
-
-// Everything that still belongs to the run: its process group, everything below it in the
-// process tree, everything seen below it earlier (pid + start time, so a reused pid is not
-// mistaken for it), and everything carrying its tag.
-function runMembers(run) {
-  if (process.platform === 'win32' || !run.pid) return [];
-  const table = processTable();
-  const members = new Set();
-  const kids = new Map();
-  for (const row of table) {
-    kids.set(row.ppid, [...(kids.get(row.ppid) || []), row.pid]);
-    if (row.pgid === run.pid) members.add(row.pid);
-    const earlier = run.seen.get(row.pid);
-    if (earlier && earlier === row.start) members.add(row.pid);
-  }
-  const walk = (pid) => { for (const kid of kids.get(pid) || []) { members.add(kid); walk(kid); } };
-  walk(run.pid);
-  for (const pid of taggedPids(run.tag)) members.add(pid);
-  for (const row of table) if (members.has(row.pid)) run.seen.set(row.pid, row.start);
-  members.delete(process.pid);
-  return [...members].filter(isAlive);
-}
 
 function signalRun(run, signal, members = runMembers(run)) {
   if (!run.pid) return;
@@ -140,10 +84,11 @@ function runChild(command, lease, runMs, graceMs = 10000) {
       cwd: process.cwd(), stdio: 'inherit', detached: process.platform !== 'win32',
       env: { ...process.env, AGENTDECK_E2E_QUEUE_HELD: '1', [TAG_VAR]: tag },
     });
-    lease.setChild(child.pid, { deadline: Date.now() + runMs + graceMs });
+    lease.setChild(child.pid, { deadline: Date.now() + runMs + graceMs, tag });
     const run = { pid: child.pid, tag, seen: new Map() };
     // Remember descendants while the run goes on (they may leave before the run ends).
-    const watch = setInterval(() => { try { runMembers(run); } catch {} }, 1000);
+    // The table is also kept in the slot directory: if this wrapper is killed, a waiter can still find them.
+    const watch = setInterval(() => { try { runMembers(run); lease.saveSeen(run.seen); } catch {} }, 1000);
     watch.unref();
     let timedOut = false;
     let killer;
@@ -184,7 +129,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   const command = options.command || playwrightCommand(options.passthrough);
   if (env.AGENTDECK_E2E_QUEUE_HELD === '1') {
     // Already inside a queued run (e.g. release.js -> npm run test:smoke): do not wait for ourselves.
-    return runChild(command, { setChild() {} }, options.runMinutes * 60000, Number(env.AGENTDECK_E2E_KILL_GRACE_MS) || 10000);
+    return runChild(command, { setChild() {}, saveSeen() {} }, options.runMinutes * 60000, Number(env.AGENTDECK_E2E_KILL_GRACE_MS) || 10000);
   }
   let lease;
   const abort = (signal) => () => { process.exit(signal === 'SIGINT' ? 130 : 143); };
