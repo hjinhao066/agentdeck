@@ -11,7 +11,7 @@ const path = require('node:path');
 const Core = require('../preview-html-core');
 const { readPreview, registerSideIpc } = require('../side-main');
 
-const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-pvhtml-')));
+const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-pvhtml-')));
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 const home = path.join(tmp, 'home');
 const report = path.join(home, 'reports', 'weekly');
