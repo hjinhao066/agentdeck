@@ -1252,9 +1252,16 @@
       : `用户：${oneLine(t.user, 600)}\n回复：${oneLine(t.reply, 800) || '（没有文字回复）'}`)).join('\n\n');
   }
 
+  // The columns a launch starts with when no saved layout has any (no config file, an unreadable one, `columns` missing or empty).
+  // A normal run opens the three default agent columns; a test instance (--test-user-data) opens none: it must never start a real agent
+  // on its own, and a column nobody asked for starts no shell either. A saved layout that has columns is used as it is, either way.
+  function emptyLayoutColumns(testInstance, makeDefaults) {
+    return testInstance === true ? [] : makeDefaults();
+  }
+
   return {
     RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, AUTO_COMPACT_DEFAULT, AUTO_COMPACT_MIN, AUTO_COMPACT_MAX, autoCompactWindow, COMPACT_NOTE, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, CORE_LIMIT, BRIEFING_TOPICS, PROVIDERS, ROUTING, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, briefingMark, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, drawsOutput, claudeBackgroundTasks, claudeScrolledUp, claudeStatusRowsBlanked, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, launchEchoOnly, afterLaunchEcho, agentPromptDrawn, startupLimit, startupFailure, exceptionReason, resourceKind, loginNudgeShown, LOGIN_NUDGE_MARK, statusLabel, ledgerText, subCaptainBrief, readText, resetNote, relayNote, restartNote, restartNotice, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
-    quotaResumed,
+    quotaResumed, emptyLayoutColumns,
   };
 });
