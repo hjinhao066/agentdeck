@@ -64,7 +64,6 @@
   const svg = (name) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + icons[name] + '</svg>';
   const statusNames = { working: '干活中', idle: '空闲', failed: '失败', input: '停在确认', quota: '额度用尽/等待', queued: '待补充', waiting: '排队', asking: '在问你', done: '完成', unavailable: '未启动', exited: '已退出' };
   const taskStatuses = [['todo', '待办'], ['doing', '进行中'], ['review', '待验收'], ['needs_user', '等用户'], ['done', '完成']];
-  const flagNames = { failed: '失败', blocked: '前置未完成', held: '挂起' };
   const KEYS = { theme: 'agentdeck-hub-theme', machine: 'agentdeck-hub-machine', meta: 'agentdeck-hub-meta', view: 'agentdeck-hub-view' };
   const TABS = ['overview', 'attention', 'captain', 'todo', 'sessions', 'board'];
 
@@ -1608,12 +1607,13 @@
         const top = node('div', 'task-top');
         if (urgentTask(task)) { card.dataset.priority = 'high'; top.append(priorityMark()); }
         top.append(node('span', 'task-status', (taskStatuses.find(([status]) => status === task.status) || [0, task.status])[1]));
-        if (task.flag) top.append(node('span', 'task-flag ' + task.flag, flagNames[task.flag] || task.flag));
+        if (task.flag) top.append(node('span', 'task-flag ' + task.flag, Core.cardFlag(task)));
         const owner = Core.ownerLabel(task, known);
         if (owner) top.append(node('span', 'task-owner', `${owner} 领取`));
         card.append(top, node('h3', '', task.title));
         if (task.assignee) card.append(node('p', 'task-assignee', [task.assignee.agent, task.assignee.model].filter(Boolean).join(' · ')));
-        if (task.latest_receipt) card.append(markdownNode(task.latest_receipt, { reply: true, className: 'task-receipt' }));
+        const receipt = Core.cardReceipt(task);
+        if (receipt) card.append(markdownNode(receipt, { reply: true, className: 'task-receipt' }));
         section.append(card);
       }
       projects.append(section);

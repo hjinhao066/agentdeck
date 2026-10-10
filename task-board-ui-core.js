@@ -107,13 +107,12 @@
     if (/:(?:complete|failed|fallback):/.test(card.last_event || '')) return '';
     return text;
   }
-  // The latest receipt in the user's words; internal wording is translated.
-  function receiptText(card) {
-    const text = String((card && card.latest_receipt) || '').trim();
-    if (/^已结束，未提交回执/.test(text)) return '队员停下了，但没有交结果。';
-    if (/^调度已结束/.test(text)) return '这件事还没有派给队员。';
-    return text;
-  }
+  // The latest receipt in the user's words (internal wording translated) and a flag's tag are
+  // the phone hub's rules (mobile-web/hub/core.js): one set of words for both boards. Looked
+  // up when called, so the load order of the two files does not matter.
+  const hub = () => (typeof module === 'object' && module.exports ? require('./mobile-web/hub/core.js') : globalThis.HubCore);
+  const receiptText = (card) => hub().cardReceipt(card);
+  const flagText = (card) => hub().cardFlag(card);
 
   // Absolute / home-relative file paths mentioned in a text, in first-seen order.
   function filePaths(...texts) {
@@ -303,5 +302,5 @@
     return m && m !== 'default' ? String(m) : '';
   }
 
-  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, isHigh, isUrgent, urgentFirst, waitsOn, canRunParallel, waitLabel, buildBoard, dependencyLinks, linkRoute, roundedPath, progress, userQuestion, receiptText, filePaths, activity, moreLabel, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
+  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, isHigh, isUrgent, urgentFirst, waitsOn, canRunParallel, waitLabel, buildBoard, dependencyLinks, linkRoute, roundedPath, progress, userQuestion, receiptText, flagText, filePaths, activity, moreLabel, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
 });
