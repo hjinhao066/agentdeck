@@ -207,6 +207,14 @@ test('the page opens in a view of its own: sandboxed, no bridge, a session nothi
   assert.equal(calls.sent.length, 0);
 });
 
+test('a page\'s alert() or confirm() cannot put a box over the deck window', () => {
+  // In the real app (Windows) an alert left the AgentDeck window disabled under its box.
+  const { calls } = standIn();
+  calls.handlers['side:preview-html']({}, { raw: path.join(report, 'index.html') });
+  const view = calls.views.find((v) => v.webContents.loaded.some((u) => u.startsWith('agentdeck-preview://')));
+  assert.equal(view.options.webPreferences.disableDialogs, true);
+});
+
 test('only a real .html the user clicked is opened, and closing the preview ends the page', () => {
   const { calls } = standIn();
   const opened = () => calls.views.filter((v) => v.webContents.loaded.some((u) => u.startsWith('agentdeck-preview://'))).length;

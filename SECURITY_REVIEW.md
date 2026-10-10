@@ -72,7 +72,7 @@ and regression pass, not a penetration-test certification.
   root or the temporary folder gets only itself.
 - Network: `file:`, loopback, private and link-local addresses, single-label and
   `.local`-style names, and every scheme but public `http(s)` are cancelled in the
-  session's `onBeforeRequest`. Permissions, downloads and popups are denied; navigation
+  session's `onBeforeRequest`. Permissions, downloads, dialogs (`alert`, `confirm`) and popups are denied; navigation
   stays on the page's own address; only a public web link is passed to the browser tab.
 - Remaining boundary: the check is on the host name, so a public name that resolves to a
   local address (DNS rebinding) is not caught; the same holds for any page in the browser

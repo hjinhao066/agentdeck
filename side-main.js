@@ -279,8 +279,10 @@ function registerSideIpc(ctx) {
     const win = getWindow();
     if (!win || win.isDestroyed()) return null;
     if (pageView && !pageView.webContents.isDestroyed()) return pageView;
+    // disableDialogs: a page's alert() or confirm() is a box over the whole deck window
+    // (Windows disables the window under it), and one in a loop locks the app.
     pageView = new WebContentsView({
-      webPreferences: { session: ensurePageSession(), sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, backgroundThrottling: true },
+      webPreferences: { session: ensurePageSession(), sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, backgroundThrottling: true, disableDialogs: true },
     });
     const wc = pageView.webContents;
     wc.on('found-in-page', (_e, r) => {
