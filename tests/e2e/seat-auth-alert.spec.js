@@ -54,7 +54,9 @@ test.beforeEach(() => {
 });
 test.afterEach(async () => {
   if (application) { await closeElectron(application); application = null; }
-  if (profile) fs.rmSync(profile, { recursive: true, force: true });
+  // A closed Electron's helpers can still hold files in the profile for a few seconds (EPERM on Windows):
+  // a temporary folder left behind is reported, it does not fail a test that passed.
+  if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
 });
 test('confirmed logout sends one critical Bark, red 未登录 and a Captain question; recovery silently rearms', async () => {
   await launch();
@@ -216,7 +218,8 @@ test('daytime phone failure stays queued, records a Captain exception and retrie
   await application.evaluate(async ({ app }, at) => { app.testBarkNow = at; await app.testBarkFlush(); }, at + 60_000);
   const sent = await application.evaluate(({ app }) => app.testBarkDigests);
   expect(sent).toHaveLength(1); expect(sent[0]).toMatchObject({ level: 'critical', volume: 4 });
-  expect(sent[0].body).toContain('CLAUDE_CONFIG_DIR=~/.custom-us-seat claude auth login');
+  // the platform's own login command (PowerShell on Windows), as the sidebar shows it
+  expect(sent[0].body).toContain(require('../../seat-auth-alert').loginCommand('Claude', { configDir: '~/.custom-us-seat' }, os.homedir(), process.platform));
   await observe([['logged-out', base + 90000]]);
   await application.evaluate(async ({ app }) => app.testBarkFlush());
   expect(await application.evaluate(({ app }) => app.testBarkDigests)).toHaveLength(1);

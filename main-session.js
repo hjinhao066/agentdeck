@@ -596,7 +596,7 @@
   }
   function openDialog() {
     const d = $('mainDialog');
-    $('mdCmd').value = window.BoardCore.commandForAgent('claude');
+    $('mdCmd').value = host.config.captainRelayClaudeCommand || window.ClaudeSeatsCore.CLAUDE_COMMAND;
     $('mdCwd').value = '';
     d.showModal();
     setTimeout(() => $('mdCmd').focus(), 50);

@@ -108,6 +108,7 @@ function answer() {
   if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
   if (process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE, JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, text }) + '\n');
   const first = (text.split('\n').find((l) => l.trim()) || '').trim();
+  if (first === 'print auth error') { process.stdout.write('\n  ⎿  API Error: 401 Unauthorized\n'); return; }
   if (first === 'show login method') {
     process.stdout.write('\x1b[2J\x1b[HClaude Code\nSelect login method\n❯ 1. Claude account with subscription\n  2. Anthropic console\n');
     box(); return;

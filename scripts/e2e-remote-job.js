@@ -121,6 +121,24 @@ function tryLock(lockDir) {
 }
 const unlock = (lockDir) => { try { fs.rmSync(path.join(lockDir, 'owner'), { force: true }); fs.rmdirSync(lockDir); } catch {} };
 
+// A stale lock is broken by one waiter at a time (holding `<lock>.break`), which checks again and takes the
+// lock itself. Two waiters that both saw it stale must not both remove it: the second would remove the
+// lock the first had just taken, and both would install into the same folder.
+function takeStale(lockDir) {
+  const breaker = `${lockDir}.break`;
+  try { fs.mkdirSync(breaker); } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    // Left by a waiter that died inside these few lines.
+    try { if (Date.now() - fs.statSync(breaker).mtimeMs > 60000) fs.rmdirSync(breaker); } catch {}
+    return false;
+  }
+  try {
+    if (!lockIsStale(lockDir)) return false;
+    unlock(lockDir);
+    return tryLock(lockDir);
+  } finally { try { fs.rmdirSync(breaker); } catch {} }
+}
+
 // One holder per lock. While another job holds it we log why we wait, every 30 s; a stale lock is taken
 // over; waiting longer than the wait limit gives up.
 function withInstallLock(lockDir, fn) {
@@ -128,7 +146,7 @@ function withInstallLock(lockDir, fn) {
   const started = Date.now();
   let lastNote = 0;
   while (!tryLock(lockDir)) {
-    try { if (lockIsStale(lockDir)) { unlock(lockDir); continue; } } catch { continue; }
+    try { if (lockIsStale(lockDir) && takeStale(lockDir)) break; } catch { continue; }
     const waited = Date.now() - started;
     if (waited > waitMs) throw new InstallWaitTimeout(`waited ${Math.round(waited / 1000)} s for another job's dependency install (${path.basename(lockDir)}); giving up`);
     if (Date.now() - lastNote > 30000) { say(`waiting for another job to finish installing dependencies (${Math.round(waited / 1000)} s so far)`); lastNote = Date.now(); }
@@ -226,19 +244,25 @@ function ensureDeps({ workDir, sha, lockfile, install, runId }) {
 }
 
 // Checkouts of jobs that were killed (their finally never ran) are left behind: sweep the old ones.
+// They still hold their node_modules link, so they go the way of a job's own checkout.
 function sweepCheckouts(workDir) {
   const base = path.join(path.dirname(workDir), 'checkouts');
   let names = [];
   try { names = fs.readdirSync(base); } catch { return; }
   for (const n of names) {
     const dir = path.join(base, n);
-    try { if (Date.now() - fs.statSync(dir).mtimeMs > 3 * 3600000) removeWorktree(workDir, base, dir); } catch {}
+    try { if (Date.now() - fs.statSync(dir).mtimeMs > 3 * 3600000) removeCheckout(workDir, dir); } catch {}
   }
 }
 
+const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
+
 function removeCheckout(workDir, checkout) {
-  // The junction goes first: removing the checkout must never reach into the shared node_modules.
-  try { fs.unlinkSync(path.join(checkout, 'node_modules')); } catch { try { fs.rmdirSync(path.join(checkout, 'node_modules')); } catch {} }
+  // The junction goes first: removing the checkout must never reach into the shared node_modules
+  // (git for Windows follows it on `worktree remove --force` and empties the folder behind it).
+  const link = path.join(checkout, 'node_modules');
+  try { fs.unlinkSync(link); } catch { try { fs.rmdirSync(link); } catch {} }
+  if (isLink(link)) { say(`could not unlink ${link}; leaving the checkout for a later sweep`); return; }
   removeWorktree(workDir, path.join(path.dirname(workDir), 'checkouts'), checkout);
 }
 
@@ -300,4 +324,4 @@ function main(jobFile) {
 if (require.main === module) {
   try { process.exit(main(process.argv[2])); } catch (error) { console.error(`[remote-job] ${error.message}`); process.exit(14); }
 }
-module.exports = { checkJob, depsKey, safeRemove };
+module.exports = { checkJob, depsKey, safeRemove, withInstallLock, InstallWaitTimeout };
