@@ -4047,8 +4047,15 @@ const deckHost = {
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
 };
-SidePane.init(deckHost);
-Sidebar.init(deckHost);
+// One module failing to start (a throw, or a rejected async init) is logged and the script
+// goes on: 任务看板, its tabs and the saved view are set up at its end (2.0.2: a throw here
+// left the board unopenable).
+function startPart(name, start) {
+  const failed = (error) => console.error(`${name} 启动失败：`, error);
+  try { Promise.resolve(start()).catch(failed); } catch (error) { failed(error); }
+}
+startPart('SidePane', () => SidePane.init(deckHost));
+startPart('Sidebar', () => Sidebar.init(deckHost));
 // The Captain's crew list opens fully at launch and again the first time the window is
 // used on a new day; a fold made in between holds until then.
 let crewFoldDay = SidebarCore.localDay(Date.now());
@@ -4063,20 +4070,20 @@ function openCrewOnNewDay() {
 }
 window.addEventListener('focus', openCrewOnNewDay);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) openCrewOnNewDay(); });
-AttentionUI.init(deckHost);
-MainSession.init(deckHost);
+startPart('AttentionUI', () => AttentionUI.init(deckHost));
+startPart('MainSession', () => MainSession.init(deckHost));
 window.deck.onParkForRestart(async (sessions) => {
   try { await MainSession.parkForRestart(sessions); }
   finally { window.deck.parkForRestartDone(); }
 });
-ClaudeSeats.init(deckHost);
-ChatUI.init(deckHost);
-Pages.init(deckHost);
-ChatDeliverables.init(deckHost);
-ReleaseNotesUI.init(deckHost);
-TodoUI.init(deckHost);
-render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
-renderQuotaBar();
+startPart('ClaudeSeats', () => ClaudeSeats.init(deckHost));
+startPart('ChatUI', () => ChatUI.init(deckHost));
+startPart('Pages', () => Pages.init(deckHost));
+startPart('ChatDeliverables', () => ChatDeliverables.init(deckHost));
+startPart('ReleaseNotesUI', () => ReleaseNotesUI.init(deckHost));
+startPart('TodoUI', () => TodoUI.init(deckHost));
+startPart('render', () => render(!(Array.isArray(saved && saved.columns) && saved.columns.length)));
+startPart('renderQuotaBar', () => renderQuotaBar());
 function applyQuotaSamples(samples) {
   let changed = false;
   for (const sample of samples) changed = QuotaCore.observe(config.quotas, sample) || changed;
