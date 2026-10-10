@@ -257,8 +257,8 @@ test('saved positions win over the layout; saved state is checked on load', () =
   assert.equal(box.moved, true);
   assert.deepEqual([lay.captain.x, lay.captain.y], [5, 6]);
   const s = C.normalizeSaved({ projectPositions: {}, mode: 'canvas', positions: { a: { x: 1.4, y: 2 }, b: { x: NaN, y: 1 } }, view: { x: 1, y: 2, scale: 99 } });
-  assert.deepEqual(s, { projectPositions: {}, mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null });
-  assert.deepEqual(C.normalizeSaved(null), { projectPositions: {}, mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null });
+  assert.deepEqual(s, { projectPositions: {}, mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null, zoom: null });
+  assert.deepEqual(C.normalizeSaved(null), { projectPositions: {}, mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null, zoom: null });
   // the user's project order and the arrangement their hand-placed map stands on are kept, checked
   const kept = C.normalizeSaved({ projectOrder: ['B', 'A', 'B', 7, 'x'.repeat(200)], plan: { lanes: [['A'], ['B', 'C']], caps: { A: 3, B: 2, C: 2.5, D: 99 }, tight: 1, junk: true } });
   assert.deepEqual(kept.projectOrder, ['B', 'A']);
@@ -1405,4 +1405,131 @@ test('智能一页 does not flip a frame\'s columns on a few pixels back and for
     const seen = sweep(map, widths, 900, 1);
     assert.ok(switches(seen) <= 1, `${widths[0]} -> ${widths[widths.length - 1]}: ${[...new Set(seen)].join(' / ')}`);
   }
+});
+
+// ---- 智能一页 at a zoom the user set (arrangePage's o.zoom, in drawn units like the view's scale) ----
+// The user, 2026-10-09 17:16: 「我自己可以随意调这个百分比；右边那个智能一页按钮，在我任意调好的百分比下都能保证智能一页。
+// 现在怎么每次按它都跳回 100%？」 Their map that day: agentdeck 17, health 5, 秋招 3, hermes 2. 2.0.3's 智能一页 handed the zoom
+// back to itself every time: 100% in lanes, scrolling, in a window the size of theirs (a 1366x900 window: the map's page
+// 1114 x 732 on a 2x screen). The zoom the user set is a constant now: the arrangement (each frame's columns, the lanes,
+// one row or wrapped) is chosen for it, and the view shows exactly it.
+const USER_MAP = { agentdeck: 17, health: 5, 秋招: 3, hermes: 2 };
+const zoomOf = (pct) => C.BASE_SCALE * pct / 100;
+// arranged at pct% and shown the way CrewMap.fit shows it; w, h: the map on screen
+function atZoom(map, view, pct, dpr = 2, current = {}) {
+  const zoom = zoomOf(pct), r = C.arrangePage(map, view, { ...ARRANGE, dpr, zoom }, current);
+  const b = C.fitBounds(map, r.lay, ARRANGE, false), shown = C.computeFit(b, view, ARRANGE.inset, C.fitLimits(r, dpr, zoom)).scale;
+  return { ...r, zoom, shown, w: (b.right - b.left) * shown, h: (b.bottom - b.top) * shown, name: arrangement(r.plan) };
+}
+const onPage = (r, view) => r.w <= view.w - 16 + 0.5 && r.h <= view.h - 16 + 0.5;
+// Every arrangement there is at pct%: each frame 1 to C.PAGE_COLUMNS wide (no wider than its cards), in K lanes as
+// planAcross fills them (one row is K = every frame), roomy and tight; measured the way the view measures the map.
+function everyArrangement(map, view, pct) {
+  const zoom = zoomOf(pct), page = { w: (view.w - 16) / zoom, h: (view.h - 16) / zoom };
+  const keys = map.projects.map((p) => p.key), most = map.projects.map((p) => Math.min(C.PAGE_COLUMNS, p.nodes.length));
+  const out = [], idx = most.map(() => 1);
+  for (;;) {
+    const caps = Object.fromEntries(keys.map((k, i) => [k, idx[i]]));
+    for (const tight of [false, true]) for (let K = 1; K <= keys.length; K++) {
+      const o = { ...ARRANGE, ...(tight ? ARRANGE.tightly : {}) }, a = C.planAcross(map, page, { ...o, caps, count: K });
+      if (!a) continue;
+      const b = C.fitBounds(map, C.layout(map, { ...o, lanes: a.lanes, caps: a.caps }), ARRANGE, false);
+      out.push({ lanes: a.lanes, caps: a.caps, tight, w: (b.right - b.left) * zoom, h: (b.bottom - b.top) * zoom });
+    }
+    let k = idx.length - 1;
+    for (; k >= 0; k--) { if (++idx[k] <= most[k]) break; idx[k] = 1; }
+    if (k < 0) return out;
+  }
+}
+
+test('智能一页 at a zoom the user set: the view shows that zoom, never back to 100% and never grown to fill (any map, window, screen)', () => {
+  const specs = [USER_MAP, { agentdeck: 11, 秋招: 3, skills: 1 }, { a: 2, b: 1, c: 2, d: 1, e: 2, f: 1 }, { alpha: 2, beta: 1 }, { agentdeck: 15, 秋招: 3, kenke: 2, fuqing: 2, daily: 1, other: 1 }];
+  for (const dpr of [1, 2]) for (const [w, h] of [[1114, 732], [1188, 732], [1440, 900], [1920, 1080]]) for (const spec of specs) for (const pct of [55, 80, 100, 125, 170]) {
+    const r = atZoom(crewOf(spec), { w, h }, pct, dpr);
+    assert.ok(Math.abs(r.shown - r.zoom) < 1e-9, `${Object.values(spec).join('/')} ${w}x${h} ${dpr}x at ${pct}%: shown at ${(r.shown / C.BASE_SCALE * 100).toFixed(1)}%`);
+    // what it says about the page is what the page shows at that zoom
+    assert.equal(r.pageFits, onPage(r, { w, h }), `${Object.values(spec).join('/')} ${w}x${h} ${dpr}x at ${pct}%: pageFits ${r.pageFits}, ${r.w.toFixed(0)}x${r.h.toFixed(0)}`);
+  }
+  // no zoom set: the zoom 智能一页 picks, as before (the user's map fills the 1440x900 page at a little under 100%)
+  const auto = C.arrangePage(crewOf(USER_MAP), { w: 1188, h: 732 }, { ...ARRANGE, dpr: 2 }, {});
+  assert.deepEqual(C.fitLimits(auto, 2), C.fitLimits(auto, 2, null));
+  assert.deepEqual(C.fitLimits(auto, 2, zoomOf(125)), { min: zoomOf(125), max: zoomOf(125) });
+  // a zoom under what keeps the smallest text at 10 device px (100% on a 1x screen is 8 px) is the user's: kept, not raised
+  assert.deepEqual(C.fitLimits(auto, 1, zoomOf(100)), { min: zoomOf(100), max: zoomOf(100) });
+  assert.ok(zoomOf(100) < C.readableScale(1));
+});
+
+test('智能一页 at the user\'s zoom rearranges columns, lanes and wrapping so the whole map shows on one page there: the user\'s map at 80%, 100% and 125%', () => {
+  const map = crewOf(USER_MAP);
+  // the window 2.0.3 always went back to 100% in two lanes and scrolled (1366x900): at 80% the map comes onto one page
+  const small = { w: 1114, h: 732 };
+  let r = atZoom(map, small, 80);
+  assert.equal(r.pageFits, true, r.name);
+  assert.ok(onPage(r, small), `${r.w}x${r.h}`);
+  // 1440x900: one row at 80%; at 100% one row is too wide, wrapped it fits; at 125% nothing fits
+  const wide = { w: 1188, h: 732 };
+  r = atZoom(map, wide, 80);
+  assert.deepEqual([r.pageFits, !!r.plan.page], [true, true], r.name);
+  r = atZoom(map, wide, 100);
+  assert.deepEqual([r.pageFits, !!r.plan.page], [true, false], r.name);
+  assert.ok(onPage(r, wide));
+  r = atZoom(map, wide, 125);
+  assert.equal(r.pageFits, false, r.name);
+  // agentdeck is still the wide one, three cards (six rows beside health's five): the frames as even as they can be
+  assert.equal(atZoom(map, wide, 100).plan.caps.agentdeck, 3);
+});
+
+test('智能一页 at the user\'s zoom finds the whole map a page whenever any arrangement of columns and lanes gives one; when none does, it stands as compactly as any can, never wider than the window', () => {
+  const cases = [[USER_MAP, { w: 1114, h: 732 }], [USER_MAP, { w: 1188, h: 732 }], [USER_MAP, { w: 1260, h: 814 }], [USER_MAP, { w: 1440, h: 640 }],
+    [{ agentdeck: 15, 秋招: 3, kenke: 2, fuqing: 2, daily: 1, other: 1 }, { w: 1188, h: 732 }], [{ big: 20, s1: 2, s2: 1, s3: 3 }, { w: 1188, h: 732 }], [{ a: 2, b: 1, c: 2, d: 1, e: 2, f: 1 }, { w: 1114, h: 732 }]];
+  for (const [spec, view] of cases) for (const pct of [70, 80, 100, 125, 150]) {
+    const map = crewOf(spec), r = atZoom(map, view, pct), all = everyArrangement(map, view, pct);
+    const label = `${Object.values(spec).join('/')} ${view.w}x${view.h} at ${pct}%: ${r.name}`;
+    const fitting = all.filter((a) => onPage(a, view));
+    assert.equal(r.pageFits, fitting.length > 0, `${label} (${fitting.length} of ${all.length} arrangements fit)`);
+    // never wider than the window: the rest is down the page
+    assert.ok(r.w <= view.w - 16 + 0.5, `${label}: ${r.w.toFixed(0)}px wide`);
+    if (r.pageFits) continue;
+    // off the page: no roomy arrangement that stands across the window is more than 3% shorter (the most even of those that
+    // are within 3% of the shortest is the one taken)
+    const across = all.filter((a) => !a.tight && a.w <= view.w - 16 + 0.5), shortest = Math.min(...across.map((a) => a.h));
+    assert.ok(r.h <= shortest * C.WRAP_KEEP + 0.5, `${label}: ${r.h.toFixed(0)}px tall, the shortest ${shortest.toFixed(0)}px`);
+  }
+});
+
+// At a zoom the user set nothing grows or shrinks to absorb a window's change, so two arrangements can give way within a
+// few dozen pixels, each because the one before no longer stands (one row stops fitting, then the lanes that took
+// over). What must not happen: a change from a few pixels back and forth, an arrangement coming back once left, or a
+// narrower window finding the map a shorter page than a wider one did (a frame put under the wrong lane: 17/5/3/2 at
+// 125% stood in two lanes at 1170px, one lane at 1160 and two again at 1149).
+test('智能一页 at the user\'s zoom does not jump while the window is dragged: none from a few pixels back and forth, no arrangement back once left, never a shorter page at a narrower width', () => {
+  const track = (map, widths, h, dpr, pct) => { let current = {}; return widths.map((w) => { const r = C.arrangePage(map, { w, h }, { ...ARRANGE, dpr, zoom: zoomOf(pct) }, current); current = { plan: r.plan, planW: w, dpr }; const b = C.fitBounds(map, r.lay, ARRANGE, false); return { w, name: arrangement(r.plan), fits: r.pageFits, h: b.bottom - b.top }; }); };
+  for (const dpr of [1, 2]) for (const h of [732, 900]) for (const pct of [80, 100, 125]) for (const spec of [USER_MAP, NUDGED['11-3-1'], NUDGED['2-1-2-1-2-1'], NUDGED['15-3-2-2-1-1']]) {
+    const map = crewOf(spec), label = `${Object.values(spec).join('/')} ${dpr}x h${h} at ${pct}%`;
+    for (const widths of [widthsFrom(1100, 1170), widthsFrom(1170, 1100), widthsFrom(1400, 1470), widthsFrom(1470, 1400)]) {
+      const seen = track(map, widths, h, dpr, pct), runs = seen.map((x) => x.name).filter((n, i, a) => !i || n !== a[i - 1]);
+      assert.equal(new Set(runs).size, runs.length, `${label}, ${widths[0]} -> ${widths[widths.length - 1]}: ${runs.join(' / ')}`);
+      for (const a of seen) for (const b of seen) if (b.w < a.w && !a.fits && !b.fits) assert.ok(b.h * C.WRAP_KEEP >= a.h - 0.5, `${label}: ${b.w}px ${b.h.toFixed(0)} tall (${b.name}), ${a.w}px ${a.h.toFixed(0)} (${a.name})`);
+    }
+    for (let w = 1000; w <= 1900; w += 60) {
+      const seen = track(map, [w, w + 4, w, w + 4, w, w + 4, w], h, dpr, pct).slice(1).map((x) => x.name);
+      assert.equal(switches(seen), 0, `${label}, ${w}px: ${[...new Set(seen)].join(' <-> ')}`);
+    }
+  }
+});
+
+test('智能一页 at the user\'s zoom with no project on the map, or the board not laid out yet (0x0), still gives 队长 alone', () => {
+  for (const [w, h] of [[1440, 900], [0, 0]]) {
+    const r = C.arrangePage(crewOf({}), { w, h }, { ...ARRANGE, dpr: 2, zoom: zoomOf(125) }, {});
+    assert.deepEqual(r.plan.lanes, []);
+    assert.ok(r.lay.captain && r.lay.groups.length === 0);
+  }
+});
+
+test('the zoom the user set is saved with the map (drawn units, within the zoom range); none saved: null, 智能一页 picks the zoom', () => {
+  assert.equal(C.normalizeSaved({ zoom: 0.56 }).zoom, 0.56);
+  assert.equal(C.zoomPercent(C.normalizeSaved({ zoom: zoomOf(125) }).zoom), 125);
+  assert.equal(C.normalizeSaved({ zoom: 0.01 }).zoom, C.MIN_SCALE);
+  assert.equal(C.normalizeSaved({ zoom: 99 }).zoom, C.MAX_SCALE);
+  for (const junk of [undefined, null, '0.8', NaN, Infinity, 0, -1, {}]) assert.equal(C.normalizeSaved({ zoom: junk }).zoom, null, String(junk));
 });
