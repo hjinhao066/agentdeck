@@ -426,27 +426,29 @@ test('智能一页 keeps the zoom the user set (80%, 100%, 125%): arranged for i
   const USER = { agentdeck: 17, health: 5, 秋招: 3, hermes: 2 };
   await launch(sessionsOf(USER));
   await open(1366, 900, 'dark'); await settled();
-  const label = page.locator('[data-cm="reset"]');
+  // (the page changes with a restart: every lookup goes to the page of the moment)
+  const label = () => page.locator('[data-cm="reset"]');
   const hint = () => page.evaluate(() => { const h = document.querySelector('.cm-hint'); return h.hidden ? '' : h.textContent; });
   const summary = [];
-  const note = async (pct, name) => { const g = await read(); summary.push({ pct, name, label: await label.textContent(), scale: g.view.scale, pageFits: g.pageFits, plan: g.plan, hint: await hint(), saved: await page.evaluate(() => config.crewMap.zoom ?? null) }); return g; };
+  // the map as it stands and what the line at the bottom says, read at once (that line goes after six seconds)
+  const note = async (pct, name) => { const said = await hint(), g = await read(); summary.push({ pct, name, label: await label().textContent(), scale: g.view.scale, pageFits: g.pageFits, plan: g.plan, hint: said, saved: await page.evaluate(() => config.crewMap.zoom ?? null) }); return { ...g, said }; };
   // untouched, as before: no zoom set, 智能一页 picks one (this map does not fit this page at 80% or more: lanes at 100%, scrolled)
   let g = await note(null, 'auto');
   expect.soft(g.view.scale, 'no zoom set: 智能一页 picks it (lanes at 100%)').toBeCloseTo(0.7, 5);
   await shot('user-zoom-auto-1366x900-dark', true);
   const zoomTo = async (pct) => {
-    await label.click();
+    await label().click();
     if (pct === 80) { await page.locator('[data-cm="out"]').click(); await page.locator('[data-cm="out"]').click(); }
     // (125% is no step of the buttons: a pinch, as a trackpad sends it, ctrl+wheel by exactly that much)
     if (pct === 125) await page.evaluate(() => { const vp = document.querySelector('.cm-viewport'), r = vp.getBoundingClientRect(); vp.dispatchEvent(new WheelEvent('wheel', { deltaY: -Math.log(1.25) / 0.0022, ctrlKey: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); });
-    await expect(label).toHaveText(`${pct}%`);
+    await expect(label()).toHaveText(`${pct}%`);
   };
   for (const pct of [80, 100, 125]) {
     await zoomTo(pct);
     await page.locator('[data-cm="fit"]').click(); await settled();
     g = await note(pct, `${pct}%`);
     // the zoom stays the user's, on screen and saved
-    await expect.soft(label, `智能一页 at ${pct}%: the zoom stays`).toHaveText(`${pct}%`);
+    await expect.soft(label(), `智能一页 at ${pct}%: the zoom stays`).toHaveText(`${pct}%`);
     expect.soft(g.view.scale, `智能一页 at ${pct}%: shown at ${pct}%`).toBeCloseTo(0.7 * pct / 100, 5);
     expect.soft(await page.evaluate(() => config.crewMap.zoom), `${pct}%: saved`).toBeCloseTo(0.7 * pct / 100, 5);
     // never past the window's sides, 队长 on the page
@@ -458,7 +460,7 @@ test('智能一页 keeps the zoom the user set (80%, 100%, 125%): arranged for i
       for (const c of g.cards) { expect.soft(c.y, `80%: ${c.id} top`).toBeGreaterThanOrEqual(g.vp.y - 0.5); expect.soft(c.bottom, `80%: ${c.id} bottom`).toBeLessThanOrEqual(g.vp.bottom + 0.5); }
     }
     // where it cannot be one page at that zoom, it says so in plain words, and the rest is down the page
-    if (!g.pageFits) expect.soft(await hint(), `${pct}%: what the hint says`).toBe(`按你设的 ${pct}% 一页放不下：已排到最紧凑，其余部分向下滚动查看`);
+    if (!g.pageFits) expect.soft(g.said, `${pct}%: what the hint says`).toBe(`按你设的 ${pct}% 一页放不下：已排到最紧凑，其余部分向下滚动查看`);
     await shot(`user-zoom-${pct}-1366x900-dark`, true);
   }
   // A restart: the zoom is read back from the saved settings (the file on disk), and the map is arranged for it again
@@ -467,7 +469,7 @@ test('智能一页 keeps the zoom the user set (80%, 100%, 125%): arranged for i
   await start();
   await open(1366, 900, 'dark'); await settled();
   g = await note(125, 'after restart');
-  await expect.soft(label, 'after a restart: the zoom the user set').toHaveText('125%');
+  await expect.soft(label(), 'after a restart: the zoom the user set').toHaveText('125%');
   expect.soft(g.view.scale).toBeCloseTo(0.875, 5);
   for (const f of g.frames) expect.soft(f.right, `after restart: ${f.key} right`).toBeLessThanOrEqual(g.vp.right - 8 + 0.5);
   await shot('user-zoom-125-1366x900-dark-after-restart', true);

@@ -678,8 +678,9 @@
     // a layer while the wheel turns; dropped once it rests, so the text is drawn afresh at the new scale
     vpEl.classList.add('cm-moving');
     clearTimeout(onWheel.moving);
-    // (a zoom that comes to rest where the smallest text is under 10 device px says so)
-    onWheel.moving = setTimeout(() => { vpEl.classList.remove('cm-moving'); if (onWheel.zoomed) say(smallNote()); onWheel.zoomed = false; }, 200);
+    // (a zoom that comes to rest where the smallest text is under 10 device px says so; otherwise it leaves the bottom
+    // line alone: 智能一页 may have spoken since)
+    onWheel.moving = setTimeout(() => { vpEl.classList.remove('cm-moving'); const note = onWheel.zoomed && smallNote(); onWheel.zoomed = false; if (note) say(note); }, 200);
     const r = vpEl.getBoundingClientRect();
     // a pinch on a trackpad arrives as ctrl+wheel
     if (e.ctrlKey || e.metaKey) { onWheel.zoomed = true; zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0022)); }
@@ -935,6 +936,7 @@
     host.save();
     render({ smooth: true });
     setUndo(snap);
+    onWheel.zoomed = false;   // (a pinch that has not come to rest yet: this line says it all)
     const pct = C.zoomPercent(view.scale);
     const tall = pageFits ? '' : planZoom ? `按你设的 ${pct}% 一页放不下：已排到最紧凑，其余部分向下滚动查看` : `一页放不下：保持 ${pct}% 大小，其余部分向下滚动查看`;
     say([tall, smallNote()].filter(Boolean).join('；'));

@@ -609,7 +609,8 @@ test('一键整理: dragged frames and cards go back on the grid in the order th
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await dragBy(frame('hermes-savings'), 70, 90);
   expect(await page.evaluate(() => { document.querySelector('[data-cm="relayout"]').click(); return [...document.querySelectorAll('.cm-node, .cm-pane, .cm-project, .cm-edges')].flatMap((n) => n.getAnimations()).length; })).toBe(0);
-  assertNeat(await read());
+  // (the zoom the user set above with 缩小 is still theirs: 智能一页 kept it, so the map shows at it, not filling the window)
+  assertNeat(await read(), true);
   expect(await page.evaluate(() => [getComputedStyle(document.querySelector('.cm-trail')).display, getComputedStyle(document.querySelector('.cm-hub-beat')).display])).toEqual(['none', 'none']);
   expect(errors).toEqual([]);
 });
