@@ -665,7 +665,7 @@
 })(typeof self !== 'undefined' ? self : this, () => {
   const ID = /^at-[a-z0-9-]{4,40}$/;
   const TURN = /^[A-Za-z0-9_-]{1,160}$/;
-  const DONE_BY = ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat'];
+  const DONE_BY = ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat', 'todo'];
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : 0;
   const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ').slice(0, max) : '';
   const line = (value, max) => text(value, max).replace(/\s+/g, ' ').trim();
