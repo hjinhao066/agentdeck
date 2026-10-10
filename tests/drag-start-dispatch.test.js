@@ -247,3 +247,34 @@ test('in a test instance the dispatcher refuses a real claude, agy, gemini or co
   const open = runtime(t, 'gemini', false), card2 = open.add();
   assert.equal((await open.board.requestStart(card2.id)).dispatcher, 'gemini'); assert.equal(open.created.length, 1);
 });
+
+test('Gemini unread and every Claude seat out: the held start does not touch the board on the heartbeats, and opens once when Claude has room', async (t) => {
+  const r = runtime(t), card = r.add();
+  const gemini = () => 'unknown';   // no reading, an old one: not room
+  r.setStance((cmd) => (/^agy/.test(cmd) ? gemini() : 'out')); r.setOut((cmd) => !/^agy/.test(cmd));   // the ordinary open/queue says Gemini would open (unknown is not out), Claude would queue
+  assert.equal((await r.board.requestStart(card.id)).queued, true);
+  const after = r.requests.length;
+  for (let i = 0; i < 10; i++) { r.tick(); await new Promise(setImmediate); }
+  assert.equal(r.requests.length, after, 'ten heartbeats read and wrote nothing');
+  assert.equal(r.created.length, 0);
+  // Claude recovers: one dispatcher, on Claude
+  r.setStance((cmd) => (/^agy/.test(cmd) ? gemini() : 'ok')); r.setOut(() => false);
+  r.tick(); await new Promise(setImmediate); await new Promise(setImmediate);
+  assert.equal(r.created.length, 1); assert.match(r.created[0].cmd, /^claude .*claude-haiku-5-5/);
+  for (let i = 0; i < 3; i++) { r.tick(); await new Promise(setImmediate); }
+  assert.equal(r.created.length, 1);
+});
+
+test('Gemini unread and every Claude seat has a damaged login: no Haiku is opened on it, the Captain is told', async (t) => {
+  const r = runtime(t), card = r.add();
+  r.setStance((cmd) => (/^agy/.test(cmd) ? 'unknown' : 'error'));
+  const result = await r.board.requestStart(card.id);
+  assert.equal(result.dispatcher, 'captain'); assert.equal(r.created.length, 0);
+  assert.match(r.state.pending.at(-1).summary, /调度会话没有开：Claude 各席位的登录或额度查询都出错/);
+  assert.equal(r.store.list().find((c) => c.id === card.id).dispatch_claim.delivered, true);
+  // one seat out and one damaged is the ordinary quota queue, not this
+  const r2 = runtime(t), card2 = r2.add();
+  r2.setSeats([{ id: 'default', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/.claude-us' }]);
+  r2.setStance((cmd, seat) => (/^agy/.test(cmd) ? 'unknown' : seat === 'default' ? 'out' : 'error')); r2.setOut((cmd) => !/^agy/.test(cmd));
+  assert.equal((await r2.board.requestStart(card2.id)).queued, true);
+});

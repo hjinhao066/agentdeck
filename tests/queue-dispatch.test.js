@@ -30,7 +30,11 @@ function runtime(t) {
       onTaskStart() {}, onTaskReview() {}, onTaskRework() {},
       memoryPressure: async () => ({ level: h.pressure }),
       saveLongPrompt: async () => { if (h.failLong) throw new Error('disk full'); return '/tmp/queue-unit-long.txt'; },
-      taskBoard: async (op, input) => { if (op === 'bind' && h.failBind) throw new Error('bind failed'); return store[op](input); },
+      taskBoard: async (op, input) => {
+        if (op === 'bind' && h.failBind) throw new Error('bind failed');
+        if (op === 'list') { h.lists = (h.lists || 0) + 1; if (h.listDown || h.listFailsAt === h.lists) throw new Error('board busy: list'); }
+        return store[op](input);
+      },
     },
   };
   const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] } });
@@ -192,4 +196,66 @@ test('moving a queued card to 需要你 on this machine cancels its request at o
   await h.window.TaskBoard.move(card.id, 'needs_user');
   assert.equal(h.state.waitlist.length, 0);
   assert.equal(storeStatus(h, card), 'needs_user');
+});
+
+test('a card the Captain queued while it was already on 需要你 opens when quota returns: only a card put there while it waited is stopped', async (t) => {
+  const h = runtime(t), card = h.add();
+  h.store.move({ id: card.id, status: 'needs_user' });   // e.g. a dispatcher's finish put it there; the Captain then orders the work
+  await h.assign(card);
+  assert.equal(h.state.waitlist.length, 1); assert.equal(JSON.parse(h.state.waitlist[0].cardGist)[0], 'needs_user');
+  h.out.clear();
+  await tickAndWait(h);
+  assert.equal(h.columns.length, 2, 'the session opened'); assert.equal(h.state.waitlist.length, 0);
+  assert.equal(notices(h).filter((n) => n.includes('没有自动开')).length, 0);
+  // and the one moved there while it waited is stopped, as before
+  const h2 = runtime(t), card2 = h2.add();
+  await h2.assign(card2);
+  h2.store.move({ id: card2.id, status: 'needs_user' });
+  h2.out.clear();
+  await tickAndWait(h2);
+  assert.equal(h2.columns.length, 1); assert.match(notices(h2).join('\n'), /在排队期间被放到了「需要你」/);
+});
+
+test('a board that cannot be read when the request is due puts it back and judges it on the next turn; it neither opens blind nor drops', async (t) => {
+  // read later: the card went to 需要你 while it waited -> nothing opens
+  const h = runtime(t), card = h.add();
+  await h.assign(card);
+  h.store.move({ id: card.id, status: 'needs_user' });
+  h.out.clear(); h.listDown = true;
+  await tickAndWait(h);
+  assert.equal(h.columns.length, 1, 'no session while the board is unreadable'); assert.equal(h.state.waitlist.length, 1, 'the request is still in the queue');
+  assert.equal(h.state.tasks[0].status, 'waiting');
+  const before = h.lists;
+  await tickAndWait(h); await tickAndWait(h);
+  assert.equal(h.columns.length, 1); assert.equal(h.state.waitlist.length, 1);
+  assert.ok(h.lists >= before, 'it is tried again on every turn');
+  h.listDown = false;
+  await tickAndWait(h);
+  assert.equal(h.columns.length, 1); assert.equal(h.state.waitlist.length, 0);
+  assert.equal(h.state.tasks[0].status, 'stopped'); assert.match(notices(h).join('\n'), /在排队期间被放到了「需要你」/);
+  // read later: nothing changed -> it opens, once
+  const h2 = runtime(t), card2 = h2.add();
+  await h2.assign(card2);
+  h2.out.clear(); h2.listDown = true;
+  await tickAndWait(h2);
+  assert.equal(h2.columns.length, 1); assert.equal(h2.state.waitlist.length, 1);
+  h2.listDown = false;
+  await tickAndWait(h2);
+  assert.equal(h2.columns.length, 2, 'it opened'); assert.equal(h2.state.waitlist.length, 0);
+});
+
+test('a request queued while the board could not be read has no record of the card: when it is due the Captain decides, nothing opens by itself', async (t) => {
+  const h = runtime(t), card = h.add();
+  // count the board reads of one assign, then make exactly the read the queue takes fail
+  const probe = runtime(t), probeCard = probe.add();
+  const base = probe.lists || 0;
+  await probe.assign(probeCard);
+  const used = probe.lists - base;
+  h.listFailsAt = (h.lists || 0) + used;   // the last read of the assign is the queue's own
+  await h.assign(card);
+  assert.equal(h.state.waitlist.length, 1); assert.equal(h.state.waitlist[0].gistUnread, true); assert.equal(h.state.waitlist[0].cardGist, undefined);
+  h.out.clear();
+  await tickAndWait(h);
+  assert.equal(h.columns.length, 1); assert.equal(h.state.waitlist.length, 0);
+  assert.match(notices(h).join('\n'), /排队那一刻看板读不到/);
 });

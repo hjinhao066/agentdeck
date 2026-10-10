@@ -46,6 +46,8 @@ function boot(w, persisted) {
           return result;
         });
       },
+      claudeSeats: async () => w.seatInfos || [],
+      trustWorktree: async (input) => { (w.trusts ||= []).push(input); return w.trustResult || { ok: true }; },
       memoryPressure: async () => ({ level: w.pressure }), saveLongPrompt: async () => '/tmp/long-task.txt', onTasksChanged() {},
     },
     MainCore: M, BoardCore: B, AutoVerifyCore: AV, ClaudeSeatsCore: require('../claude-seats-core'),
@@ -70,6 +72,8 @@ function boot(w, persisted) {
     },
     ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {}, addCard() {}, readFooter: () => null }, Sidebar: { render() {} },
   };
+  // the real QuotaCore over a fake quota store: what `quota` itself would read
+  if (w.realQuota) { window.QuotaCore = require('../quota-core'); w.config.quotas = w.quotaStore ||= {}; }
   const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] }, console });
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
   const host = {
@@ -479,15 +483,23 @@ test('every Claude seat out: the card stays in review with the reason and the Ca
   assert.equal(app.notices().filter((n) => n.includes('不能自动开审查会话')).length, 1);
 });
 // The command the Captain is given to put another reviewer in: the model is in --command, and nothing `new` does not know.
-function assertManualReviewCommand(notice, cardId, executorId, model) {
-  const m = /(node "\$AGENTDECK_BOARD_CLI" new .*)$/m.exec(notice);
-  assert.ok(m, 'the notice carries a full new command: ' + notice);
-  const command = m[1];
-  assert.ok(command.includes('--task-id ' + cardId)); assert.ok(command.includes('--reviews ' + executorId));
-  assert.ok(command.includes(`--command "claude --dangerously-skip-permissions --model ${model} --effort high"`), command);
-  const outside = command.replace(/--command "[^"]*"/, '').replace(/--(?:title|task) "[^"]*"/g, '');
-  assert.doesNotMatch(outside, /--model|--effort|--verify/, 'new has no --model / --effort / --verify; they would be refused or lost');
-  for (const flag of command.replace(/"[^"]*"/g, '""').match(/ --[a-z-]+/g)) assert.ok(['--task-id', '--project', '--title', '--task', '--reviews', '--command', '--seat'].includes(flag.trim()), flag);
+const { splitPosix, flagsOfNew } = require('./fixtures/shell-words');
+async function assertManualReviewCommand(app, notice, cardId, executorId, model, { run = true } = {}) {
+  const line = /(node "\$AGENTDECK_BOARD_CLI" new .*)$/m.exec(notice);
+  assert.ok(line, 'the notice carries a full new command: ' + notice);
+  const { before, flags } = flagsOfNew(splitPosix(line[1]).words);
+  assert.deepEqual(before, ['node', '$AGENTDECK_BOARD_CLI']);
+  assert.equal(flags['task-id'], cardId); assert.equal(flags.reviews, executorId);
+  assert.equal(flags.command, `claude --dangerously-skip-permissions --model ${model} --effort high`);
+  assert.deepEqual(Object.keys(flags).filter((k) => !['task-id', 'project', 'title', 'task', 'reviews', 'command', 'seat'].includes(k)), [], 'new has no --model / --effort / --verify');
+  assert.match(flags.title, new RegExp('^审查：.*（Claude ' + (model.includes('opus') ? 'Opus' : 'Sonnet') + ' 5\\.5）$'), 'the title names the model that runs');
+  if (!run) return flags;
+  // pasted into the Captain's terminal it must work: main-new takes it (no "already queued", no unknown flag)
+  const result = await app.api.handle({ action: 'main-new', id: 'notice-cmd-' + Math.random().toString(36).slice(2), title: flags.title, task: flags.task, boardId: flags['task-id'], project: flags.project,
+    reviews: flags.reviews.split(','), command: flags.command, ...(flags.seat ? { seatId: flags.seat } : {}) }, app.captain);
+  await tick();
+  assert.equal(result.done, true, JSON.stringify(result));
+  return { flags, result };
 }
 test('interface work is always reviewed by Opus 5.5, even a small change a Sonnet made', async (t) => {
   const cases = [
@@ -523,7 +535,13 @@ test('a reviewer held back by quota after the pick (the reading changed) tells t
   assert.equal(app.reviewers(card).length, 0); assert.equal(w.config.mainSession.waitlist.length, 1);
   const told = app.notices().filter((n) => n.includes('没能马上开'));
   assert.equal(told.length, 1);
-  assertManualReviewCommand(told[0], card.id, exec.id, 'claude-opus-5-5');
+  const { flags, result } = await assertManualReviewCommand(app, told[0], card.id, exec.id, 'claude-opus-5-5');
+  // the command takes the waiting automatic review's place (it was refused as "already queued" before): still held by quota, so queued again
+  assert.match(result.result, /已排队/); assert.equal(w.config.mainSession.waitlist.length, 1); assert.equal(w.config.mainSession.waitlist[0].metadata.autoReviewRound, undefined);
+  w.heldOnly.clear();
+  app.api.onTick('captain', app.entries.get('captain')); await tick();
+  const [reviewer] = app.reviewers(card).concat(w.columns.filter((c) => c.boardId === card.id && c.reviews?.length && !String(c.boardAttempt).startsWith(AV.REVIEW_PREFIX)));
+  assert.ok(reviewer, 'the replacing review opened when quota returned'); assert.equal(reviewer.title, flags.title); assert.match(reviewer.title, /（Claude Opus 5\.5）$/);
 });
 test('a reviewer that cannot start after all (quota, crash) tells the Captain at once how to put another in; its own written verdict is not that case', async (t) => {
   const w = world(t); const app = w.boot();
@@ -535,7 +553,8 @@ test('a reviewer that cannot start after all (quota, crash) tells the Captain at
   const told = app.notices().filter((n) => n.includes('自动审查会话') && n.includes('没能跑起来'));
   assert.equal(told.length, 1);
   assert.ok(told[0].includes(card.id)); assert.match(told[0], /不用等它/);
-  assertManualReviewCommand(told[0], card.id, exec.id, 'claude-sonnet-5-5');
+  const { flags, result } = await assertManualReviewCommand(app, told[0], card.id, exec.id, 'claude-sonnet-5-5');
+  assert.match(result.result, /已开新会话/); assert.ok(w.columns.some((c) => c.title === flags.title && /claude-sonnet-5-5/.test(c.cmd)), 'the command opened a Sonnet reviewer titled with the model');
   // a reviewer's own "不通过" is a finding, not a failure to start
   const w2 = world(t); const app2 = w2.boot();
   const card2 = await newCard(app2);
@@ -803,4 +822,122 @@ test('in a test instance the auto reviewer refuses a real claude and says why; a
   const card3 = await newCard(app3);
   const exec3 = await app3.execute(card3); await app3.finish(exec3, '做完'); await app3.scan();
   assert.match(app3.reviewers(card3)[0].cmd, /^claude /);
+});
+
+// ---- round three: seats read the way `quota` reads them, a copy trusted for the reviewing seat, a card that cannot be read ----
+const Q = require('../quota-core');
+const SEAT_DIRS = { cn: '~/.claude', us: '~/.claude-us', us2: '~/.claude-us2' };
+function realWorld(t, ids = ['cn', 'us'], active = ids[0]) {
+  const w = world(t); w.realQuota = true;
+  w.config.claudeSeats = ids.map((id) => ({ id, name: id.toUpperCase(), configDir: SEAT_DIRS[id] }));
+  w.config.activeClaudeSeatId = active;
+  w.seatInfos = ids.map((id) => ({ id, loggedIn: true }));
+  return w;
+}
+// an official reading for one seat: what is left of the 5-hour and weekly windows, `ageMin` minutes old
+function reading(w, id, five, week, ageMin = 0, extra = {}) {
+  const at = Date.now() - ageMin * 60000;
+  Q.observe(w.quotaStore ||= {}, { ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: five, resetText: new Date(Date.now() + 2 * 3600000).toISOString() }, { key: 'weekly', remaining: week, resetText: new Date(Date.now() + 3 * 86400000).toISOString() }] }, at),
+  seatId: id, configDir: SEAT_DIRS[id], accountBound: true, accountKey: id + '-account', credentialKey: id + '-cred', ...extra }, Date.now());
+}
+test('low Claude quota: the automatic reviewer and the Captain\'s own Claude review still open on Claude, never swapped to Cursor; out waits', async (t) => {
+  const w = realWorld(t, ['cn']); const app = w.boot();
+  const card = await newCard(app, { important: true }), card2 = await newCard(app, { important: true }), card3 = await newCard(app, { important: true });
+  const exec = await app.execute(card, SONNET, 'exec-1'), exec2 = await app.execute(card2, SONNET, 'exec-2'), exec3 = await app.execute(card3, SONNET, 'exec-3');
+  assert.ok(exec && exec2 && exec3);
+  await app.finish(exec, '做完'); await app.finish(exec2, '做完'); await app.finish(exec3, '做完');
+  reading(w, 'cn', 12, 60);   // 5 hours: 12% left, under the 20% line the ordinary same-tier switch acts on
+  assert.equal(Q.quotaFallback(w.quotaStore, AV.CANDIDATES[0].command, w.config.claudeSeats, 'cn', Date.now()).action, 'switch', 'the ordinary new would switch this command to Cursor');
+  // the Captain's own review with a named Claude command: low opens as well (no explicit "hold at low", no switch)
+  const manual = await app.api.handle({ action: 'main-new', id: 'manual-low', title: '手动审查', task: '审查', boardId: card2.id, project: 'p', reviews: [exec2.id], command: AV.CANDIDATES[0].command }, app.captain);
+  assert.match(manual.result, /已开新会话/); assert.ok(!/换成/.test(manual.result));
+  assert.match(w.columns.find((c) => c.boardAttempt === 'manual-low').cmd, /^claude .*claude-opus-5-5/);
+  // out: the Captain's own review waits for the quota (still on Claude)
+  reading(w, 'cn', 0, 60);
+  const waiting = await app.api.handle({ action: 'main-new', id: 'manual-out', title: '手动审查', task: '审查', boardId: card3.id, project: 'p', reviews: [exec3.id], command: AV.CANDIDATES[0].command }, app.captain);
+  assert.match(waiting.result, /已排队/); assert.equal(w.columns.some((c) => c.boardAttempt === 'manual-out'), false);
+  assert.match(w.config.mainSession.waitlist.at(-1).cmd, /^claude /);
+  // the automatic reviewer of the first card, with the account low again
+  reading(w, 'cn', 12, 60);
+  await app.scan();
+  // it waits its turn behind the Captain's own request that waits for the same quota, and opens on the next turns
+  for (let i = 0; i < 3; i++) { app.api.onTick('captain', app.entries.get('captain')); await tick(); }
+  const [reviewer] = app.reviewers(card);
+  assert.ok(reviewer); assert.match(reviewer.cmd, /^claude --dangerously-skip-permissions --model claude-opus-5-5 /);
+  assert.doesNotMatch(reviewer.title, /换成|cursor/i); assert.match(reviewer.title, /（Claude Opus 5\.5）$/);
+  assert.equal(app.notices().filter((n) => /换成|Cursor/.test(n)).length, 0);
+  assert.equal(w.columns.filter((c) => /cursor/i.test(c.cmd || '')).length, 0, 'nothing was opened on Cursor');
+});
+test('a seat with a damaged credential reads as error and is never the unverified fallback, though its numbers are old', async (t) => {
+  const w = realWorld(t, ['cn', 'us'], 'us'); const app = w.boot();
+  const card = await newCard(app, { important: true });
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  // both readings are 40 minutes old (an official reading counts for 30): unknown. us (the active one, tried first) has a damaged credential file.
+  reading(w, 'cn', 80, 80, 40); reading(w, 'us', 80, 80, 40);
+  w.seatInfos = [{ id: 'cn', loggedIn: true }, { id: 'us', loggedIn: true, credential: { state: 'invalid', bytes: 5, store: 'file' } }];
+  await app.scan();
+  const [reviewer] = app.reviewers(card);
+  assert.ok(reviewer, 'the other seat, unverified, is the last resort'); assert.equal(reviewer.claudeSeatId, 'cn');
+  // every seat damaged: nobody, the Captain is told
+  const w2 = realWorld(t, ['cn', 'us'], 'cn'); const app2 = w2.boot();
+  const card2 = await newCard(app2, { important: true });
+  const exec2 = await app2.execute(card2); await app2.finish(exec2, '做完');
+  reading(w2, 'cn', 80, 80, 40); reading(w2, 'us', 80, 80, 40);
+  w2.seatInfos = [{ id: 'cn', loggedIn: true, credential: { state: 'expired', bytes: 300, store: 'file' } }, { id: 'us', loggedIn: true, credential: { state: 'no-oauth', bytes: 20, store: 'keychain' } }];
+  await app2.scan();
+  assert.equal(app2.reviewers(card2).length, 0); assert.match(app2.card(card2.id).review_block.reason, /登录或额度查询出错/);
+});
+test('no signed-in Claude seat at all: nobody is picked and the reason says so (the default seat is not brought back)', async (t) => {
+  const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();
+  const card = await newCard(app, { important: true });
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  w.seatInfos = [{ id: 'cn', loggedIn: false }, { id: 'us', loggedIn: false }];
+  await app.scan();
+  assert.equal(app.reviewers(card).length, 0); assert.match(app.card(card.id).review_block.reason, /没有已登录的 Claude 席位/);
+});
+test('the copy the executor worked in is trusted for the seat that reviews it, before the session opens', async (t) => {
+  const w = world(t);
+  w.seats = [{ id: 'cn', name: 'CN', configDir: '~/.claude' }, { id: 'us2', name: 'US2', configDir: '~/.claude-us2' }];
+  w.config.activeClaudeSeatId = 'cn';
+  const app = w.boot();
+  const card = await newCard(app, { important: true });
+  const exec = await app.execute(card);
+  exec.cwd = path.join(w.root, 'copy'); exec.trustedCwd = exec.cwd; exec.claudeSeatId = 'us2';   // a copy made for the executor's own seat
+  await app.finish(exec, '做完');
+  await app.scan();
+  const [reviewer] = app.reviewers(card);
+  assert.ok(reviewer); assert.equal(reviewer.claudeSeatId, undefined, 'the reviewer takes the active seat cn');
+  assert.deepEqual((w.trusts || []).map((x) => [x.seatId, x.configDir, x.path]), [['cn', '~/.claude', exec.cwd]]);
+  // a seat other than the active one is trusted as itself
+  const w2 = world(t); w2.seats = w.seats; w2.config.activeClaudeSeatId = 'cn'; const app2 = w2.boot();
+  const card2 = await newCard(app2, { important: true });
+  const exec2 = await app2.execute(card2); exec2.cwd = path.join(w2.root, 'copy'); exec2.trustedCwd = exec2.cwd; await app2.finish(exec2, '做完');
+  w2.seatOut.add('cn');
+  await app2.scan();
+  assert.equal(app2.reviewers(card2)[0].claudeSeatId, 'us2'); assert.deepEqual((w2.trusts || []).map((x) => x.seatId), ['us2']);
+  // not a copy the app authorized: nothing is recorded
+  const w3 = world(t); const app3 = w3.boot();
+  const card3 = await newCard(app3, { important: true });
+  const exec3 = await app3.execute(card3); await app3.finish(exec3, '做完'); await app3.scan();
+  assert.equal((w3.trusts || []).length, 0);
+  // a trust that could not be recorded is said, the review still opens
+  const w4 = world(t); w4.trustResult = { ok: false, reason: '席位配置文件读不了' }; const app4 = w4.boot();
+  const card4 = await newCard(app4, { important: true });
+  const exec4 = await app4.execute(card4); exec4.cwd = path.join(w4.root, 'copy'); exec4.trustedCwd = exec4.cwd; await app4.finish(exec4, '做完'); await app4.scan();
+  assert.equal(app4.reviewers(card4).length, 1); assert.ok(app4.notices().some((n) => n.includes('没能预先登记 Claude 的文件夹信任') && n.includes('席位配置文件读不了')));
+});
+test('a card that cannot be read when a review fails to start: the command is for Opus and the title is the card\'s own', async (t) => {
+  const w = world(t); const app = w.boot();
+  const card = await newCard(app, { title: '修登录（Opus 5.5 high·066us）' });
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  await app.scan();
+  const [review] = app.reviewers(card);
+  assert.match(review.title, /（Claude Sonnet 5\.5）$/, 'the simple card was given to Sonnet');
+  w.failOps.set('list', 1);   // the board cannot be read for the notice
+  await app.api.submit({ action: 'session-exit', code: 7 }, review); await tick();
+  const told = app.notices().filter((n) => n.includes('没能跑起来'));
+  assert.equal(told.length, 1);
+  const flags = await assertManualReviewCommand(app, told[0], card.id, exec.id, 'claude-opus-5-5', { run: false });
+  assert.equal(flags.title, '审查：修登录（Claude Opus 5.5）', 'not 审查：审查：…, and no guess that it is simple');
 });

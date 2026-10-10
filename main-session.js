@@ -315,18 +315,33 @@
   // Claude seats an automatic chooser (the reviewer of a --verify card, the board's dispatcher) may
   // use, in the order a new session would take them: the active seat first. A seat that is signed
   // out is left out; one whose login cannot be read stays, and its quota reading decides.
+  // The seats handed to the quota reading carry each seat's login and credential (`info`), the same
+  // ClaudeSeats.described list `quota` and the sidebar use, with the seat list just fetched laid over it: a seat
+  // whose stored credential is damaged or expired reads as `error`, never as room, and never as the unverified fallback.
+  let seatsForQuota = null, lastSeatChoices = null;
   async function claudeSeatChoices() {
     const seats = window.QuotaCore.claudeSeats ? window.QuotaCore.claudeSeats(host.config.claudeSeats) : [];
     let infos = [];
     try { infos = (await window.deck.claudeSeats?.()) || []; } catch (_) {}
+    const raw = Array.isArray(host.config.claudeSeats) ? host.config.claudeSeats : [];
+    const described = window.ClaudeSeats?.described ? window.ClaudeSeats.described(raw) : raw;
+    seatsForQuota = infos.length ? raw.map((s) => ({ ...s, info: infos.find((i) => i.id === s.id) || described.find((d) => d.id === s.id)?.info })) : described;
     const active = host.config.activeClaudeSeatId;
-    return seats.filter((s) => infos.find((i) => i.id === s.id)?.loggedIn !== false)
+    lastSeatChoices = seats.filter((s) => infos.find((i) => i.id === s.id)?.loggedIn !== false)
       .map((s) => ({ id: s.id, label: s.name || s.id, configDir: s.configDir }))
       .sort((a, b) => (b.id === active) - (a.id === active));
+    return lastSeatChoices;
   }
   // The same passive reading as the `quota` command (QuotaCore.commandStance): out, error and
   // unknown (old or missing) are never taken for "has quota".
-  const commandStance = (cmd, seatId) => window.QuotaCore.commandStance(host.config.quotas, cmd, host.config.claudeSeats, seatId || host.config.activeClaudeSeatId);
+  const commandStance = (cmd, seatId) => window.QuotaCore.commandStance(host.config.quotas, cmd, seatsForQuota && seatsForQuota.length ? seatsForQuota : host.config.claudeSeats, seatId || host.config.activeClaudeSeatId);
+  // Is there a dispatcher the start could open on right now? The very question startCard asks (pickDispatcher over the same
+  // readings), answered without touching the board: the quota retry below asks it every heartbeat.
+  function dispatcherReady() {
+    const AV = window.AutoVerifyCore;
+    const seats = lastSeatChoices || (window.QuotaCore.claudeSeats ? window.QuotaCore.claudeSeats(host.config.claudeSeats).map((x) => ({ id: x.id, label: x.name || x.id, configDir: x.configDir })) : []);
+    return !!AV.pickDispatcher({ commandOf: (c) => c.command || window.BoardCore.commandForAgent(c.agent), seats, stanceOf: commandStance }).cmd;
+  }
   // A test instance never lets an automatic opener (the board's dispatcher, the auto reviewer) start a real model.
   const testRefusal = (cmd, what) => (host.testInstance ? window.AutoVerifyCore.testInstanceRefusal(cmd, what) : '');
   // A seat other than the one a new session defaults to travels with the session, as `new --seat` does.
@@ -345,7 +360,8 @@
   // A fully exhausted pool still waits; a low pool must not swap that reviewer.
   function openPlan(cmd, seatId, explicit, metadata) {
     if (metadata?.executor === 'chatgpt-web') return { action: 'open', cmd, note: '' };
-    if (metadata?.autoReviewRound) {
+    // a Claude Code reviewer (automatic, or the Captain's own new --reviews): low quota still opens on Claude, out waits, never another provider
+    if (metadata?.autoReviewRound || (metadata?.reviews?.length && window.AutoVerifyCore?.isClaudeCommand(cmd))) {
       return commandQuota(cmd, seatId)?.out
         ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' }
         : { action: 'open', cmd, note: '' };
@@ -394,6 +410,11 @@
     const AV = window.AutoVerifyCore;
     const seats = await claudeSeatChoices();
     const picked = AV.pickDispatcher({ commandOf: (c) => c.command || window.BoardCore.commandForAgent(c.agent), seats, stanceOf: commandStance });
+    if (picked.reason && picked.allError) {
+      boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度会话没有开：Claude 各席位的登录或额度查询都出错（${picked.reason}），请队长安排。`);
+      await boardRequest('dispatched', { id, key }); quotaStarts.delete(id);
+      return { card, dispatcher: 'captain' };
+    }
     const fallback = AV.DISPATCHERS.find((c) => c.command);
     const choice = picked.cmd ? picked : { candidate: fallback, cmd: fallback.command, seat: null };
     const checkedDispatcher = M.checkCommand(choice.cmd);
@@ -531,8 +552,16 @@
     const executor = sessionById(card.exec_receipt?.session_id);
     // the title says what really runs, not what the executor's card title was labelled
     const title = AV.reviewTitle(window.BoardCore.cleanText(card.title, 200), picked.candidate.label).replace(/\s+/g, ' ');
-    const metadata = { project: card.project, reviews: executor ? [executor.id] : [], boardId: id, autoReviewRound: claim.round, ...seatMeta(picked.seat) };
-    if (executor?.trustedCwd && executor.trustedCwd === executor.cwd) metadata.trustedCwd = executor.trustedCwd;
+    const metadata = { project: card.project, reviews: executor ? [executor.id] : [], boardId: id, autoReviewRound: claim.round, cardTitle: card.title, ...seatMeta(picked.seat) };
+    if (executor?.trustedCwd && executor.trustedCwd === executor.cwd) {
+      metadata.trustedCwd = executor.trustedCwd;
+      // Claude's "trust this folder" answer is recorded per seat: the executor's seat has it for this copy, the seat that
+      // reviews may not. Record it for the chosen seat before the session opens, as the copy's own seat got it.
+      if (picked.seat && window.deck.trustWorktree) {
+        const trust = await window.deck.trustWorktree({ seatId: picked.seat.id, configDir: picked.seat.configDir, path: executor.cwd }).catch((error) => ({ ok: false, reason: error.message }));
+        if (!trust?.ok) boardNotice(`卡片 ${id}「${card.title}」的审查会话在代码副本 ${executor.cwd} 里没能预先登记 Claude 的文件夹信任（${trust?.reason || '未知原因'}）。会话若停在「是否信任此文件夹」，用 answer --key down,enter 选第二项。`);
+      }
+    }
     let held = null;
     const placed = await withQueue(async () => {
       const current = await findCard(id);
@@ -546,7 +575,7 @@
     });
     host.flushConfig?.();   // the queue entry is on disk before the claim is marked delivered
     await boardRequest('reviewDispatched', { id, key: input.key });
-    if (held) boardNotice(`卡片 ${id}「${card.title}」的自动审查会话（${picked.candidate.label}）没能马上开：${held} 额度恢复前这一轮没有审查结论；不想等就另派一个 Claude 审查会话（模型写在 --command 里）：${AV.manualReviewCommand({ card, receipt: card.exec_receipt, cli: M.boardCli(host.platform), executorId: executor?.id })}`);
+    if (held) boardNotice(`卡片 ${id}「${card.title}」的自动审查会话（${picked.candidate.label}）没能马上开：${held} 额度恢复前这一轮没有审查结论，额度回来会自动开；不想等或想换席位，下面这条命令会替换这条排队（模型写在 --command 里，可加 --seat）：${AV.manualReviewCommand({ card, receipt: card.exec_receipt, cli: M.boardCli(host.platform), platform: host.platform, executorId: executor?.id })}`);
     return placed ? { card, reviewer: picked.candidate.id, ...(picked.unverified ? { unverified: true } : {}) } : { card, ignored: true };
   }
   async function startReview(id, input) {
@@ -1493,12 +1522,19 @@
   // Captain's old order no longer stands, so nothing opens by itself.
   async function queuedCardProblem(w) {
     const id = w.metadata?.boardId;
-    if (!id || !w.cardGist) return '';
+    if (!id) return '';
+    // the board could not be read when it was queued: what the card looked like then is unknown, so the Captain decides
+    if (w.gistUnread) return '排队那一刻看板读不到，没法确认这张卡之后有没有被改动';
+    if (!w.cardGist) return '';
     let card;
-    try { card = await findCard(id); } catch (_) { return ''; }   // a board that cannot be read now is retried, not a reason to drop
+    try { card = await findCard(id); } catch (_) { return null; }   // null: cannot tell now, the request goes back to the head and is judged on the next turn
     if (!card) return '卡片已经不在看板上了';
     if (card.archived) return '卡片已归档';
-    if (card.status === 'needs_user') return '卡片现在在「需要你」，等用户拿主意';
+    // only a card that was NOT on 需要你 when the Captain queued it and is now: a Captain order given on a card already
+    // there (a dispatcher's finish puts cards there) stands
+    let queuedStatus = '';
+    try { queuedStatus = JSON.parse(w.cardGist)[0]; } catch (_) {}
+    if (card.status === 'needs_user' && queuedStatus !== 'needs_user') return '卡片在排队期间被放到了「需要你」，等用户拿主意';
     if (['held', 'blocked'].includes(card.flag)) return '卡片现在是' + (card.flag === 'held' ? '已挂起' : '被前置任务挡住');
     if (cardGist(card) !== w.cardGist) return `卡片在排队期间被改动过（现在在${CARD_WORDS[card.status] || card.status}）`;
     return '';
@@ -1518,9 +1554,10 @@
     const held = openPlan(cmd, metadata.claudeSeatId, metadata.quotaExplicit, metadata);
     task.waitReason = held.action === 'queue' ? quotaQueueText(held, title) : reason;
     // The card as it was when the Captain queued it: if it has changed by the time quota returns, nobody asked for this any more.
-    const queuedCard = metadata.boardId && !metadata.reviews?.length && !metadata.autoReviewRound ? await findCard(metadata.boardId).catch(() => null) : null;
+    const wantGist = !!metadata.boardId && !metadata.reviews?.length && !metadata.autoReviewRound;
+    const queuedCard = wantGist ? await findCard(metadata.boardId).catch(() => null) : null;
     s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata,
-      ...(queuedCard ? { cardGist: cardGist(queuedCard) } : {}),
+      ...(queuedCard ? { cardGist: cardGist(queuedCard) } : wantGist ? { gistUnread: true } : {}),
       order: s.waitlist.reduce((max, w) => Math.max(max, w.order || 0), 0) + 1 });
     s.waitlist = M.highFirst(s.waitlist, isHigh);   // 高优先级 waits ahead of ordinary work
     save();
@@ -1563,11 +1600,12 @@
       const pressure = await readMemoryPressure();
       if (state() !== s || !s.waitlist.length) return;
       const active = M.activeCrew(s.tasks, crewIds()).size;
+      const deferred = new Set();   // requests put back this turn because the board could not be read
       await M.fillQueue({
         cap: M.MAX_ACTIVE, active, waiting: s.waitlist.length, level: pressure.level,
         take: () => {
           if (state() !== s) return null;
-          const index = s.waitlist.findIndex((w) => openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata).action !== 'queue');
+          const index = s.waitlist.findIndex((w) => !deferred.has(w) && openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata).action !== 'queue');
           return index < 0 ? null : s.waitlist.splice(index, 1)[0];
         },
         open: async (w) => {
@@ -1581,6 +1619,10 @@
             return;
           }
           const problem = await queuedCardProblem(w);
+          if (problem === null) {
+            s.waitlist.unshift(w); deferred.add(w);   // the board could not be read: back to the head, judged again on the next turn
+            return;
+          }
           if (problem) {
             task.status = 'stopped'; task.doneAt = Date.now();
             task.receipt = { summary: `额度回来了，但没有自动派：${problem}。`, files: [], images: [], failed: '', explicit: true };
@@ -1685,8 +1727,9 @@
       const AVC = window.AutoVerifyCore, why = String(receipt.failed).split('\n')[0].slice(0, 160), kind = receipt.source === 'quota' ? '额度用尽' : '会话出错或退出';
       // the card is read for the command (its model follows the same rule as the automatic pick); a board that cannot be read still gets the notice
       findCard(task.boardId).catch(() => null).then((found) => {
-        const card = found || { id: task.boardId, project: reviewCol.project || '', title: reviewCol.displayTitle || reviewCol.title || '' };
-        const command = AVC.manualReviewCommand({ card, receipt: card.exec_receipt, cli: M.boardCli(host.platform), executorId: card.exec_receipt?.session_id || reviewCol.reviews?.[0] });
+        // a card that cannot be read: its own title (kept on the session) and Opus, never a guess that it is simple
+        const card = found || { id: task.boardId, project: reviewCol.project || '', title: reviewCol.cardTitle || AVC.stripModelMarks(String(reviewCol.displayTitle || reviewCol.title || '').replace(/^审查：/, '').replace(/（Claude [^（）]*）$/, '')), important: true };
+        const command = AVC.manualReviewCommand({ card, receipt: card.exec_receipt, cli: M.boardCli(host.platform), platform: host.platform, executorId: card.exec_receipt?.session_id || reviewCol.reviews?.[0] });
         boardNotice(`卡片 ${task.boardId} 的自动审查会话「${reviewCol.displayTitle || reviewCol.title || reviewCol.id}」没能跑起来（${kind}）：${why}。这一轮审查没有结论。不用等它，另派一个 Claude 审查，旧会话可归档（模型和档位写在 --command 里，new 不认 --model / --effort / --verify；可加 --seat 换有额度的席位）：${command}`);
       });
     }
@@ -2629,7 +2672,7 @@
       else if (captainBusySince && entry.state === 'done') { s.captainSettledAt = Math.max(s.captainSettledAt || 0, captainBusySince); captainBusySince = 0; save(); }
       for (const [cardId, input] of quotaStarts) {
         // retry as soon as any dispatcher candidate (Gemini, or the Claude fallback) is no longer held back by quota
-        if (window.AutoVerifyCore.DISPATCHERS.some((c) => quotaPlan(c.command || window.BoardCore.commandForAgent(c.agent)).action !== 'queue')) {
+        if (dispatcherReady()) {
           quotaStarts.delete(cardId);
           startCard(cardId, input).catch((error) => host.showToast(error.message));
         }
@@ -3505,7 +3548,8 @@
           prior = s.waitlist.find((w) => w.metadata?.boardId === card.id && w.requestId !== message.id);
           if (prior) {
             if (!isMain(caller)) throw new Error('调度员已经派过这张卡片；只有队长可以替换排队。');
-            if (prior.cmd === cmd && (prior.metadata?.claudeSeatId || '') === (metadata.claudeSeatId || '')) throw new Error('这张卡片已经在排队；换命令/模型可替换，或用 queue cancel --task-id 取消。');
+            const replacesAutoReview = !!prior.metadata?.autoReviewRound && reviews.length > 0;   // the notice's own command: the same command may take the place of the waiting automatic review
+            if (!replacesAutoReview && prior.cmd === cmd && (prior.metadata?.claudeSeatId || '') === (metadata.claudeSeatId || '')) throw new Error('这张卡片已经在排队；换命令/模型可替换，或用 queue cancel --task-id 取消。');
           }
         }
         if (message.priority === 'high' && !metadata.boardId) metadata.important = true;

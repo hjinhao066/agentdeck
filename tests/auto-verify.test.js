@@ -470,13 +470,133 @@ test('the program a launch line runs is told by name; a stand-in is anything els
     assert.equal(AV.realAgentProgram(command), '', command); assert.equal(AV.testInstanceRefusal(command, '调度员'), '', command);
   }
 });
-test('the command put in the Captain\'s hands carries the model in --command and nothing new does not know', () => {
-  const card = { id: 't-1', project: '项目 A', title: '修"登录"（Opus 5.5）$x' };
+// ---- the command put in the Captain's hands: ONE statement, every value one argument, on either shell ----
+const { splitPosix, splitPowerShell, flagsOfNew } = require('./fixtures/shell-words');
+const NASTY_TITLES = [
+  '修登录', '修"新功能"上线', '带反引号 `whoami` 的标题', '价格 $env:USERNAME 和 $(whoami)', '路径 C:\\Users\\x\\a.js 和 \\n',
+  '分号; 管道| 与& 井号# 大于> 小于<', '换行\n第二行\r\n第三行', '--command "claude --model x" --verify', "it's a 'quoted' title",
+  '中文弯引号“新功能”上线', '弯单引号‘新功能’上线 ‚低 ‛高', 'x” ; Write-Output PWNED ; #', "x' ; Write-Output PWNED ; '", '（Opus 5.5 high·066us）括号',
+];
+function split(command, platform) { return platform === 'win32' ? splitPowerShell(command) : splitPosix(command); }
+test('the manual review command is one statement and every value one argument, titles of any kind, PowerShell and POSIX', () => {
+  for (const platform of ['win32', 'darwin']) {
+    for (const rawTitle of NASTY_TITLES) {
+      const card = { id: 't-1234-abcd', project: rawTitle, title: rawTitle };
+      const receipt = { text: '短', files: ['/a.js'], assignee: { model: 'claude-sonnet-5-5' } };
+      const command = AV.manualReviewCommand({ card, receipt, platform, executorId: 'c-board-x', seat: rawTitle.includes("'") ? 'us' : '' });
+      const { words, unquoted } = split(command, platform);
+      assert.deepEqual(unquoted.filter((c) => !/[$]/.test(c)), [], `nothing is left unquoted that a shell would act on (${platform}): ${rawTitle}`);
+      assert.ok(!/[\r\n]/.test(command), 'one line');
+      const { before, flags } = flagsOfNew(words);
+      assert.equal(before.length, 2); assert.equal(before[0], 'node');
+      assert.deepEqual(Object.keys(flags).sort(), ['command', 'project', 'reviews', 'task', 'task-id', 'title'].concat(rawTitle.includes("'") ? ['seat'] : []).sort());
+      assert.equal(flags['task-id'], 't-1234-abcd'); assert.equal(flags.reviews, 'c-board-x');
+      assert.equal(flags.project, rawTitle.replace(/[\r\n]+/g, ' '), 'the project is one argument, as it is');
+      assert.equal(flags.title, AV.reviewTitle(rawTitle.replace(/[\r\n]+/g, ' '), 'Claude Sonnet 5.5'), 'the title is one argument and names the model that runs');
+      assert.equal(flags.command, 'claude --dangerously-skip-permissions --model claude-sonnet-5-5 --effort high');
+    }
+  }
+});
+test('the quoting of the manual review command is the quoting PowerShell itself reads (the real parser, nothing run)', { skip: process.platform !== 'win32' }, () => {
+  const { spawnSync } = require('child_process');
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-ps-parse-'));
+  try {
+    const items = NASTY_TITLES.map((title) => ({ title, project: title, command: AV.manualReviewCommand({ card: { id: 't-1234-abcd', project: title, title }, receipt: { text: '短', files: ['/a.js'], assignee: { model: 'claude-sonnet-5-5' } }, platform: 'win32', executorId: 'c-board-x' }) }));
+    fs.writeFileSync(path.join(dir, 'in.json'), JSON.stringify(items));
+    const script = [
+      "$items = Get-Content -Raw -Encoding UTF8 -LiteralPath '" + path.join(dir, 'in.json').replace(/'/g, "''") + "' | ConvertFrom-Json",
+      '$out = @()',
+      'foreach ($i in $items) {',
+      '  $tokens = $null; $errors = $null',
+      '  $ast = [System.Management.Automation.Language.Parser]::ParseInput($i.command, [ref]$tokens, [ref]$errors)',
+      '  $statements = @($ast.EndBlock.Statements)',
+      '  $elements = @(); if ($statements.Count -ge 1) { $elements = @($statements[0].PipelineElements[0].CommandElements | ForEach-Object { if ($_ -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $_.Value } else { "<" + $_.GetType().Name + ">" } }) }',
+      '  $out += [pscustomobject]@{ statements = $statements.Count; errors = @($errors).Count; elements = $elements }',
+      '}',
+      "$out | ConvertTo-Json -Depth 5 -Compress | Set-Content -Encoding UTF8 -LiteralPath '" + path.join(dir, 'out.json').replace(/'/g, "''") + "'",
+    ].join('\n');
+    fs.writeFileSync(path.join(dir, 'parse.ps1'), '\ufeff' + script);
+    const run = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(dir, 'parse.ps1')], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'out.json'), 'utf8').replace(/^\ufeff/, ''));
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    assert.equal(list.length, items.length);
+    list.forEach((r, n) => {
+      const title = items[n].title;
+      assert.equal(r.statements, 1, 'one statement: ' + title); assert.equal(r.errors, 0, 'no parse errors: ' + title);
+      const elements = [].concat(r.elements);
+      const at = elements.indexOf('--title');
+      assert.ok(at > 0, 'a --title argument: ' + title);
+      assert.equal(elements[at + 1], AV.reviewTitle(title.replace(/[\r\n]+/g, ' '), 'Claude Sonnet 5.5'), 'the title is exactly one argument: ' + title);
+      assert.equal(elements[elements.indexOf('--project') + 1], title.replace(/[\r\n]+/g, ' '), 'and so is the project: ' + title);
+      assert.equal(elements.length, 15, 'the argument count does not depend on the title: ' + title);
+    });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+test('the command carries the model in --command and nothing new does not know; an unreadable card is reviewed by Opus', () => {
+  const card = { id: 't-1', project: '项目 A', title: '修登录（Opus 5.5）' };
   for (const [receipt, model] of [[{ text: '短', files: ['/a.js'], assignee: { model: 'claude-sonnet-5-5' } }, 'claude-sonnet-5-5'], [{ text: '短', files: ['/style.css'], assignee: { model: 'claude-sonnet-5-5' } }, 'claude-opus-5-5'], [undefined, 'claude-sonnet-5-5']]) {
     const command = AV.manualReviewCommand({ card, receipt, executorId: 'c-board-x' });
-    assert.ok(command.startsWith('node "$AGENTDECK_BOARD_CLI" new --task-id t-1 --project "项目 A" '), command);
-    assert.ok(command.includes('--reviews c-board-x --command "claude --dangerously-skip-permissions --model ' + model + ' --effort high"'), command);
-    assert.doesNotMatch(command.replace(/--command "[^"]*"/, ''), /--model|--effort|--verify/);
-    assert.ok(!/["`$]/.test(/--title "([^"]*)"/.exec(command)[1]), 'the title cannot break out of its quotes');
+    const { flags } = flagsOfNew(splitPosix(command).words);
+    assert.equal(flags.command, 'claude --dangerously-skip-permissions --model ' + model + ' --effort high', command);
+    assert.deepEqual(Object.keys(flags).filter((k) => !['task-id', 'project', 'title', 'task', 'reviews', 'command', 'seat'].includes(k)), [], 'only flags new knows: no --model / --effort / --verify');
+    assert.equal(flags.title, '审查：修登录（Claude ' + (model.includes('opus') ? 'Opus' : 'Sonnet') + ' 5.5）', 'the title says what runs, the executor\'s mark is gone');
   }
+  assert.match(AV.manualReviewCommand({ card: { ...card, important: true }, receipt: undefined, platform: 'win32' }), /--model claude-opus-5-5/);
+  assert.ok(AV.manualReviewCommand({ card, platform: 'win32' }).startsWith('node "$env:AGENTDECK_BOARD_CLI" new '));
+});
+
+// ---- interface work the first round missed: three real cards (names and paths kept short), and the words they use ----
+test('the cards the review found judged as simple are interface work: the history page, the usage chart, the clipboard buttons', () => {
+  const exec = (files, model = 'claude-sonnet-5-5', text = '做完了。报告和截图都在文件里，已核对。'.repeat(8)) => ({ text, files, assignee: { agent: 'Claude', model } });
+  const cards = [
+    // t-97959a27: a page "made like the Mac's", the receipt lists a report and a screenshots folder, a Sonnet made it
+    [{ id: 't-97959a27', title: 'Type4Me Windows：历史页按 Mac 的设计做成一样（统计卡片 + 每日图表）', detail: '用户 10-05：Windows 的历史那块按 Mac 当前这页设计，一模一样，并同步每日图表。' },
+      exec(['C:\\Users\\x\\reports\\type4me-windows-history\\report.md', 'C:\\Users\\x\\reports\\type4me-windows-history\\screenshots'])],
+    // t-f6c52c02: the usage chart with a Mac | Windows switch; only reports are listed
+    [{ id: 't-f6c52c02', title: '任务看板用量图：Mac / Windows 切换，一端能看两端用量（Opus 5.5）', detail: '第二个大柱状图右上角加一个小巧的 Mac | Windows 分段切换' },
+      exec(['C:\\Users\\x\\results\\agentdeck-usage-two-machines.md', 'C:\\Users\\x\\results\\usage-two-machines'], 'claude-opus-5-5')],
+    // t-b0f19fd5: the clipboard follow-up whose last words are about a button, listed files are one report
+    [{ id: 't-b0f19fd5', title: '剪贴板收尾二：Ctrl+V 失败后别吞用户自己的粘贴，复制的勾打到重画后的新按钮上', detail: '来源：审查报告第四节第 2 条' },
+      exec(['C:\\Users\\x\\results\\agentdeck-clipboard-polish.md'])],
+  ];
+  for (const [card, receipt] of cards) {
+    assert.equal(AV.isUiWork({ card, receipt }), true, card.id);
+    assert.equal(AV.reviewIsSimple({ card, receipt }), false, card.id);
+    const picked = AV.pickReviewer({ card, receipt, seats: [{ id: 'cn' }], stanceOf: () => 'ok' });
+    assert.equal(picked.candidate.label, 'Claude Opus 5.5', card.id);
+  }
+});
+test('the words the first round missed (a page, a menu, a font, a window, a chart, tooltip, plurals) and the interface files it missed', () => {
+  const receipt = { text: '改完', files: ['/repo/a.js'], assignee: { model: 'claude-sonnet-5-5' } };
+  for (const title of ['设置页加一个开关', '右键菜单加「复制路径」', '用量图改成柱状图', '字体太小，调大一号', '窗口最小化后恢复位置不对', 'tooltip 文案修正', '修复 Icons 显示', '修理 Buttons', '星图状态标签小修', '架构图配色', 'Fix the themes', 'Menus overlap', '按 Mac 的设计做一页', '图表标注']) {
+    assert.equal(AV.isUiWork({ card: { title }, receipt }), true, title);
+  }
+  for (const file of ['/repo/mobile-web.js', '/repo/crew-map.js', '/repo/crew-map-core.js', '/repo/preview-themes.js', '/repo/preview-reader.js', '/repo/pages.js', '/tmp/screenshots', '/tmp/Screenshots/1.txt', 'C:\\r\\截图\\a.txt', '/r/mockups/a.txt']) {
+    assert.equal(AV.isUiWork({ card: { title: '小修' }, receipt: { ...receipt, files: [file] } }), true, file);
+  }
+  // still not interface work
+  for (const title of ['同步冲突合并规则', 'quota reading from the passive source', 'queue of waiting requests', '修 Windows 路径']) {
+    assert.equal(AV.isUiWork({ card: { title }, receipt }), false, title);
+  }
+  for (const file of ['/repo/main-session.js', '/repo/quota-core.js', '/repo/docs/task-board-api.md', '/repo/tests/a.test.js', '/repo/board-core.js']) assert.equal(AV.isUiWork({ card: { title: '小修' }, receipt: { ...receipt, files: [file] } }), false, file);
+});
+test('nobody is picked from an empty seat list, and the dispatcher leaves a damaged login to the Captain', () => {
+  const stance = () => 'ok';
+  assert.match(AV.pickReviewer({ simple: false, seats: [], stanceOf: stance }).reason, /没有已登录的 Claude 席位/);
+  assert.equal(AV.pickReviewer({ simple: false, seats: [], stanceOf: stance }).cmd, undefined);
+  const commandOf = (c) => c.command || 'agy --model gemini-3.8-flash-high';
+  assert.match(AV.pickDispatcher({ commandOf, seats: [], stanceOf: (cmd) => (/^agy/.test(cmd) ? 'unknown' : 'ok') }).reason, /没有已登录的 Claude 席位/);
+  // Gemini unread and every Claude seat has a damaged login: allError, so no Haiku is started on it
+  const seats = [{ id: 'cn' }, { id: 'us' }];
+  const broken = AV.pickDispatcher({ commandOf, seats, stanceOf: (cmd) => (/^agy/.test(cmd) ? 'unknown' : 'error') });
+  assert.equal(broken.cmd, undefined); assert.equal(broken.allError, true);
+  // one seat out and one damaged is not "all damaged": the ordinary queue takes it
+  const mixed = AV.pickDispatcher({ commandOf, seats, stanceOf: (cmd, seat) => (/^agy/.test(cmd) ? 'unknown' : seat === 'cn' ? 'out' : 'error') });
+  assert.equal(mixed.allError, false);
+  // an error seat is never the unverified fallback, an unknown one is
+  const weak = AV.pickReviewer({ simple: false, seats, stanceOf: (cmd, seat) => (seat === 'cn' ? 'error' : 'unknown') });
+  assert.equal(weak.seat.id, 'us'); assert.equal(weak.unverified, true);
+  assert.equal(AV.pickReviewer({ simple: false, seats, stanceOf: () => 'error' }).cmd, undefined);
 });

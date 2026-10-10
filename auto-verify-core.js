@@ -55,11 +55,14 @@
   //  - a screenshot or interface word in the title, the card's text or the receipt (界面, 页面, 样式, 布局,
   //    视觉, 配色, 主题, 深色/浅色, 按钮, 图标, 弹窗, 侧栏, 手机端, 截图, UI, CSS, layout, theme, sidebar, button, icon).
   // A false hit costs an Opus review; a miss would put a Sonnet on a screen.
-  const UI_FILE = /\.(?:css|scss|less|html?|svg|png|jpe?g|gif|webp|bmp|jsx|tsx|vue)$|(?:^|[\\/])(?:[^\\/]*-ui(?:-core)?\.js|renderer\.js|sidebar[^\\/]*\.js|side-pane\.js|chat-ui\.js|[^\\/]*(?:style|theme)[^\\/]*\.(?:js|css)|mobile-web[\\/].+)$/i;
-  const UI_WORDS = /界面|页面|样式|布局|视觉|配色|主题|深色|浅色|按钮|图标|弹窗|侧栏|手机端|网页端|截图|动效|动画|\bUI\b|\bUX\b|\bCSS\b|\blayout\b|\btheme\b|\bsidebar\b|\bbutton\b|\bicon\b|\bscreenshot/i;
+  // The words are the user's own: pages (历史页, 设置页), design, charts (用量图, 柱状图, 图表), menus, fonts, windows,
+  // the star map and the architecture diagram, besides the plain interface words; the English ones take their plurals.
+  const UI_FILE = /\.(?:css|scss|less|html?|svg|png|jpe?g|gif|webp|bmp|jsx|tsx|vue)$|(?:^|[\\/])(?:[^\\/]*-ui(?:-core)?\.js|renderer\.js|sidebar[^\\/]*\.js|side-pane\.js|chat-ui\.js|pages\.js|mobile-web\.js|crew-map[^\\/]*\.js|preview-[^\\/]*\.js|[^\\/]*(?:style|theme)[^\\/]*\.(?:js|css)|mobile-web[\\/].+)$/i;
+  const UI_WORDS = /界面|页面|页|设计|样式|布局|视觉|配色|主题|深色|浅色|按钮|图标|弹窗|窗口|菜单|字体|侧栏|手机端|网页端|截图|动效|动画|图表|用量图|柱状图|折线图|饼图|星图|架构图|流程图|\bUI\b|\bUX\b|\bCSS\b|\blayouts?\b|\btheme[sd]?\b|\bsidebars?\b|\bbuttons?\b|\bicons?\b|\bmenus?\b|\bfonts?\b|\btooltips?\b|\bmodals?\b|\bdialogs?\b|\bscreenshots?|\bmock-?ups?\b/i;
   function isUiWork({ card, receipt } = {}) {
     const exec = receipt || (card && card.exec_receipt) || {};
-    if ((Array.isArray(exec.files) ? exec.files : []).some((f) => typeof f === 'string' && UI_FILE.test(f))) return true;
+    // receipts list deliverables (a report, a screenshots folder), not code: a path is read for its words too
+    if ((Array.isArray(exec.files) ? exec.files : []).some((f) => typeof f === 'string' && (UI_FILE.test(f) || UI_WORDS.test(f)))) return true;
     return UI_WORDS.test([card && card.title, card && card.detail, exec.text].filter(Boolean).join('\n'));
   }
   // A card is simple when nothing about it asks for the best reviewer: not interface work, not marked
@@ -91,13 +94,28 @@
     const name = realAgentProgram(command);
     return name ? `测试实例里${what}只许开替身命令，不开真的 ${name}（它会真的调用模型、可能乱派活、花额度）。命令：${String(command).slice(0, 80)}` : '';
   }
-  // The `new` command the Captain puts in another Claude reviewer by hand. The model and the effort go in
-  // --command (new has no --model / --effort / --verify of its own and refuses them).
-  function manualReviewCommand({ card, receipt, cli = 'node "$AGENTDECK_BOARD_CLI"', executorId = '<执行会话>' }) {
+  // One argument for the shell the Captain's terminal runs, in single quotes so that nothing inside is interpreted.
+  // PowerShell reads ' and the typographic single quotes ‘ ’ ‚ ‛ as quotes (a doubled one is the character itself);
+  // a double typographic quote cannot end a single-quoted string there, but a line break is flattened anyway.
+  // POSIX shells: ' becomes '\''. Never a character filter: a card title is anybody's text.
+  function quoteArg(value, platform) {
+    const text = String(value == null ? '' : value).replace(/[\r\n\u2028\u2029]+/g, ' ');
+    if (platform === 'win32') return "'" + text.replace(/['\u2018\u2019\u201a\u201b]/g, (q) => q + q) + "'";
+    return "'" + text.replace(/'/g, "'\\''") + "'";
+  }
+  // The `new` command the Captain puts in another Claude reviewer by hand, ready to paste. The model and the effort
+  // go in --command (new has no --model / --effort / --verify of its own and refuses them); the title names the model
+  // that runs, like the automatic reviewer's does. A card that could not be read is reviewed by Opus.
+  function manualReviewCommand({ card, receipt, cli, platform = 'darwin', executorId = '<执行会话>', seat = '' }) {
     const opus = !reviewIsSimple({ card, receipt });
     const model = opus ? 'claude-opus-5-5' : 'claude-sonnet-5-5';
-    const title = String(card.title || '').replace(/["`$\\]/g, '').slice(0, 60);
-    return `${cli} new --task-id ${card.id} --project ${JSON.stringify(String(card.project || ''))} --title "审查：${title}" --task "独立审查卡片 ${card.id}，按验收要求逐条核对后给出通过或不通过" --reviews ${executorId} --command "claude --dangerously-skip-permissions --model ${model} --effort high"`;
+    const title = reviewTitle(card.title || '', opus ? 'Claude Opus 5.5' : 'Claude Sonnet 5.5');
+    const q = (v) => quoteArg(v, platform);
+    const program = cli || (platform === 'win32' ? 'node "$env:AGENTDECK_BOARD_CLI"' : 'node "$AGENTDECK_BOARD_CLI"');
+    return [program, 'new', '--task-id', q(card.id), '--project', q(card.project || ''), '--title', q(title),
+      '--task', q(`独立审查卡片 ${card.id}，按验收要求逐条核对后给出通过或不通过`), '--reviews', q(executorId),
+      ...(seat ? ['--seat', q(seat)] : []),
+      '--command', `"claude --dangerously-skip-permissions --model ${model} --effort high"`].join(' ');
   }
 
   // stanceOf(command, seatId) is the passive-quota judgment `quota` shows (QuotaCore.commandStance):
@@ -130,7 +148,7 @@
     // the model that suits the card leads; table order decides the rest
     const lead = candidates.filter((c) => c.model === (wantSimple ? 'sonnet' : 'opus'));
     const ordered = [...lead, ...candidates.filter((c) => !lead.includes(c))];
-    const seatList = Array.isArray(seats) && seats.length ? seats : [{ id: 'default' }];
+    const seatList = Array.isArray(seats) ? seats : [];
     const why = [];
     let weak = null;
     for (const candidate of ordered) {
@@ -140,6 +158,7 @@
         if (RANK[stance] === undefined) { why.push(`${candidate.label}：${WHY[stance] || WHY.unknown}`); continue; }
         return done({ cmd: candidate.command, seat: null, stance });
       }
+      if (!seatList.length) { why.push(`${candidate.label}：没有已登录的 Claude 席位`); continue; }
       const found = pickSeat({ candidate, command: candidate.command, seats: seatList, stanceOf, why });
       if (found.best) return done(found.best);
       weak = weak || found.weak;
@@ -158,9 +177,9 @@
     { id: 'claude-haiku', label: 'Claude Haiku 5.5', family: 'anthropic', command: 'claude --dangerously-skip-permissions --model claude-haiku-5-5 --effort medium' },
   ];
   function pickDispatcher({ candidates = DISPATCHERS, commandOf, seats, stanceOf = () => 'unmetered' }) {
-    const seatList = Array.isArray(seats) && seats.length ? seats : [{ id: 'default' }];
+    const seatList = Array.isArray(seats) ? seats : [];
     const why = [];
-    let weak = null;
+    let weak = null, claudeTried = 0, claudeError = 0;
     for (const candidate of candidates) {
       const cmd = commandOf(candidate);
       if (!isClaudeCommand(cmd)) {
@@ -170,12 +189,15 @@
         why.push(`${candidate.label}：${WHY[stance] || WHY.unknown}`);
         continue;
       }
+      if (!seatList.length) { why.push(`${candidate.label}：没有已登录的 Claude 席位`); continue; }
+      for (const seat of seatList) { claudeTried++; if (stanceOf(cmd, seat.id) === 'error') claudeError++; }
       const found = pickSeat({ candidate, command: cmd, seats: seatList, stanceOf, why });
       if (found.best) return { candidate, cmd, seat: found.best.seat, stance: found.best.stance, family: candidate.family };
       weak = weak || found.weak;
     }
     if (weak) return { candidate: weak.candidate, cmd: weak.cmd, seat: weak.seat, stance: weak.stance, unverified: true, family: weak.candidate.family };
-    return { reason: `没有可用的调度会话（Gemini 与 Claude 额度都用尽或出错）。${why.join('；')}` };
+    // every Claude seat has a damaged login or a failing query: no Haiku is opened on it, the Captain is told instead
+    return { reason: `没有可用的调度会话（Gemini 与 Claude 额度都用尽或出错）。${why.join('；')}`, allError: claudeTried > 0 && claudeError === claudeTried };
   }
 
   // A card title often ends with the executor's own make, e.g. "（Opus 5.5 high·066us）". A review
@@ -243,5 +265,5 @@
     ].join('\n');
   }
 
-  return { REVIEW_PREFIX, REWORK_PREFIX, reviewAttemptId, reworkAttemptId, isReviewAttempt, reviewAttemptRound, FAMILY_RULES, FAMILY_NAMES, familyOf, CANDIDATES, DISPATCHERS, reviewIsSimple, isUiWork, realAgentProgram, testInstanceRefusal, manualReviewCommand, pickReviewer, pickDispatcher, stripModelMarks, reviewTitle, verdict, reviewPrompt, reworkMessage };
+  return { REVIEW_PREFIX, REWORK_PREFIX, reviewAttemptId, reworkAttemptId, isReviewAttempt, reviewAttemptRound, FAMILY_RULES, FAMILY_NAMES, familyOf, CANDIDATES, DISPATCHERS, reviewIsSimple, isUiWork, isClaudeCommand, quoteArg, realAgentProgram, testInstanceRefusal, manualReviewCommand, pickReviewer, pickDispatcher, stripModelMarks, reviewTitle, verdict, reviewPrompt, reworkMessage };
 });

@@ -36,6 +36,9 @@ test.beforeAll(async () => {
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, columns: [{ id: 'task-idle-shell', title: 'Shell', cmd: '', cwd: profile, role: 'manual' }] }));
   const env = { ...process.env, AGENTDECK_TEST_RECEIPT_ENV_DIR: envDir }; delete env.ELECTRON_RUN_AS_NODE;
   if (process.platform !== 'win32') env.ZDOTDIR = profile;
+  // One signed-in seat with a stand-in credential (the automatic reviewer needs a signed-in Claude seat to pick): a test profile never uses it.
+  fs.mkdirSync(path.join(profile, 'seats-home', '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude', '.credentials.json'), require('./fixtures/stand-in-credential'));
   // A trap in front of PATH for every real agent a test instance must never start on its own: if a real name were
   // ever launched in this profile it would only write a line to trapFile, never reach a model.
   trapDir = path.join(profile, 'trapbin'); trapFile = path.join(profile, 'trap.log'); fs.mkdirSync(trapDir);
