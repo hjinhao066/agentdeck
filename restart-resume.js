@@ -59,18 +59,28 @@
     if (task.receipt && task.receipt.failed) return false;
     return isSafetyCheckpoint(task.receipt && task.receipt.summary);
   }
+  // Closed only by the three-minute 已结束，未提交回执 fallback: the session ended a turn without a command,
+  // which is also what a session told to stop at a safe point does (progress, then stop). Nothing says the
+  // task is done, so a restart keeps it like an open one, however the app went down. (10-09: five such
+  // sessions were not continued after the 2.0.3 install, again after the 2.0.4 install and again after a
+  // restart by hand; the Captain woke each one with tell.)
+  function provisionalStop(task) {
+    return !!task && task.status === 'stopped' && !!task.receipt && task.receipt.source === 'fallback' && !task.receipt.failed;
+  }
   function shouldResume(task) {
     if (!task || task.pendingInstall) return false;
+    if (provisionalStop(task)) return true;
     // failed / stopped / done stay closed unless this app marked a checkpoint.
     // quota and asking are still the same job; a crash never rewrites them.
     if (['failed', 'stopped', 'done'].includes(task.status)) return isCheckpointClosure(task);
     return OPEN.includes(task.status);
   }
   function holdsAcrossRestart(task) {
-    return !!task && !task.pendingInstall && (OPEN.includes(task.status) || isCheckpointClosure(task));
+    return !!task && !task.pendingInstall && (OPEN.includes(task.status) || isCheckpointClosure(task) || provisionalStop(task));
   }
   function shouldPark(task) {
-    return !!task && !task.pendingInstall && PARK.includes(task.status) && !(task.receipt && task.receipt.failed);
+    if (!task || task.pendingInstall) return false;
+    return (PARK.includes(task.status) && !(task.receipt && task.receipt.failed)) || provisionalStop(task);
   }
   function resumeEnabled(config) {
     return !config || config.resumeOnRestart !== false;
@@ -218,7 +228,8 @@
       if (!col || col.isMain || !col.captainCrew || col.archived) continue;
       const task = latest.get(col.id);
       if (!shouldPark(task)) continue;
-      plans.push({ id: col.id, title: task.title || col.title || '', message: checkpointMessage() });
+      // idle: it already stopped; a message now would only start a turn the quit cuts off.
+      plans.push({ id: col.id, title: task.title || col.title || '', message: checkpointMessage(), idle: provisionalStop(task) });
     }
     return plans;
   }
@@ -270,6 +281,66 @@
     };
   }
 
+  // ---- restart watch ----
+  // After a start the 队长 must be back at work within a minute, and every crew task continued after a
+  // restart must take its continue message. Typing a message into a terminal is no proof: on 10-09 the
+  // restart notice went into the 队长's terminal while its Claude was still starting and sat in its input
+  // box, unsent, for four hours. A session is back when, after its message went in, it works, runs an
+  // AgentDeck command, or its task settles with a receipt (the caller reports these as confirm). What is
+  // not back by its limit is due once; the caller alarms the user (待我处理, the phone, Bark) and later
+  // reports a recovery so that alarm can be ticked off.
+  const CAPTAIN_LIMIT = 60_000;      // from the start
+  const CREW_LIMIT = 90_000;         // from its continue message going in
+  const CREW_START_LIMIT = 180_000;  // a continue message that never went in
+  function createRestartWatch(opts) {
+    const o = opts || {};
+    const startedAt = o.startedAt || 0;
+    const limits = { captain: o.captainLimit || CAPTAIN_LIMIT, crew: o.crewLimit || CREW_LIMIT, crewStart: o.crewStartLimit || CREW_START_LIMIT };
+    const items = new Map();
+    const pendingItem = (id) => { const it = items.get(id); return it && !it.done ? it : null; };
+    return {
+      limits,
+      expect(id, kind, title, at) {
+        if (!id || items.has(id)) return;
+        items.set(id, { id, kind: kind === 'captain' ? 'captain' : 'crew', title: String(title || ''), since: at || startedAt,
+          sentAt: 0, text: '', ready: false, done: false, failed: '', alarmedAt: 0, recoveredAt: 0, reported: false });
+      },
+      // The message went into the terminal at `at`. text: what was typed, to tell it apart when it is left in
+      // the box. ready: the agent's own prompt had settled before (so later output answers this message).
+      sent(id, at, text, ready) { const it = pendingItem(id); if (it && !it.sentAt) { it.sentAt = at; it.text = String(text || ''); it.ready = !!ready; } },
+      item(id) { const it = pendingItem(id); return it ? { kind: it.kind, sentAt: it.sentAt, text: it.text, ready: it.ready } : null; },
+      // Evidence seen at `at`: only what follows its message going in counts.
+      confirm(id, at) {
+        const it = items.get(id);
+        if (!it || it.done || !it.sentAt || at < it.sentAt) return false;
+        it.done = true;
+        if (it.alarmedAt) it.recoveredAt = at;
+        return true;
+      },
+      fail(id, reason) { const it = pendingItem(id); if (it && !it.failed) it.failed = String(reason || '续接失败'); },
+      // Nothing to wait for any more (the card was closed elsewhere, its terminal survived the restart).
+      drop(id) { const it = items.get(id); if (it && !it.alarmedAt) items.delete(id); },
+      pending(id) { return !!pendingItem(id); },
+      due(now) {
+        const out = [];
+        for (const it of items.values()) {
+          if (it.done || it.alarmedAt) continue;
+          const late = it.kind === 'captain' ? now - startedAt >= limits.captain
+            : !!it.failed || (it.sentAt ? now - it.sentAt >= limits.crew : now - it.since >= limits.crewStart);
+          if (!late) continue;
+          it.alarmedAt = now;
+          out.push({ id: it.id, kind: it.kind, title: it.title, sentAt: it.sentAt, reason: it.failed });
+        }
+        return out;
+      },
+      recovered() {
+        const out = [];
+        for (const it of items.values()) if (it.recoveredAt && !it.reported) { it.reported = true; out.push({ id: it.id, kind: it.kind, title: it.title }); }
+        return out;
+      },
+    };
+  }
+
   // The first before-quit must not call app.quit() on the same stack: Electron
   // drops that nested quit, and a timer that treats "the page answered" as
   // "the process already exited" never tries again. Quit is always scheduled
@@ -304,10 +375,10 @@
   return {
     CHECKPOINT_TOKEN, OPEN, BATCH, UUID,
     providerOf, validSessionId, bindSessionIdentity, isSafetyCheckpoint, isCheckpointClosure,
-    shouldResume, holdsAcrossRestart, shouldPark, resumeEnabled,
+    shouldResume, holdsAcrossRestart, provisionalStop, shouldPark, resumeEnabled,
     freshCommand, resumeCommand, trueResumeNote, resendNote, launchChoice, resumeMessage,
     checkpointMessage, checkpointSummary, failureNote,
     latestTasks, planResume, planPark, claimDisposition, nextBatch, ledgerState, ignoreQuota,
-    emptyManifest, parseManifest, manifestEntry, createQuitGate,
+    emptyManifest, parseManifest, manifestEntry, createQuitGate, createRestartWatch,
   };
 });

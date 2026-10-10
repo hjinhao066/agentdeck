@@ -72,6 +72,12 @@ const ICONS = {
   share: S('<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>'),
   diff: S('<rect x="4" y="3" width="16" height="18" rx="2"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/><line x1="9" y1="17" x2="15" y2="17"/>'),
   eye: S('<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>'),
+  code: S('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>'),
+  outline: S('<path d="M21 12h-8"/><path d="M21 6H8"/><path d="M21 18h-8"/><path d="M3 6v4c0 1.1.9 2 2 2h3"/><path d="M3 10v6c0 1.1.9 2 2 2h3"/>'),
+  zoomIn: S('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>'),
+  zoomOut: S('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>'),
+  actualSize: S('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 10v4"/><path d="M16 10v4"/><path d="M12 10.5v.01"/><path d="M12 13.5v.01"/>'),
+  palette: S('<path d="M12 3a9 9 0 1 0 0 18c.9 0 1.6-.7 1.6-1.6 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.7 1.6-1.7h2A4.6 4.6 0 0 0 21 10.9C21 6.5 17 3 12 3Z"/><circle cx="7.5" cy="11.5" r=".6"/><circle cx="9.5" cy="7.6" r=".6"/><circle cx="14.5" cy="7.6" r=".6"/>'),
   settings: S('<path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path d="m9 3-1 3-3 1-2 3 2 2-1 3 2 3 3-1 3 2 3-2 3 1 2-3-1-3 2-2-2-3-3-1-1-3Z"/>'),
 };
 
@@ -202,7 +208,8 @@ if (saved) {
       completedOpen: v.completedOpen === true,
     };
   }
-  if (saved.tokenUsageView?.days === 30) config.tokenUsageView = { days: 30 };
+  // Token 用量: range, Token or 金额, and the 订阅值不值 cycle starts the user set
+  if (saved.tokenUsageView) config.tokenUsageView = TokenUsageCore.viewPrefs(saved.tokenUsageView);
   // Artifacts: the projects the user folded away
   config.artifactsCollapsed = (Array.isArray(saved.artifactsCollapsed) ? saved.artifactsCollapsed : []).filter((k) => typeof k === 'string' && k.length <= 120).slice(0, 500);
   // 队长's 交付文件 panel: folded away or not, its two lists if changed, and the index of what it found (DeliverablesCore)
@@ -469,7 +476,12 @@ function userComposing(id, ownText) {
   const t = entry.typing;
   if (Date.now() - t.lastKeyAt < INPUT_QUIET || t.draft) return true;
   const box = visibleInputBox(entry);
-  if (box && typeof ownText === 'string' && (flatBox(ownText).includes(flatBox(box)) || /^(?:\[Pastedtext#\d+(?:\+\d+lines?)?\])+$/i.test(flatBox(box)))) return t.unknown;
+  // The text AgentDeck typed itself: the caller's (ownText), or else this column's last automatic send as long
+  // as the user has not pressed a key since (entry.autoSent). Left in the box with its Enter lost it is not the
+  // user's draft; read as one, it held back every later automatic send (10-09: the 队长's restart notice blocked
+  // its receipts for four hours).
+  const own = typeof ownText === 'string' ? ownText : entry.autoSent && t.lastKeyAt < entry.autoSent.at ? entry.autoSent.text : null;
+  if (box && typeof own === 'string' && (flatBox(own).includes(flatBox(box)) || /^(?:\[Pastedtext#\d+(?:\+\d+lines?)?\])+$/i.test(flatBox(box)))) return t.unknown;
   if (box) return true;
   if (box === '') t.unknown = false;
   return t.unknown;
@@ -1201,7 +1213,7 @@ function whenTerminalReady(col, callback, waitingLabel, initialDelay) {
     // A raw shell is ready as soon as its PTY exists. Agent TUIs must expose a
     // recognizable idle prompt; permission/trust input never receives a task.
     const ready = entry && entry.alive && (!col.cmd || terminalIdle(col, entry));
-    if (ready) {
+    if (ready && (!col.cmd || promptSettled(entry, col))) {
       promptQueueIds.delete(queueId);
       callback();
       return;
@@ -2215,6 +2227,9 @@ function removeCol(col) {
   ChatUI.onColumnRemoved(col.id);
   if (col.isMain) config.mainSession = null;
   detachColumn(col, false);
+  // Without 队长 its background sessions are loose sessions again, listed after the folders:
+  // the deck follows the sidebar order.
+  if (col.isMain) { columns = SidebarCore.orderedColumns(columns, config.folders); reflowDeck(); }
   // A 小队长's children keep running and go back to the 队长.
   if (col.subCaptain) window.MainSession?.releaseSubCrew?.(col, '关掉');
   saveConfig();
@@ -2413,6 +2428,8 @@ function sendWhenReady(col, text, opts) {
       // 1000 bytes. Never type into it; a caller that can report it is told once the limit
       // for a silent start has passed (see MainCore.startupLimit).
       const silent = MainCore.launchEchoOnly(entry.lastScreen);
+      // Launched in this run: not before the agent has drawn its own prompt and held still (promptSettleTick).
+      const fresh = !col.cmd || promptSettled(entry, col);
       // outputSince: what was sent before has to have reached the agent, shown by anything it
       // drew after that time; after a minute without that, send anyway.
       const caughtUp = !o.outputSince || (entry.lastOutputAt || 0) > o.outputSince || Date.now() - o.outputSince > 60_000;
@@ -2428,7 +2445,7 @@ function sendWhenReady(col, text, opts) {
           return;
         }
       }
-      if (!silent && idle && ready && settled && caughtUp && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
+      if (!silent && fresh && idle && ready && settled && caughtUp && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
         if (o.cancelled && o.cancelled()) return;
         // A draft blocks this attempt, but must not skip the timeout below.
         if (!(o.guardUserInput && userComposing(col.id))) {
@@ -2459,6 +2476,27 @@ function sendWhenReady(col, text, opts) {
     setTimeout(check, 500);
   };
   check();
+}
+// A command line AgentDeck launched in this run (entry.launchedAt) takes automatic input only once the agent it
+// started has drawn its own prompt (MainCore.agentPromptDrawn) and stayed idle for FRESH_SETTLE. The screen alone
+// was not enough: right after a restart it still showed the last run's idle prompt, and the shell had handed the
+// terminal to `claude` long before Claude Code was up; keys typed then kept their text in its box and lost their
+// Enter (10-09: the 队长's restart notice and three crew continue messages, for hours). Claude, Codex, Cursor,
+// Antigravity, Gemini and Grok draw a prompt we know; any other command settles once it has drawn something and
+// then been quiet for FRESH_QUIET. Worked out on each status tick and on each delivery check.
+const FRESH_SETTLE = 1500, FRESH_QUIET = 10_000;
+function promptSettled(entry, col) {
+  if (!entry?.launchedAt || entry.promptSettledAt) return true;
+  if (col) promptSettleTick(col, entry);
+  return !!entry.promptSettledAt;
+}
+function promptSettleTick(col, entry) {
+  const now = Date.now();
+  if ((entry.lastOutputAt || 0) < entry.launchedAt || MainCore.launchEchoOnly(entry.lastScreen)) { entry.promptSeenAt = 0; return; }
+  if (terminalIdle(col, entry) && MainCore.agentPromptDrawn(entry.lastScreen, col.cmd)) entry.promptSeenAt ||= now;
+  else entry.promptSeenAt = 0;
+  const known = !!window.RestartResume?.providerOf(col.cmd);
+  if ((entry.promptSeenAt && now - entry.promptSeenAt >= FRESH_SETTLE) || (!known && now - (entry.lastOutputAt || 0) >= FRESH_QUIET)) entry.promptSettledAt = now;
 }
 function addColumn(c) {
   const col = BoardCore.normalizeColumn({
@@ -2933,10 +2971,11 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
         const entry = terms.get(col.id), info = AgentInfo.resolveAgentInfo(col, entry);
         const task = [...(MainSession.state()?.tasks || [])].reverse().find((t) => t.colId === col.id);
         const active = entry?.alive && (entry.state === 'working' || entry.sendingPrompt || task?.status === 'working');
-        const failed = !active && (task?.status === 'failed' || col.lastReceipt?.failed || entry && !entry.alive);
-        const status = entry?.alive && ['input', 'quota'].includes(entry.state) ? entry.state
+        const failed = !active && (task?.status === 'failed' || col.lastReceipt?.failed);
+        // The desktop sidebar's words: a process that ended is 已退出, a finished terminal 已完成.
+        const status = entry && !entry.alive ? 'exited' : entry?.alive && ['input', 'quota'].includes(entry.state) ? entry.state
           : active ? 'working' : failed ? 'failed'
-          : ['queued', 'waiting', 'asking', 'done'].includes(task?.status) ? task.status : 'idle';
+          : ['queued', 'waiting', 'asking', 'done'].includes(task?.status) ? task.status : entry?.state === 'done' ? 'done' : 'idle';
         return { id: col.id, title: columnLabel(col), model: info.model || info.provider || '未知模型',
           status, isMain: !!col.isMain, project: String(col.project || '').slice(0, 120),
           receipt: String(col.lastReceipt?.summary || col.lastReceipt?.failed || '').slice(0, 1000) };
@@ -3206,6 +3245,7 @@ const deckHost = {
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
   createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, ptyBackgroundWork,
+  restartWatchMs: env.testRestartWatchMs || 0,   // test profiles only (main.js): shorter restart watch limits
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
   menuOnScreen,
   // How the terminal stands right now, read again instead of taken from the last status tick.
@@ -3214,8 +3254,15 @@ const deckHost = {
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
 };
-SidePane.init(deckHost);
-Sidebar.init(deckHost);
+// One module failing to start (a throw, or a rejected async init) is logged and the script
+// goes on: 任务看板, its tabs and the saved view are set up at its end (2.0.2: a throw here
+// left the board unopenable).
+function startPart(name, start) {
+  const failed = (error) => console.error(`${name} 启动失败：`, error);
+  try { Promise.resolve(start()).catch(failed); } catch (error) { failed(error); }
+}
+startPart('SidePane', () => SidePane.init(deckHost));
+startPart('Sidebar', () => Sidebar.init(deckHost));
 // The Captain's crew list opens fully at launch and again the first time the window is
 // used on a new day; a fold made in between holds until then.
 let crewFoldDay = SidebarCore.localDay(Date.now());
@@ -3230,20 +3277,20 @@ function openCrewOnNewDay() {
 }
 window.addEventListener('focus', openCrewOnNewDay);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) openCrewOnNewDay(); });
-AttentionUI.init(deckHost);
-MainSession.init(deckHost);
+startPart('AttentionUI', () => AttentionUI.init(deckHost));
+startPart('MainSession', () => MainSession.init(deckHost));
 window.deck.onParkForRestart(async (sessions) => {
   try { await MainSession.parkForRestart(sessions); }
   finally { window.deck.parkForRestartDone(); }
 });
-ClaudeSeats.init(deckHost);
-ChatUI.init(deckHost);
-Pages.init(deckHost);
-ChatDeliverables.init(deckHost);
-ReleaseNotesUI.init(deckHost);
-TodoUI.init(deckHost);
-render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
-renderQuotaBar();
+startPart('ClaudeSeats', () => ClaudeSeats.init(deckHost));
+startPart('ChatUI', () => ChatUI.init(deckHost));
+startPart('Pages', () => Pages.init(deckHost));
+startPart('ChatDeliverables', () => ChatDeliverables.init(deckHost));
+startPart('ReleaseNotesUI', () => ReleaseNotesUI.init(deckHost));
+startPart('TodoUI', () => TodoUI.init(deckHost));
+startPart('render', () => render(!(Array.isArray(saved && saved.columns) && saved.columns.length)));
+startPart('renderQuotaBar', () => renderQuotaBar());
 function applyQuotaSamples(samples) {
   let changed = false;
   for (const sample of samples) changed = QuotaCore.observe(config.quotas, sample) || changed;
@@ -3361,8 +3408,9 @@ function menuOnScreen(term, sent = '') {
 // prompt at the bottom means the agent has exited, and a menu it was showing when it died still
 // stands above that prompt. It is history, not a question waiting for an answer.
 function liveStatusText(term) {
-  if (env.platform !== 'win32') return statusScreen(term);
+  // On every platform the replayed output from before a restart is not the live screen.
   const text = MainCore.afterReplay(statusScreen(term), env.platform);
+  if (env.platform !== 'win32') return text;
   return MainCore.isWindowsShellPrompt(text) ? MainCore.windowsAgentOutput(text) : text;
 }
 // Background shell commands under a column's terminal, for the automatic archive
@@ -3774,6 +3822,7 @@ battery.every('statusTick', () => {
       }
       entry.state = st;
       entry.backgroundOnly = backgroundOnlyState(st, isMainCol, liveText, entry, cmd);
+      if (entry.launchedAt && !entry.promptSettledAt) promptSettled(entry, columns.find((c) => c.id === id));
       setDot(entry, st);
       maybeNotifyState(id, entry, st);
       if (st === 'input' && columns.find((c) => c.id === id)?.isMain) attn++;
@@ -4062,7 +4111,7 @@ TaskBoardUI.init({
   prefs: () => config.taskBoardView,
   savePrefs: (prefs) => { config.taskBoardView = prefs; saveConfig(); },
   tokenPrefs: () => config.tokenUsageView,
-  saveTokenPrefs: (prefs) => { config.tokenUsageView = { days: prefs.days === 30 ? 30 : 7 }; saveConfig(); },
+  saveTokenPrefs: (prefs) => { config.tokenUsageView = TokenUsageCore.viewPrefs(prefs); saveConfig(); },
   copy: (text) => window.deck.clipboardWrite(text),
   renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', ClaudeSeats.described(config.claudeSeats)),
   openSession: openTaskSession,

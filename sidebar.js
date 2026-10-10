@@ -67,13 +67,42 @@
   }
 
   // ---- top: primary entries ----
+  // Two columns of icon + name, 搜索 across both under them. The name is also the
+  // tooltip and the accessible name, so an entry stays named when only its icon shows.
   function navRow(key, iconName, label, hint, onClick) {
     const b = el('button', 'nav-row');
     b.type = 'button'; b.dataset.nav = key;
+    b.title = hint ? `${label} (${hint})` : label;
+    b.setAttribute('aria-label', label);
     b.append(iconEl(iconName), el('span', 'nav-row-label', label));
     if (hint) b.appendChild(el('span', 'nav-row-hint', hint));
     b.addEventListener('click', onClick);
     return b;
+  }
+  // Two columns while every name fits whole; when one would be cut (a narrow sidebar, a
+  // bigger sidebar font, a long count) the entries show icons only. Measured after layout,
+  // in the next frame, so changing the class never feeds back into a resize callback.
+  let fitQueued = false;
+  function fitTop() {
+    fitQueued = false;
+    if (!topEl) return;
+    topEl.classList.remove('nav-icons');
+    const cut = [...topEl.querySelectorAll('.nav-row-label')].some((l) => l.scrollWidth > l.clientWidth);
+    topEl.classList.toggle('nav-icons', cut);
+  }
+  function queueFit() {
+    if (fitQueued || typeof requestAnimationFrame !== 'function') return;
+    fitQueued = true;
+    requestAnimationFrame(fitTop);
+  }
+  function watchTopFit() {
+    const nav = document.getElementById('colNav');
+    if (typeof ResizeObserver === 'function' && nav) new ResizeObserver(queueFit).observe(nav);
+    // counts and badges coming and going, the search box arriving, the sidebar font (a style on #colNav)
+    const mo = new MutationObserver(queueFit);
+    mo.observe(topEl, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['hidden'] });
+    if (nav) mo.observe(nav, { attributes: true, attributeFilter: ['style'] });
+    queueFit();
   }
   function buildTop() {
     topEl.textContent = '';
@@ -108,11 +137,11 @@
       captain,
       attention,
       tasks,
-      slot,
       todo,
       navRow('schedule', 'clock', 'Schedule', '', () => host.togglePage('schedule')),
       navRow('artifacts', 'artifacts', 'Artifacts', '', () => host.togglePage('artifacts')),
       navRow('skills', 'skills', 'Skills', '', () => host.togglePage('skills')),
+      slot,
     );
   }
   function todoTitle() { return `待办：你自己要做的事，打一句话回车就存（在 AgentDeck 里按 ${window.TodoUI.shortcutLabel()} 速记）`; }
@@ -848,6 +877,7 @@
     topEl = document.getElementById('navTop');
     listEl = document.getElementById('navList');
     buildTop();
+    watchTopFit();
     document.addEventListener('mousedown', (e) => { if (menu && !menu.contains(e.target)) closeMenu(); }, true);
     document.addEventListener('keydown', (e) => { if (menu && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(); } }, true);
     window.addEventListener('blur', closeMenu);

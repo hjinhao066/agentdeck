@@ -129,6 +129,16 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   never write into a task's folder or its mirror, never drop a waiting decision, and
   never let a decision open a session, create a card or start work. No bulk accept.
   A test profile reads task descriptions only from inside the profile.
+- A command line launched in this run gets no automatic input before the agent has drawn
+  its own prompt below the launch line and held still (`promptSettled`,
+  `MainCore.agentPromptDrawn`); the last run's replay is never the live screen, on any
+  platform (`MainCore.afterReplay`). Text AgentDeck typed that the agent did not take is
+  AgentDeck's own (`entry.autoSent`), never the user's draft. After every start the 队长
+  must be back within a minute and each continued crew task within its limit
+  (`RestartResume.createRestartWatch`); typed text is no proof of that. Whoever is not back
+  is reported once (待我处理, phone, critical Bark via `restart:alarm`), and ticked off later.
+  A crew task closed only by the three-minute 已结束，未提交回执 fallback is unfinished: every
+  start continues it however the app went down (`RestartResume.provisionalStop`).
 - Automatic sends go through `sendWhenReady`/`agentInForeground`: never type
   prose into a column whose foreground process is a shell (unless it is a plain
   shell column a Schedule targets on purpose). Prompts are never truncated; long
@@ -229,3 +239,21 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - The side pane browser is a sandboxed `WebContentsView` with its own partition,
   http(s) only, permissions and downloads denied. Previews are read in the main
   process with size caps; the page never gets a raw path it did not click on.
+- A previewed `.html` file runs its own scripts, so it is never put into the deck's
+  page (no iframe, no `innerHTML`): it gets a second sandboxed `WebContentsView` without
+  a preload, in the non-persistent `agentdeck-preview` session, served from
+  `agentdeck-preview://<random>/`. Every limit is in `preview-html-core.js` and decided
+  on real paths: only the open page's own folder (the page alone in a catch-all folder),
+  no `file:`, no loopback or local-network address (the phone page and sync server
+  listen there), nothing handed to the browser tab that the page could not fetch itself.
+  Keep `tests/preview-html.test.js` and `tests/e2e/preview-html-themes.spec.js` passing.
+- The preview's reading tools (`preview-reader.js`, wired in `side-pane.js`): find marks words
+  with CSS highlight ranges and never rewrites a note's text; the main process watches only the
+  file on screen (`preview:watch`, resolved like a click) and tells the page a number, never a
+  path; ⌘F/Ctrl+F is the only key taken from a previewed page (`before-input-event`), whose find
+  runs in its own view (`findInPage`). ⌘F elsewhere stays the conversation/terminal search.
+  Keep `tests/preview-reader.test.js` and `tests/e2e/preview-reader.spec.js` passing.
+- The Markdown reading view's extra syntax is behind `renderMarkdown`'s `rich` option:
+  chat bubbles and the phone page must keep their output. Theme colours live in
+  `preview-themes.js` as solid colours so the contrast test can read them; text in a
+  theme is never under 4.5:1 or 11.5px, and `preview-themes.css` names no colour itself.

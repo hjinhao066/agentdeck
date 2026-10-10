@@ -776,6 +776,26 @@
   function launchEchoOnly(screen) {
     return LAUNCH_ECHO_END.test(String(screen || '').replace(/\s+/g, ''));
   }
+  // What the started agent drew: the rows below the last launch line (however its rows wrap), or the whole
+  // screen once that line is gone (a full-screen TUI, or scrolled away).
+  function afterLaunchEcho(screen) {
+    const rows = String(screen || '').split('\n');
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (LAUNCH_ECHO_END.test(rows.slice(Math.max(0, i - 8), i + 1).join('').replace(/\s+/g, ''))) return rows.slice(i + 1).join('\n');
+    }
+    return rows.join('\n');
+  }
+  // Has the agent a launch line started drawn its own input prompt? Its banner, a loading line or a shell
+  // prompt drawn as ❯ is not one. Claude Code (2.1.295, measured) draws banner, box and footer at once, 0.6 s
+  // after it starts with a small conversation and 1.5 s with a 26 MB one; keys typed before that keep their
+  // text in the box and lose their Enter.
+  const PROMPT_CHROME = /bypass permissions|for shortcuts|← for agents|⏎ send|context left/i;
+  function agentPromptDrawn(screen, cmd) {
+    const drawn = afterLaunchEcho(screen);
+    if (!drawn.trim()) return false;
+    if (/\bcursor-agent\b/i.test(cmd || '')) return cursorActivity(drawn) === 'idle';
+    return promptRowIdle(drawn) || PROMPT_CHROME.test(drawn.split('\n').filter((row) => row.trim()).slice(-6).join('\n'));
+  }
   // How long a silent start is waited for. Claude, Codex and agy paint within seconds (a big
   // --resume, a cold disk or a first-run scan: well under a minute), so 3 minutes is several
   // times the slowest normal start. Cursor's session head is quiet for 1–2 minutes on purpose,
@@ -1150,14 +1170,9 @@
     return !base || SHELL_NAMES.test(base);
   }
 
-  function afterReplay(screen, platform) {
-    if (platform !== 'win32') {
-      const text = String(screen || '');
-      const sep = text.lastIndexOf('以上为上次会话的输出');
-      if (sep < 0) return text;
-      const nl = text.indexOf('\n', sep);
-      return nl >= 0 ? text.slice(nl + 1) : '';
-    }
+  // The same separators on every platform. macOS knew only the oldest one until 10-09, so after a restart the
+  // last run's idle Claude screen read as live there and work was typed into a Claude still starting.
+  function afterReplay(screen) {
     const lines = String(screen || '').split('\n');
     let from = 0;
     lines.forEach((line, i) => {
@@ -1239,7 +1254,7 @@
 
   return {
     RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, AUTO_COMPACT_DEFAULT, AUTO_COMPACT_MIN, AUTO_COMPACT_MAX, autoCompactWindow, COMPACT_NOTE, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, CORE_LIMIT, BRIEFING_TOPICS, PROVIDERS, ROUTING, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, briefingMark, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, drawsOutput, claudeBackgroundTasks, claudeScrolledUp, claudeStatusRowsBlanked, backgroundCommandStatus, resourceReceipt,
-    receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, resourceKind, loginNudgeShown, LOGIN_NUDGE_MARK, statusLabel, ledgerText, subCaptainBrief, readText, resetNote, relayNote, restartNote, restartNotice, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
+    receiptsForModel, silenceTimeout, launchEchoOnly, afterLaunchEcho, agentPromptDrawn, startupLimit, startupFailure, exceptionReason, resourceKind, loginNudgeShown, LOGIN_NUDGE_MARK, statusLabel, ledgerText, subCaptainBrief, readText, resetNote, relayNote, restartNote, restartNotice, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };
 });

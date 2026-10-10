@@ -10,11 +10,16 @@
 // appended log only costs its new lines); a database or CSV is read again only
 // when its size or time changes. What each file held is kept in a cache, so
 // a log deleted later (Claude Code prunes old sessions) still counts.
+//
+// Each day and model is also priced at its official API list price
+// (token-prices.json), and the Claude dollars are summed per seat directory for
+// the 订阅值不值 rows. The page gets seat ids, never a path.
 const fs = require('fs');
 const path = require('path');
 const C = require('./token-usage-core');
+const PRICES = require('./token-prices.json');
 
-const CACHE_VERSION = 3;   // 2: a Cursor row is keyed by its line and its occurrence; 3: Antigravity retried calls
+const CACHE_VERSION = 4;   // 2: a Cursor row is keyed by its line and its occurrence; 3: Antigravity retried calls; 4: 1-hour cache writes, fast mode, US-only inference
 const KEEP_DAYS = 62;          // the view shows 30 days; a little more is kept
 const CHUNK = 8 * 1024 * 1024;
 
@@ -62,8 +67,15 @@ function saveCache(file, cache) {
   fs.renameSync(tmp, file);
 }
 
-const pack = (r) => [r.key, r.ts, r.model, r.input, r.output, r.cacheRead, r.cacheWrite];
-const unpack = (a, source) => ({ source, key: a[0], ts: a[1], model: a[2], input: a[3], output: a[4], cacheRead: a[5], cacheWrite: a[6] });
+// flags: 1 fast mode, 2 US-only inference
+const pack = (r) => [r.key, r.ts, r.model, r.input, r.output, r.cacheRead, r.cacheWrite, r.cacheWrite1h || 0, (r.fast ? 1 : 0) | (r.geoUs ? 2 : 0)];
+const unpack = (a, source) => {
+  const r = { source, key: a[0], ts: a[1], model: a[2], input: a[3], output: a[4], cacheRead: a[5], cacheWrite: a[6] };
+  if (a[7]) r.cacheWrite1h = a[7];
+  if (a[8] & 1) r.fast = true;
+  if (a[8] & 2) r.geoUs = true;
+  return r;
+};
 
 // Feed every complete line after `offset` to onLine(buffer); returns the new
 // offset (the end of the last complete line). A line still being written stays
@@ -152,14 +164,24 @@ function readCursorCsv(file, entry) {
 
 // One scan: refresh the cache from the logs, then sum every day from KEEP_DAYS
 // ago to today. Each source reports how it went (sources[]), so a CLI that
-// leaves no token records is shown as 无数据, never as 0.
-async function scan({ home, cacheFile, now = Date.now(), extraClaude = [] } = {}) {
+// leaves no token records is shown as 无数据, never as 0. seats: [{ id, dir }],
+// the Claude seat directories by id; seats whose directories are one real
+// directory share one entry of seatCosts.
+async function scan({ home, cacheFile, now = Date.now(), extraClaude = [], seats = [] } = {}) {
   const started = Date.now();
   const cache = loadCache(cacheFile);
   const today = C.dayKey(now);
   const from = C.addDays(today, -(KEEP_DAYS - 1));
   const fromMs = C.dayStart(from);
-  const dirs = sourceDirs(home, extraClaude);
+  const dirs = sourceDirs(home, [...extraClaude, ...seats.map((s) => s.dir)]);
+  // Each seat's real projects directory; seats on one directory form one group.
+  const groups = [];
+  for (const seat of seats) {
+    const real = realDir(path.join(seat.dir, 'projects'));
+    if (!real) continue;
+    const g = groups.find((x) => x.root === real);
+    if (g) g.seats.push(seat.id); else groups.push({ root: real, seats: [seat.id] });
+  }
   const report = {};
   const note = (id, patch) => { report[id] = { files: 0, errors: 0, ...(report[id] || {}), ...patch }; };
   const touched = new Set();
@@ -241,8 +263,14 @@ async function scan({ home, cacheFile, now = Date.now(), extraClaude = [] } = {}
   const all = [];
   const perSource = {};
   const cursorMissing = new Set();     // rows without numbers, each once however many exports hold it
-  for (const entry of Object.values(cache.files)) {
-    for (const a of entry.recs || []) if (a[1] >= fromMs) all.push(unpack(a, entry.source));
+  for (const [file, entry] of Object.entries(cache.files)) {
+    const group = entry.source === 'claude' ? groups.findIndex((g) => file.startsWith(g.root + path.sep)) : -1;
+    for (const a of entry.recs || []) {
+      if (a[1] < fromMs) continue;
+      const r = unpack(a, entry.source);
+      if (group >= 0) r.group = group;
+      all.push(r);
+    }
     if (entry.source === 'cursor') for (const k of entry.missingKeys || []) cursorMissing.add(k);
   }
   report.cursor.missing = cursorMissing.size;
@@ -253,6 +281,20 @@ async function scan({ home, cacheFile, now = Date.now(), extraClaude = [] } = {}
     if (r.ts > s.lastTs) s.lastTs = r.ts;
   }
   const days = C.dailySums(merged, from, today);
+  const costs = C.dailyCosts(merged, from, today, PRICES);
+  // A message replayed into another seat's session counts once, in the group of the record kept.
+  const seatCosts = groups.map((g) => ({ seats: g.seats, days: {} }));
+  for (const r of merged) {
+    if (r.group == null) continue;
+    const day = C.dayKey(r.ts);
+    const c = day >= from && day <= today && C.recordCost(r, C.priceOf(r.model, PRICES));
+    if (!c) continue;
+    const d = seatCosts[r.group].days;
+    d[day] = (d[day] || 0) + c[0] + c[1] + c[2] + c[3];
+  }
+  for (const g of seatCosts) for (const day of Object.keys(g.days)) g.days[day] = Math.round(g.days[day] * 1e6) / 1e6;
+  const plans = {};
+  for (const [name, p] of Object.entries(PRICES.plans || {})) plans[name] = p.usd;
   try { saveCache(cacheFile, cache); } catch (_) {}
 
   const sources = [];
@@ -270,7 +312,7 @@ async function scan({ home, cacheFile, now = Date.now(), extraClaude = [] } = {}
   add('cursor', 'Cursor', { export: true, missing: report.cursor.missing });
   sources.push({ id: 'gemini-cli', name: 'Gemini CLI', state: geminiChats ? 'unsupported' : 'none', files: geminiChats, records: 0, errors: 0, lastDay: '' });
   sources.push({ id: 'chatgpt-web', name: 'ChatGPT 网页', state: 'none', files: 0, records: 0, errors: 0, lastDay: '', web: true });
-  return { version: CACHE_VERSION, today, from, generatedAt: now, tookMs: Date.now() - started, days, sources };
+  return { version: CACHE_VERSION, today, from, generatedAt: now, tookMs: Date.now() - started, days, costs, seatCosts, plans, pricesChecked: PRICES.checked, sources };
 }
 
 module.exports = { scan, sourceDirs, readLines, KEEP_DAYS, CACHE_VERSION };

@@ -271,12 +271,15 @@ function authStatusCache(read, now = Date.now) {
 }
 async function seatInfo(seat, home, platform = process.platform, keychain = credentialStatus, authStatus = null, fresh = false) {
   const loc = credentialLocation(seat, home);
-  let email = '', rawEmail = '', accountKey = '', recordedPlan = '';
+  let email = '', rawEmail = '', accountKey = '', recordedPlan = '', recordedSince = '';
   try {
     if (fs.statSync(loc.metadataPath).size <= 8 * 1024 * 1024) {
       const account = JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount;
       rawEmail = S.cleanEmail(account?.emailAddress);
       recordedPlan = S.planName(account?.organizationType, account?.organizationRateLimitTier);
+      // The day the subscription started: Token 用量 counts its monthly cycle from it.
+      const since = account?.subscriptionCreatedAt;
+      recordedSince = typeof since === 'string' && /^\d{4}-\d{2}-\d{2}/.test(since) ? since.slice(0, 40) : '';
     }
     email = S.maskEmail(rawEmail);
     accountKey = usageAccountKey(loc) || '';
@@ -291,7 +294,7 @@ async function seatInfo(seat, home, platform = process.platform, keychain = cred
   const plan = moved ? auth.plan || '' : recordedPlan || auth?.plan || '';
   // Credentials on disk do not make a seat signed in when the CLI itself says it is not.
   const signedOut = present && auth?.loggedIn === false;
-  return { ...seat, configDir: loc.dir, maskedEmail: email, loginEmail, accountEmail: loginEmail || rawEmail, plan, accountKey, onboardingComplete: onboardingComplete(seat, home),
+  return { ...seat, configDir: loc.dir, maskedEmail: email, loginEmail, accountEmail: loginEmail || rawEmail, plan, subscribedAt: moved ? '' : recordedSince, accountKey, onboardingComplete: onboardingComplete(seat, home),
     // Without --email: the settings row adds the address typed there.
     loginBase: loginCommand('Claude', { ...seat, email: '' }, home, platform === 'test' ? process.platform : platform),
     credentialKey: crypto.createHash('sha256').update(loc.keychainService).digest('hex').slice(0, 16), loggedIn: !!present && !signedOut,

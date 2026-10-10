@@ -12,6 +12,7 @@ const { createFileBarkDelivery } = require('../bark-delivery');
 const { createCalendarCache } = require('../bark-calendar');
 const BarkPolicy = require('../bark-policy');
 const { notificationOutcome } = require('../install-result');
+const { compareVersions } = require('../mobile-web/hub/core.js');
 const MAX_ATTEMPTS = 3;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const run = (command, args) => execFileSync(command, args, { encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -202,10 +203,13 @@ async function install(options, ops = macOperations(options)) {
   }
   return result;
 }
-function newestBackup(directory) {
+// A rollback goes back: given the installed version, only a backup older than it counts
+// (every operation, a rollback too, first backs up the app it replaces).
+function newestBackup(directory, { installed, versionOf } = {}) {
   requireFile(directory);
+  const older = (dir) => { try { return compareVersions(versionOf(path.join(dir, 'AgentDeck.app')), installed) < 0; } catch (_) { return false; } };
   return fs.readdirSync(directory).map((name) => path.join(directory, name))
-    .filter((dir) => fs.existsSync(path.join(dir, 'AgentDeck.app')))
+    .filter((dir) => fs.existsSync(path.join(dir, 'AgentDeck.app')) && (!installed || older(dir)))
     .map((dir) => ({ dir, modified: fs.statSync(dir).mtimeMs }))
     .sort((a, b) => b.modified - a.modified || a.dir.localeCompare(b.dir))[0]?.dir;
 }
@@ -232,8 +236,11 @@ async function main(argv) {
     return;
   }
   if (options.rollback && !options.backup) {
-    options.backup = newestBackup(options.backups);
-    if (!options.backup) throw new Error('No app backup found');
+    const { version } = macOperations(options);
+    let installed = null;
+    try { installed = version(options.appPath); } catch (_) {}
+    options.backup = newestBackup(options.backups, { installed, versionOf: version });
+    if (!options.backup) throw new Error(installed ? `No app backup older than the installed ${installed}; pass --backup to choose one` : 'No app backup found');
   }
   if (!options.go) { console.log('Plan only. Add --go to run the one-shot installer (maximum 3 attempts).', JSON.stringify(options)); return; }
   for (const key of ['appPath', 'data', 'backups', 'log', 'dmg', 'backup']) {

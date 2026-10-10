@@ -109,12 +109,14 @@ To use Ctrl+Shift+F, turn the switch off in the input method's settings (按键)
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
-- **待办** (sidebar, under 搜索): your own one-line to-dos, kept apart from the
+- **待办** (sidebar, after 任务看板): your own one-line to-dos, kept apart from the
   agents' task cards. Type and press Enter; ⌘⇧N (Ctrl+Shift+N on Windows, changeable
   in 设置 · 快捷键) opens a quick-capture box with the list from anywhere in the window.
   The phone hub has the same list. A literal `@ai` mention (Chinese/end/space/punctuation boundary, excluding email/handles) opts a Todo into a local task for the Captain; unread notices survive Captain recreation. Status/artifact write-back uses `board-cli todo`; the state shows under the item (desktop and phone) and the answer is filed on 待我处理 (waiting for you or failed → 要你处理, done with files → 做完了你还没看); only failures send coalesced ordinary expedited phone alerts, deferred during local 23:00–10:00 quiet hours. See [docs/todo.md](docs/todo.md).
-- **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 任务看板, 搜索, 待办, Schedule, Artifacts, Skills,
-  then the 队长 row (once the Captain exists) with a folding arrow for the
+- **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 任务看板, 待办, Schedule, Artifacts, Skills
+  in two columns (icon and name, the counts at the right end), 搜索 across both under them. When a
+  name would be cut (a narrow sidebar or a bigger sidebar font) the entries show icons only, four to a
+  row, the counts on their corners and the names in the tooltips. Then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
   Every session is a live terminal column.
   待我处理 collects decisions, login/payment requests and reports that the Captain
@@ -379,6 +381,17 @@ Codex、Antigravity，以及放进「下载」文件夹的 Cursor 官方用量�
 日志被删后已读到的数字仍保留。Codex 比 ccusage 多出 0.4–1.4%：上下文压缩也是一次模型调用，Codex 只给它写了
 token_usage_record、没写 token_count，ccusage 只读后者所以漏掉了它们；这里照算。Antigravity 每一步的用量在 metadata 字段 9，重试的请求在字段 28（可能只有它、也可能和 9 重复），按请求编号各算一次；重试请求不带模型号时归到同一对话前一次调用的模型（就是该次生成实际用的模型），逐日合计与 ccusage 一致。代码在 `token-usage-core.js`
 （解析和计算）、`token-usage-scan.js`（扫描）、`token-usage-main.js`（`token-usage:get`）、`token-usage-ui.js`（界面）。
+范围旁边的「Token / 金额」切换把整页换成美元：按各家官方 API 标准档价（不算批量折扣）逐次调用折算，输入、输出、缓存读、
+缓存写分开算（Claude 的缓存写分 5 分钟和 1 小时两档，快速模式、只在美国推理、Haiku 5.5 超 10 万 token 的长提示、
+OpenAI 超 27.2 万 / Gemini 3.1 Pro 和 Grok 超 20 万的长提示、DeepSeek 平时半价都照官方规则算；思考 token 各家都算输出）。
+柱顶、卡片、图例、悬停、明细表都显示 `$1,234.56`，排序照样是钱最多的在前；没有官方 API 价的模型（Cursor「自动」、
+开源的 gpt-oss 等）写「无官方价」，不算进合计、也不画成 $0。价格表在 `token-prices.json`：每个模型写了来源网址和查价日期，
+改价只改这个文件（Gemini Flash 2027-01-01 起官方价翻倍，到时要改）。合计下面是「订阅值不值」（Token 和金额两种都显示）：
+每个 Claude 账号（按席位目录；~/.claude-us 的日志链接到 ~/.claude，两个席位分不开就合成一行）本订阅周期按 API 价值多少、
+是订阅价（Pro $20、Max 5x $100、Max 20x $200，也在价格表里）的几倍、日均多少、照这个速度整个周期能到多少；
+订阅价最高的账号排第一、大字显示，其余小字跟在后面做对比。周期默认从账号的
+订阅日起每月一期（升级套餐按比例补差价，扣费日不变）；点铅笔可以改起点，记在 `tokenUsageView.starts`。只算本机日志：
+另一台电脑上同一账号的用量不在里面（两机同步不带 Claude 日志）。
 队伍（v3「静夜调度台」，日夜两套）：深色是和 App 同一族的石墨灰，浅色是瓷白；画布上铺一层细点阵，跟着平移和缩放走
 （任务看板仍是星空背景）。颜色只用在有含义的地方：每个项目一条自己颜色的线，需要你处理的卡（待补充、失败）整张带颜色。
 队长在顶部居中，下面是项目框。
@@ -515,6 +528,12 @@ does not do the work in its own column. On restart, an existing Captain is brief
 again with the current provider, model and effort instructions.
 
 在队长设置中可关闭「重启后自动续上」。冷启动只恢复退出前尚未完成的队员任务，每批最多两个；正常新建和归档恢复仍走普通派发。完整任务、最后回执和未送达补充指令保存到私有配置与 `restart-resume.json`，不截断正文。每轮启动按任务记录送达 claim，连续重启仍能续派；`complete` 已关闭的卡片不会被迟到的续接复活。
+
+只被「已结束，未提交回执」（三分钟没交命令的临时判断）关掉的任务也算没做完：队员按要求写了 progress 停在安全点、回合结束，三分钟后就会读成这句。不管程序是怎么退出的（正常退出、安装重启、强退、崩溃），下次启动都照常续上它，那条「已结束」通知撤掉，最后回执用它自己写的 progress（不用「已结束，未提交回执」）。正常退出时它和进行中的任务一样记下检查点，只是不往它终端里打字（它已经停了，这时发消息只会开一个马上被退出打断的回合）。10-09 这类会话在 2.0.3 安装、2.0.4 安装和一次手动重启后连着三次没续上，都是队长手动 tell 叫醒的。队长 stop、交了回执（含失败）或已归档的不续；卡片已关闭或转交的照旧停派并告诉队长。
+
+重启后往终端里自动打字（队长的重启提示或提示词、队员的续接指令、之后的回执和派活）要等这一列新启动的 agent 自己把输入提示符画出来（启动行下面出现 Claude 的输入框和底栏、Codex 的 › 行等，`MainCore.agentPromptDrawn`），并且稳定 1.5 秒；认不出提示符的命令要画过东西后静止 10 秒。上次运行的回放画面在 macOS 和 Windows 上都不算当前屏幕（`MainCore.afterReplay`）。原因：10-09 在 Mac 上装 2.0.3 重启时，回放里还留着上次的空闲提示符，`claude --resume` 刚成为前台进程（约 0.4 秒）程序就打了字；Claude Code 2.1.295 实测要 0.6 秒（26 MB 的大对话要 1.5 秒）才画出界面，在那之前打进去的字会留在它的输入框里、回车被吞，队长因此停了四个小时。程序自己打进去、对方没收下的字（停在输入框里）不算用户草稿：不会因此挡住后面的自动发送，补按一次回车也只看发送后用户有没有按过键。
+
+重启看护：每次启动后，队长要在 1 分钟内真正回到工作，本次续接的每个队员要在续接指令送进去后 90 秒内（一直没送进去的 3 分钟内）接上。「接上」指它自己有动作：屏幕显示在干活、跑了 AgentDeck 命令、任务交了回执，或在提示符已稳定后发出的消息被它收下（输入框里没留下这条字、之后有新输出）。光把字打进终端不算。到时没接上，程序登记一条「待我处理」（侧栏数字和手机总台同一份，标题「重启后队长没接上」或「重启后 N 个队员没接上」，细节写清是停在输入框、界面一直没准备好还是终端没起来），同时发本机提醒和紧急 Bark（与 `notify-user --urgent` 同一通道，遵循 Bark 的睡眠与上课免打扰设置）并弹出提示；没接上的队员同时作为一条回执告诉队长，方便它 tell 叫醒。之后接上了，这条「待我处理」自动打勾。永动机轮换正在起新队长时，由它自己的启动监督负责，不重复报警。
 
 真续接要求列自己的明确会话号及工作目录归属；无法证明归属时新开重发，不从全局最近会话或唯一工作目录猜号。Codex、Cursor、Antigravity 的 `complete` / `ask` / `progress` 会携带各自 shell 工具环境中的 `CODEX_THREAD_ID` / `CURSOR_CONVERSATION_ID` / `ANTIGRAVITY_CONVERSATION_ID`，经本列回执认证后保存归属，并支持重启及归档恢复时续接原对话。新终端不继承父进程的这三个 ID；还没提交过回执、CLI 没注入有效 UUID、目录变化或 ID 与另一列重复时，仍新开重发。Codex metadata 完整读取首行，agy 数据库中的任意文件 URL 不作为归属凭据。每次尝试的终端启动和批次排队最多等待 30 秒，获得槽位后卡片核验与指令送达最多等待 45 秒。原会话启动失败或未能按时送达时，同列重开一次并重发卡片任务、最后回执和补充正文；重发仍失败则向队长交失败回执。指令送达即算续接成功，之后的进程退出或额度耗尽按普通任务失败处理，不再新开重发。卡片已关闭、归档、待验收或转交时，停止旧任务并向队长提交含会话、任务、卡片和停派原因的回执，不改动已关闭或转交的卡片。退出给收尾指令最多 800ms 的送达机会；应用暂停不代表队员已确认安全停工。退出等待页面落盘最多 1.5 秒，另有独立进程 5 秒 OS 退出兜底。
 
@@ -1066,9 +1085,71 @@ an index from before this counts nothing as new). The phone hub does not have it
   truncation still cannot be recovered after the missing text has been discarded.
 
 - Clicking a link or file path in a bubble opens it in the right side pane, with
-  tabs for 预览 (code, Markdown, images, directories), 终端 and 浏览器 (PDF opens
+  tabs for 预览 (code, Markdown, web pages, images, directories), 终端 and 浏览器 (PDF opens
   there too). Cmd/Ctrl-click uses the system browser or file manager, Option-click
-  the editor. Terminal output and bubbles find paths with the same rules
+  the editor. The preview's header holds icon buttons only: page/layout ↔ source,
+  reload (web pages), reading theme (Markdown), copy path, show in the file manager,
+  open in the editor.
+- **A `.html` / `.htm` file is drawn as the page**; the `</>` button switches to its
+  source and back. The page runs its own scripts, so it is kept like a page from the
+  internet (`preview-html-core.js`, `side-main.js`): a separate sandboxed
+  `WebContentsView` with no preload, in a session of its own that is not persisted
+  (`agentdeck-preview`); it is served from `agentdeck-preview://<random>/`, an address
+  that answers only for the page open right now and only with files of the folder the
+  page lies in (real paths: no `..`, no symbolic link leading out, no hidden file, no
+  key or credential name, only formats a page is made of, 64 MB each). Requests to
+  `file:`, to this machine (`localhost`, `127.*`, `::1`), to the local network and to
+  anything but `http(s)` on the public web are cancelled, so a CDN chart library loads
+  and the deck's own phone page or sync server cannot be reached. Permissions,
+  downloads and new windows are denied; the page can move between its own pages; a
+  link to the public web opens in the 浏览器 tab. A page lying in a catch-all folder
+  (the home folder and what sits right in it such as Desktop, Downloads or `~/reports`,
+  a drive, the temporary folder) is given only itself, and the pane says so: put it in
+  a folder of its own to load the pictures and scripts next to it. Leaving the page
+  (another file, the source view) ends it.
+- **Markdown is shown in a reading theme** (`preview-themes.js` colours,
+  `preview-themes.css` shapes): 星光 (the default: deep indigo, glowing periwinkle,
+  amber), 碳黑, Nord 极地, Obsidian 默认, Minimal 极简, Gruvbox. They are designed dark
+  first, hard-edged and high in contrast (no pastel or pink sets, by the owner's taste);
+  each also has a light side, and the deck's light/dark switch picks which one shows. The palette
+  button lists them; one click applies and is remembered (`config.side.mdTheme`), the
+  list stays open to compare. Headings 1–6, bold, italic, inline code, links, quotes,
+  tables, list marks and highlights each have a colour; every text colour is checked
+  against its background at 4.5:1 or better (`tests/preview-markdown.test.js`, and on
+  screen in `tests/e2e/preview-html-themes.spec.js`), the smallest text is 11.5px. The
+  reading view also reads what an Obsidian note uses (`renderMarkdown(..., { rich: true })`,
+  off everywhere else): `==highlight==`, task boxes, callouts (`> [!note]`, folding with
+  `-`/`+`), properties at the top, `#tags`, `[[links]]` to a note beside this one,
+  pictures lying next to the note, footnotes, `%%comments%%`, and a single line break
+  kept as a line break (as Obsidian does). Relative links open in the preview, web
+  links in the 浏览器 tab.
+- **Reading tools in the preview** (logic in `preview-reader.js`, wired in `side-pane.js`):
+  - 目录: a note with two or more headings gets an outline icon button. The outline sits
+    beside the note when the pane is at least 600px wide (open or put away is remembered,
+    `config.side.outline`); in a narrower pane it floats over the note when asked for and
+    goes after a jump or Esc. A click jumps to the heading; the section being read is
+    marked as the note scrolls.
+  - The file on screen is watched (`preview:watch`: the main process polls that one
+    file's stat once a second and tells the page a number, never a path). When it
+    changes the pane reads it again and draws it where the reader was: a note finds the
+    block at the top of the view again by its text, a code file keeps its first line in
+    view, unfolded callouts stay unfolded, and 「已更新」 shows by the name for a moment.
+    A web page reloads in its own view. A file that is gone keeps its last text, and the
+    head says so until it is back.
+  - ⌘F (Ctrl+F off the Mac) with the pointer or the keyboard in the preview opens a find
+    bar: Enter / Shift+Enter (and ⌘G / ⇧⌘G) walk the matches, Esc closes. Notes, code
+    files and folder lists mark matches with CSS highlight ranges (nothing is written
+    into the text; a match in a folded callout unfolds it; line numbers are not
+    searched); a web page uses Chromium's own find in its view, and ⌘F pressed inside
+    the page comes to the bar. Anywhere else ⌘F is the conversation or terminal search
+    as before. ⌘⇧F is left alone: a lyrics app on the owner's Mac holds it system-wide.
+  - Every code block in a note has a bar with its language and a copy icon button (two
+    squares; a tick for a moment after copying).
+  - A picture in a note, or one previewed on its own, opens full screen with a click or
+    Enter: fitted to the window (never enlarged past its own size); the wheel or a pinch
+    zooms about the pointer, a drag moves it, a double click goes to its own size and
+    back, + − 0 1 on the keyboard; Esc or a click beside it closes.
+- Terminal output and bubbles find paths with the same rules
   (`findLinks` in `renderer.js`): a path ends at Chinese or full-width punctuation,
   curly quotes and the space before the words after it, so two paths on one line
   are two links. Spaces stay inside a folder name (`Application Support`,
@@ -1081,7 +1162,9 @@ an index from before this counts nothing as new). The phone hub does not have it
   default 13). The native View menu uses the same control; it does not zoom the
   page, so the sidebar and column geometry stay stable.
 - The left sidebar searches every conversation, titles and full text of prompts and
-  replies only. Shortcuts: ⌘K / Ctrl+Shift+K search, ⌘\ / Ctrl+Shift+\ toggle the side pane.
+  replies only, including the 队长's conversations from before each context clear (marked
+  只读; a hit opens it in the 队长 column's read-only history). Shortcuts: ⌘K / Ctrl+Shift+K search,
+  ⌘\ / Ctrl+Shift+\ toggle the side pane.
 - Conversations are saved locally in the app's userData folder under `chats`
   (one private JSON file per session, written atomically) and are not committed.
   Folders, archived sessions and schedules live in the
@@ -1350,9 +1433,11 @@ bash scripts/rollback-agentdeck.sh --go --backup /absolute/path/backup
 
 不带 `--go` 只显示计划，不再内置历史版本的 DMG 路径或校验值。
 
+回滚不带 `--backup` 时，取比现役版本更旧的备份里最新的一份：每次安装和回滚都会先备份被换下的那一版，所以最新的备份可能正是刚退掉的新版，或现役版本自己。没有更旧的备份就报错停下，请用 `--backup` 指定。
+
 正式安装引擎 `scripts/install-agentdeck.js` 使用一次性 detached 子进程，不注册 launchd，也没有 KeepAlive 或失败自动重启。校验 DMG/签名/目标版本/asar、备份旧应用与用户数据后，最多尝试安装三次；失败恢复旧应用并退出。结果原子写入 userData 的 `install-result.json`，包含目标版本、现役版本、进程状态、尝试次数与失败原因。成功要求目标应用已启动并持续存活，磁盘上出现新版本并不算完成。真实安装证据须加入最终报告，不能用 fixture 测试冒充。
 
-安装会话开始前通过 `progress --install-id ID --target-version VERSION --message "安装待核对"` 登记待核对（正式脚本负责调用）。普通 `complete` 无法结束待核对的任务；应用启动后读取并持续检查结果文件，匹配原任务后提交成功或失败回执。停在安全点、准备安装均只用 `progress`，不用 `complete`。安装失败或回滚走 `notify-user --urgent`；应用停机时复用同一 Bark 发送器离线推送，说明目标版本、失败原因和现役版本。密钥仍从本机配置的密钥文件读取。
+安装会话开始前通过 `progress --install-id ID --target-version VERSION --message "安装待核对"` 登记待核对（正式脚本负责调用）。普通 `complete` 无法结束待核对的任务；应用启动后读取并持续检查结果文件，匹配原任务后提交成功或失败回执；原任务已不在（队长关掉或换了新的）时，结果作为通知交给队长，同样算已确认。还没有队长时，结果等队长出现后再交（每 30 秒看一次）。停在安全点、准备安装均只用 `progress`，不用 `complete`。安装失败或回滚走 `notify-user --urgent`；应用停机时复用同一 Bark 发送器离线推送，说明目标版本、失败原因和现役版本。密钥仍从本机配置的密钥文件读取。
 
 入口使用稳定的安装标识和 `install-entry.lock`／`install.lock`／`install-claims` 阻止并发、崩溃后重入及同一安装包重新计数；不会自动删除遗留锁。发现上次 pending、未确认结果或已有 claim 时会拒绝开始，请先检查日志、结果与所属进程，处理失败原因后再由维护者清理相应标记。托管会话必须使用支持待核对协议的应用版本；旧版不能确认登记时安全退出，不以普通 progress 冒充成功登记。`--with-data` 仅允许独立终端使用，避免覆盖正在运行的任务控制状态。 若回滚到尚未包含结果读取机制的旧二进制，它不能自动提交新协议回执；离线 Bark 仍报告失败，结果文件保留，卡片不得据此冒报成功。
 
@@ -1427,10 +1512,12 @@ heartbeat, which covers shutdown and sleep. Task cards, their fields, and
 saved captain transcripts are shared; a change is visible on the other side
 within a minute. Edits to different fields of the same card merge. Edits to
 the same field stay as two copies and the card shows 冲突. The sidebar section
-两机 shows online/offline, the last-seen time, and any sync error, then the 8 most
-recent captain records, each with its own last time (a saved chat's turns carry
-their times in milliseconds; a record the hub has without times gets them when the
-same transcript is sent again).
+两机 is one line: a dot per computer (Mac / Windows) and, only when something needs a look, 同步失败
+or the number of 冲突. Hovering it, reaching it with the keyboard, or clicking it (kept open until
+Esc or a click elsewhere) shows each computer's full name with online/offline and the last-seen time,
+the whole sync message, and the 8 most recent 队长记录, beside the sidebar. Each record shows its own
+last time (a saved chat's turns carry their times in milliseconds; a record the hub has without times
+gets them when the same transcript is sent again).
 
 The service is `node sync-server.js --data <dir> --token-file <path>`. Bind it
 to the WireGuard address when it is deployed; the default listen address is

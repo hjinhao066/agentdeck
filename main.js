@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, session, Notification, powerMonitor } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, session, Notification, powerMonitor, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -16,6 +16,11 @@ const BarkPolicy = require('./bark-policy');
 const { createFileBarkDelivery } = require('./bark-delivery');
 const { createCalendarCache } = require('./bark-calendar');
 const { registerSideIpc, loadAllChats } = require('./side-main');
+// A web page previewed in the side pane is served from an address of its own
+// (preview-html-core.js). The scheme has to be declared before the app is ready
+// so relative links, fetch and storage behave as on an ordinary site; only the
+// preview's own session ever answers it.
+protocol.registerSchemesAsPrivileged([{ scheme: require('./preview-html-core').SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 const ArchiveRecovery = require('./archive-recovery');
 const { registerSkillsIpc } = require('./skills-core');
 const { registerScheduleFeedIpc } = require('./schedule-feed');
@@ -1489,6 +1494,18 @@ app.whenReady().then(async () => {
     return sendRelayBark({ message, title: 'AgentDeck · 永动机', level: 'active' });
   });
 
+  // The restart watch (MainSession): the 队长 is not back at work a minute after a start, or crew sessions did
+  // not take their continue message. The same local + critical Bark route as notify-user --urgent, which no
+  // 队长 has to run: the 队长 may be the one that is stuck. The page files the 待我处理 item itself.
+  handleMain('restart:alarm', async (_e, { message, key } = {}) => {
+    const captain = notificationConfig.columns?.find((c) => c.isMain && c.id === notificationConfig.mainSession?.colId);
+    if (!notifyUser || !captain || typeof message !== 'string' || !message.trim() || message.length > 1000 ||
+      typeof key !== 'string' || !/^restart-[a-z0-9-]{1,80}$/.test(key)) throw new Error('无效的重启报警');
+    const result = await notifyUser({ callerId: captain.id, id: key, message, urgent: true,
+      bark: { message, title: 'AgentDeck · 重启没接上', level: 'critical', dedupeKey: key } }, false, key, true);
+    return { ok: result.ok !== false, message: result.message };
+  });
+
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
@@ -1539,6 +1556,8 @@ app.whenReady().then(async () => {
   onMain('clipboard:read-sync', (e) => { e.returnValue = tudArg ? testClipboard : clipboard.readText(); });
   onMain('env-info-sync', (e) => { e.returnValue = {
     platform: process.platform, home: HOME, version: app.getVersion(),
+    // test profiles only: the restart watch's limits, shortened
+    testRestartWatchMs: tudArg && Number(process.env.AGENTDECK_TEST_RESTART_WATCH_MS) > 0 ? Number(process.env.AGENTDECK_TEST_RESTART_WATCH_MS) : 0,
     build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),
   }; });
   // 版本更新 page: the release notes packaged with this build. Read only, from

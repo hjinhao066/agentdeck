@@ -24,10 +24,6 @@ function text(value, name, required = false) {
   return value;
 }
 function sentence(value) { return String(value || '').trim().split(/(?<=[。！？.!?])(?:\s|$)|\r?\n/u)[0]; }
-function brief(value, count = 2) {
-  const parts = String(value || '').trim().split(/(?<=[。！？.!?])|\r?\n/u).map((part) => part.trim()).filter(Boolean);
-  return parts.slice(0, count).join(' ').slice(0, 500);
-}
 function finishStatus(card) {
   touch(card);
   if (card.status !== 'needs_user') delete card.user_question;
@@ -574,7 +570,7 @@ class TaskStore {
       }
       if (type === 'ask') {
         const question = text(input.message, 'question', true);
-        card.status = 'needs_user'; card.latest_receipt = sentence(question); card.user_question = brief(question);
+        card.status = 'needs_user'; card.latest_receipt = sentence(question); card.user_question = question.trim();
       }
       if (type === 'fallback') { card.status = 'needs_user'; card.latest_receipt = '已结束，未提交回执'; delete card.user_question; }
       if (type === 'complete') {
@@ -672,7 +668,7 @@ class TaskStore {
         const question = typeof input.question === 'string' ? input.question : '';
         card.status = 'needs_user';
         card.latest_receipt = sentence(question || '调度已结束，尚未派出执行会话');
-        if (question.trim()) card.user_question = brief(question);
+        if (question.trim()) card.user_question = question.trim();
         else delete card.user_question;
         if (!question.trim()) notices.push(`卡片 ${card.id} 调度已结束，尚未派出执行会话，请队长安排。`);
       }

@@ -213,7 +213,7 @@
     if (c.status === 'doing') { const dot = el('i', 'tbv-state ' + state); dot.title = stateLabel; row.append(dot); node.dataset.run = state; }
     if (item.high) { row.append(priorityMark('tbv-prio', item.urgent, item.urgent ? '高优' : '')); if (item.urgent) node.dataset.priority = 'high'; }
     row.append(el('h3', 'tbv-title', c.title));
-    if (c.flag === 'quota') row.append(el('span', 'tbv-tag failed', { auth: '登录', rate_limit: '限流' }[c.resource_failure] || '额度'));
+    if (c.flag === 'quota') row.append(el('span', 'tbv-tag failed', U.flagText(c)));
     if (c.flag === 'failed') row.append(el('span', 'tbv-tag failed', '失败'));
     if (c.flag === 'held') row.append(el('span', 'tbv-tag held', '挂起'));
     const conflict = window.FleetUI && window.FleetUI.conflictText(c);
@@ -824,7 +824,7 @@
     const top = el('header', 'tbv-d-top');
     const crumb = el('div', 'tbv-d-crumb');
     crumb.append(el('span', 'tbv-dot'), el('span', 'tbv-d-project', lane.name), el('span', 'tbv-d-status', U.labelOf(c.status)));
-    if (c.flag === 'quota') crumb.append(el('span', 'tbv-tag failed', { auth: '登录', rate_limit: '限流' }[c.resource_failure] || '额度'));
+    if (c.flag === 'quota') crumb.append(el('span', 'tbv-tag failed', U.flagText(c)));
     if (c.flag === 'failed') crumb.append(el('span', 'tbv-tag failed', '失败'));
     if (c.flag === 'held') crumb.append(el('span', 'tbv-tag held', '挂起'));
     const high = U.isHigh(c);
