@@ -1293,7 +1293,7 @@ node scripts/e2e-remote-win.js <分支或提交> tests/e2e/foo.spec.js [tests/e2
 ```
 
 - 只测**已提交**的代码：脚本把这个提交打成 git bundle 传过去（不需要先 push，也不需要 Windows 登录 GitHub），所以先 `git commit`。工作区里没提交的改动不会被带过去，脚本会提醒。
-- Windows 上一切都在自己的目录 `C:\Users\hjinh\agentdeck-e2e-win\`：`hub\` 存传过去的提交，`checkouts\<运行号>\` 是每次运行自己的检出（跑完删），`deps\<依赖键>\` 按 lockfile 各装一份依赖（只在依赖变了才新装，首次要下载 Electron，约几分钟；自动只留最近 2 份；新装前空间不足 2GB 先清旧的，仍不够就退出码 16，`e2e-auto` 改在 Mac 跑，见 `docs/e2e-windows-background.md`），`inbox\<运行号>\`（含本次上传的排队脚本）和 `runs\<运行号>\` 是每次运行的临时目录，跑完自动只删本次的。**不碰** Windows 上已安装的 AgentDeck、别的会话目录和用户目录里别的东西。
+- Windows 上一切都在自己的目录 `C:\Users\hjinh\agentdeck-e2e-win\`：`hub\` 存传过去的提交，`checkouts\<运行号>\` 是每次运行自己的检出（跑完删），`deps\<依赖键>\` 按 lockfile 各装一份依赖（只在依赖变了才新装，首次要下载 Electron，约几分钟；自动只留最近 2 份；新装前空间不足 2GB 先清旧的，仍不够就退出码 16，`e2e-auto` 改在 Mac 跑，见 `docs/e2e-windows-background.md`），`inbox\<运行号>\`（含本次上传的排队脚本）和 `runs\<运行号>\` 是每次运行的临时目录，跑完、中途出错或被中断（Ctrl-C、SIGTERM、终端关闭）都只删本次的；被中断时先停掉 ssh、把已有的结果拉回再删。**不碰** Windows 上已安装的 AgentDeck、别的会话目录和用户目录里别的东西。
 - Windows 上同样走 `e2e-queue`，同一时间只跑 1 组，后来的排队。
 - 结果拉回 Mac：`~/reports/agentdeck-e2e-remote/<运行号>/`，内含 `console.log`（完整输出）、`results.json`（Playwright JSON 报告）、`summary.json`（提交、spec、退出码、耗时）、`test-results/`（失败时的 trace 等）。脚本退出码等于 Windows 上的结果（0 通过，75 排队超时，124 跑太久，其余为失败）。
 

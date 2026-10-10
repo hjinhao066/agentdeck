@@ -62,3 +62,26 @@ test('a commit Windows already holds as an ancestor of a known commit is tested 
   assert.match(s.calls(), /remote-run|e2e-queue\.js/);
   assert.doesNotMatch(s.calls(), /commit\.bundle/, 'an empty bundle was sent');
 });
+
+test('a run that fails after the Windows folders were made removes them again', { skip: process.platform === 'win32' }, async (t) => {
+  const s = setup(t, { failScp: 'job.json' });
+  const result = await s.run(s.second).done;
+  assert.notEqual(result.code, 0);
+  const calls = s.calls();
+  assert.match(calls, /mkdir "C:\\Users\\tester\\agentdeck-e2e-win\\inbox\\[^"]+\\tools"/);
+  assert.match(calls, /rmdir \/s \/q "C:\\Users\\tester\\agentdeck-e2e-win\\inbox\\[^"]+"/, `the inbox folder made on Windows is left behind:\n${calls}`);
+});
+
+test('a SIGTERM while Windows runs stops the run, brings back what there is and cleans up', { skip: process.platform === 'win32' }, async (t) => {
+  const s = setup(t, { runSeconds: 30 });
+  const r = s.run(s.second);
+  const end = Date.now() + 10000;
+  while (!/remote-run/.test(r.out()) && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.match(r.out(), /remote-run/);
+  r.child.kill('SIGTERM');
+  const result = await r.done;
+  assert.notEqual(result.code, 0);
+  const calls = s.calls();
+  assert.match(calls, /scp -q .*-r .*runs\//, `results were not brought back:\n${calls}`);
+  assert.match(calls, /rmdir \/s \/q "C:\\Users\\tester\\agentdeck-e2e-win\\inbox\\/, `the Windows run folders were left behind:\n${calls}`);
+});
