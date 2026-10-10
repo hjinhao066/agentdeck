@@ -420,8 +420,8 @@
     }
     if (asPage) actions.appendChild(iconButton('refresh', '重新加载网页', () => window.deck.sidePreviewAction('reload')));
     if (r.kind === 'markdown' && !mdSource) actions.appendChild(themePicker());
-    const copy = iconButton('copy', '复制路径', () => {
-      try { host.clipboardWrite(r.path); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
+    const copy = iconButton('copy', '复制路径', async () => {
+      try { await host.clipboardWrite(r.path); } catch (_) { host.showToast('没能复制到剪贴板，请再试一次'); return; }
       copy.innerHTML = host.ICONS.check; copy.classList.add('done');
       clearTimeout(copy.checkTimer);
       copy.checkTimer = setTimeout(() => { copy.innerHTML = host.ICONS.copy; copy.classList.remove('done'); }, 1200);
@@ -501,10 +501,10 @@
     return md;
   }
   function decoded(value) { try { return decodeURIComponent(value); } catch (_) { return value; } }
-  function copyCode(btn) {
+  async function copyCode(btn) {
     const code = btn.closest('.md-pre') && btn.closest('.md-pre').querySelector('pre code');
     if (!code) return;
-    try { host.clipboardWrite(code.textContent); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
+    try { await host.clipboardWrite(code.textContent); } catch (_) { host.showToast('没能复制到剪贴板，请再试一次'); return; }
     const label = (text) => { btn.setAttribute('aria-label', text); btn.title = text; };
     btn.innerHTML = host.ICONS.check; btn.classList.add('done'); label('已复制');
     clearTimeout(btn.checkTimer);

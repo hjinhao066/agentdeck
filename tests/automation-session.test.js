@@ -125,7 +125,7 @@ test('the page routes only a stamped automation command to the automation handle
 // ---- 待我处理 ---------------------------------------------------------------------------------------
 function attentionUi() {
   const calls = { saved: 0 };
-  const window = { AttentionCore: A, deck: { windowInFront: () => true, onWindowFront() {} } };
+  const window = { AttentionCore: A, CopyMark: require('../copy-mark'), deck: { windowInFront: () => true, onWindowFront() {} } };
   const noop = () => {};
   const context = vm.createContext({ window, document: { getElementById: () => null, createElement: () => ({}), addEventListener: noop }, setInterval: noop, setTimeout: noop, clearTimeout: noop });
   vm.runInContext(read('attention-ui.js'), context);

@@ -210,6 +210,27 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     await expect(doneRow.getByRole('button', { name: '已复制' })).toHaveClass(/done/);
     await expect(doneRow.getByRole('button', { name: '复制路径' })).toBeVisible(); // back to the copy icon
     expect(await page.evaluate(() => window.deck.clipboardRead())).toBe(artifact); // a test profile's own clipboard
+    // The list is redrawn while the write is still running (an AI status change does that): the
+    // check must land on the new button, which is the one the user is looking at.
+    await application.evaluate(({ ipcMain }) => {
+      const original = ipcMain._invokeHandlers.get('clipboard:write');
+      globalThis.__originalClipboardWrite = original;
+      ipcMain.removeHandler('clipboard:write');
+      ipcMain.handle('clipboard:write', async (event, text) => { await new Promise((resolve) => setTimeout(resolve, 500)); return original(event, text); });
+    });
+    try {
+      await doneRow.getByRole('button', { name: '复制路径' }).click();
+      const oldButton = await doneRow.getByRole('button', { name: '复制路径' }).elementHandle();
+      await page.evaluate(() => window.TodoUI.refresh()); // redraws every row now, before the write is done
+      await expect.poll(() => oldButton.evaluate((n) => n.isConnected)).toBe(false); // the clicked button is gone
+      await expect(page.locator('.todo-row', { hasText: original }).getByRole('button', { name: '已复制' })).toHaveClass(/done/);
+    } finally {
+      await application.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('clipboard:write');
+        ipcMain.handle('clipboard:write', globalThis.__originalClipboardWrite);
+      });
+    }
+    await expect(page.locator('.todo-row', { hasText: original }).getByRole('button', { name: '复制路径' })).toBeVisible({ timeout: 4000 });
     await expect(doneRow).not.toHaveClass(/is-done/); // AI finishing never ticks the user's own 待办
     await shot(page, 'desktop-todo-ai-done');
     await page.locator('#attentionBtn').click();

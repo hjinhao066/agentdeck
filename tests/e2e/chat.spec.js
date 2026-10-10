@@ -242,6 +242,71 @@ test('chat mode shows and copies the Chinese raw-terminal prompt and its final r
   expect(copied).toEqual(['终端输入中文正常', (await turns(id)).at(-1).reply]);
 });
 
+test('a copy button shows its check only once the text is on the clipboard, and says so when it is not', async () => {
+  const id = 'chat-2';
+  await focusChat(id);
+  const replyCopy = page.locator(`.column[data-col-id="${id}"] .turn`).last().locator('.msg.assistant .msg-tool').first();
+  const reply = (await turns(id)).at(-1).reply;
+  const toast = () => page.evaluate(() => { const t = document.getElementById('toast'); return t && t.classList.contains('show') ? t.textContent : ''; });
+  await page.evaluate(async () => { await window.deck.clipboardWrite('before'); });
+  await application.evaluate(({ app }) => { app.testClipboardWriteFails = true; });
+  try {
+    await replyCopy.click();
+    await expect.poll(toast, { timeout: 5000 }).toContain('没能复制');
+    await expect(replyCopy).not.toHaveClass(/done/);
+    expect(await page.evaluate(() => window.deck.clipboardRead())).toBe('before');
+  } finally { await application.evaluate(({ app }) => { app.testClipboardWriteFails = false; }); }
+  await replyCopy.click();
+  await expect(replyCopy).toHaveClass(/done/);
+  expect(await page.evaluate(() => window.deck.clipboardRead())).toBe(reply);
+});
+
+test('a screenshot pasted into the composer becomes an attachment; with text next to it the text is pasted instead', async () => {
+  const id = 'chat-2';
+  await focusChat(id);
+  const composer = page.locator(`.column[data-col-id="${id}"] .composer textarea`);
+  const chips = page.locator(`.column[data-col-id="${id}"] .att`);
+  const paste = (picture, text) => page.evaluate(({ picture: withPicture, text: words, colId }) => {
+    const data = new DataTransfer();
+    if (words) data.setData('text/plain', words);
+    if (withPicture) data.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' }));
+    const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+    document.querySelector(`.column[data-col-id="${colId}"] .composer textarea`).dispatchEvent(event);
+    return event.defaultPrevented;
+  }, { picture, text, colId: id });
+  const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.from('chat-test-picture')]).toString('base64');
+  await application.evaluate(({ app }, bytes) => { app.testClipboardImage = Buffer.from(bytes, 'base64'); }, png);
+  try {
+    await page.evaluate(async () => { await window.deck.clipboardWrite(''); });
+    // picture + text: left to the text box, no attachment
+    expect(await paste(true, 'words next to the picture')).toBe(false);
+    await page.waitForTimeout(500);
+    await expect(chips).toHaveCount(0);
+    // picture alone: taken, and the saved file is attached
+    expect(await paste(true, '')).toBe(true);
+    await expect(chips).toHaveCount(1);
+    const file = await chips.first().getAttribute('title');
+    expect(fs.readFileSync(file).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    fs.rmSync(file, { force: true });
+    await chips.first().locator('.att-x').dispatchEvent('click'); // the x shows on hover only
+    await expect(chips).toHaveCount(0);
+    // the page saw a picture but the clipboard has none: a visible message, nothing attached
+    await application.evaluate(({ app }) => { app.testClipboardImage = null; });
+    await paste(true, '');
+    await expect.poll(() => page.evaluate(() => { const t = document.getElementById('toast'); return t && t.classList.contains('show') ? t.textContent : ''; }), { timeout: 5000 }).toContain('截图');
+    await expect(chips).toHaveCount(0);
+    // an image file copied in the file manager: the clipboard holds files, which is said, not "paste again"
+    await application.evaluate(({ app }) => { app.testClipboardOther = true; });
+    await paste(true, '');
+    const toastText = () => page.evaluate(() => { const t = document.getElementById('toast'); return t && t.classList.contains('show') ? t.textContent : ''; });
+    await expect.poll(toastText, { timeout: 5000 }).toContain('剪贴板里是文件');
+    expect(await toastText()).toContain('聊天框只能粘贴文字和截图');
+    expect(await toastText()).not.toContain('再粘贴一次');
+    await expect(chips).toHaveCount(0);
+  } finally { await application.evaluate(({ app }) => { app.testClipboardImage = null; app.testClipboardOther = false; }); }
+  await composer.fill('');
+});
+
 test('saved mouse-report fragments are absent from history bubbles and both copies', async () => {
   const turn = page.locator('.column[data-col-id="chat-3"] .turn').filter({ hasText: '中文历史' });
   await expect(turn.locator('.msg.user .bubble')).toHaveText('中文历史');
@@ -276,10 +341,10 @@ test('a long saved conversation keeps every turn; the view loads older ones on r
   await page.locator('#navSearch').fill('');
 });
 
-test('Ctrl+V pastes through the shared synchronous clipboard bridge', async () => {
+test("Ctrl+V pastes what the test profile's clipboard holds, in the column's terminal", async () => {
   await focusChat('chat-2');
-  await page.evaluate(() => {
-    window.deck.clipboardWrite('shared clipboard paste');
+  await page.evaluate(async () => {
+    await window.deck.clipboardWrite('shared clipboard paste');
     ChatUI.setMode('chat-2', 'term');
     terms.get('chat-2').term.focus();
   });

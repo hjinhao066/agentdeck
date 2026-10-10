@@ -802,17 +802,18 @@ document.getElementById('mobileWebSavePreview').addEventListener('click', () => 
 document.getElementById('mobileWebRevoke').addEventListener('click', () => {
   if (confirm('吊销所有设备并更换登录 token？已登录的手机需要重新登录，旧 token 将立即失效。')) updateMobileWebSettings({ revoke: true });
 });
-document.getElementById('mobileWebCopyToken').addEventListener('click', (event) => {
-  window.deck.clipboardWrite(document.getElementById('mobileWebToken').value);
-  const button = event.currentTarget, original = button.innerHTML;
+// The check shows only once the text really is on the clipboard; a failed copy says so instead.
+async function copyWithCheck(button, text, label) {
+  const original = button.innerHTML;
+  try { await window.deck.clipboardWrite(text); } catch (_) { showToast('没能复制到剪贴板，请再试一次'); return; }
   button.innerHTML = ICONS.check; button.title = '已复制'; button.setAttribute('aria-label', '已复制');
-  setTimeout(() => { button.innerHTML = original; button.title = '复制登录 token'; button.setAttribute('aria-label', '复制登录 token'); }, 1400);
+  setTimeout(() => { button.innerHTML = original; button.title = label; button.setAttribute('aria-label', label); }, 1400);
+}
+document.getElementById('mobileWebCopyToken').addEventListener('click', (event) => {
+  copyWithCheck(event.currentTarget, document.getElementById('mobileWebToken').value, '复制登录 token');
 });
 document.getElementById('mobileWebCopyGateway').addEventListener('click', (event) => {
-  window.deck.clipboardWrite(document.getElementById('mobileWebGatewayPassword').value);
-  const button = event.currentTarget, original = button.innerHTML;
-  button.innerHTML = ICONS.check; button.title = '已复制'; button.setAttribute('aria-label', '已复制');
-  setTimeout(() => { button.innerHTML = original; button.title = '复制入口口令'; button.setAttribute('aria-label', '复制入口口令'); }, 1400);
+  copyWithCheck(event.currentTarget, document.getElementById('mobileWebGatewayPassword').value, '复制入口口令');
 });
 async function updateAutomationSettings(input) {
   const toggle = document.getElementById('automationEnabled');
@@ -1618,9 +1619,15 @@ function buildColumn(col, isFresh) {
             text = decoded;
           }
         } catch (_) {}
-        window.deck.clipboardWrite(text);
-        // the next Ctrl+C is an interrupt again
-        if (env.platform !== 'darwin') { term.clearSelection(); e.preventDefault(); }
+        // The selection is let go only once the text is on the clipboard (the next Ctrl+C is an
+        // interrupt again); a failed copy keeps it, says so, and can simply be pressed again.
+        window.deck.clipboardWrite(text).then(() => {
+          if (env.platform !== 'darwin') term.clearSelection();
+        }, () => showToast(env.platform === 'darwin'
+          ? '复制失败：剪贴板可能被别的程序占用，选区还在，请再按一次'
+          // The selection stays, and while it does Ctrl+C copies instead of interrupting.
+          : '复制失败：剪贴板可能被别的程序占用，选区还在，请再按一次；想用 Ctrl+C 中断程序，先点一下终端取消选区'));
+        if (env.platform !== 'darwin') e.preventDefault();
         return false;
       }
       // Ctrl+V pastes the clipboard (macOS Cmd+V already pastes natively).
@@ -1631,11 +1638,11 @@ function buildColumn(col, isFresh) {
       // explicitly via xterm so bracketed-paste-aware apps (Claude, vim, …)
       // still receive it correctly. Shift/Alt are excluded so Ctrl+Shift+V and
       // any future bindings keep their behavior.
-      if (e.type === 'keydown' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
-          (e.key === 'v' || e.key === 'V' || e.code === 'KeyV')) {
-        const text = window.deck.clipboardRead();
-        if (text) term.paste(text);
-        else pasteImageAsPath(); // clipboard holds an image (screenshot) → paste its temp-file path
+      if (PasteRetryCore.isCtrlV(e)) {
+        // An empty clipboard is read again for half a second (other programs read it the
+        // moment it changes), then Chromium's own paste, then a visible hint. A screenshot
+        // becomes its temp-file path. The same on every platform (Cmd+V on a Mac never gets here).
+        ctrlV.press();
         e.preventDefault();
         return false;
       }
@@ -1803,7 +1810,12 @@ function buildColumn(col, isFresh) {
       // While AgentDeck types a receipt or a task into this box (up to 3 s
       // while the agent keeps drawing), your keys wait and follow right after its Enter. The wheel,
       // pointer moves and the terminal's own replies do not wait (ChatCore.passesInputHold).
-      term.onData((d) => { if (entry.injecting && !ChatCore.passesInputHold(d)) held.push(d); else forwardInput(d); });
+      // The one gate every keystroke goes through, including the keys a waiting Ctrl+V held back.
+      entry.routeInput = (d) => { if (entry.injecting && !ChatCore.passesInputHold(d)) held.push(d); else forwardInput(d); };
+      term.onData((d) => {
+        if (ctrlV.hold(d)) return; // a Ctrl+V is still waiting for the clipboard: this key follows it
+        entry.routeInput(d);
+      });
     }
     term.onResize(({ cols, rows }) => window.deck.ptyResize(col.id, cols, rows));
     if (deckEl.firstElementChild === wrap) { if (!ChatUI.focusInput(col.id)) term.focus(); focusedId = col.id; } // focus leftmost on boot
@@ -1833,17 +1845,71 @@ function buildColumn(col, isFresh) {
     // Paste an IMAGE (e.g. a fresh screenshot on the clipboard) → main saves
     // it to a temp PNG and we type its shell-quoted path, mirroring the
     // drag-drop-a-file behavior. Text pastes fall through to xterm's native
-    // handling. (The Ctrl+V key handler below covers the same for Windows,
-    // where the DOM paste event is suppressed.)
+    // handling. (The Ctrl+V key handler above covers the same for Windows,
+    // where the DOM paste event is suppressed.) The column's own input gets the path
+    // whichever element has the focus, and the focus is left where the user put it.
     const pasteImageAsPath = () => window.deck.pasteImageSave().then((p) => {
-      if (p) { term.focus(); window.deck.ptyInput(col.id, shellQuote(p) + ' '); }
+      if (p) window.deck.ptyInput(col.id, shellQuote(p) + ' ');
       return !!p;
     }).catch(() => false);
+    // Ctrl+V (see the key handler above): the retry ladder lives in paste-retry-core.js.
+    const pasteHint = document.createElement('div');
+    pasteHint.className = 'paste-hint';
+    pasteHint.setAttribute('role', 'status');
+    pasteHint.hidden = true;
+    termEl.appendChild(pasteHint);
+    let pasteHintTimer;
+    // Chromium's own paste, asked of the main process: the text it delivers comes back as
+    // the page's paste event. It is taken here (not left to xterm) so the core pastes it in
+    // order with the keys that waited; an image or an empty clipboard is left alone. A paste
+    // event that comes after the wait gave up is swallowed for a moment too (see the core).
+    const listenForPaste = (take) => {
+      const onPaste = (ev) => {
+        const text = ev.clipboardData ? ev.clipboardData.getData('text/plain') : '';
+        if (!text || !take(text)) return;
+        ev.preventDefault(); ev.stopPropagation();
+      };
+      termEl.addEventListener('paste', onPaste, true);
+      return () => termEl.removeEventListener('paste', onPaste, true);
+    };
+    const nativePasteWhenFocused = PasteRetryCore.createNativePaste({
+      listen: listenForPaste,
+      // Chromium pastes into whatever has the focus. A user who has already clicked somewhere
+      // else (another column, a chat box) is not pulled back here: nothing is asked of Chromium.
+      request: () => (termEl.contains(document.activeElement) ? window.deck.clipboardNativePaste() : Promise.resolve(false)),
+    });
+    // A paste chord in this column (Shift+Insert, Ctrl+Shift+V, Cmd+V; a voice tool's simulated
+    // keys count) lets one paste through while a late Chromium paste is being dropped. A click or
+    // an ordinary key does not: the late paste would then double a repeated Ctrl+V.
+    termEl.addEventListener('keydown', nativePasteWhenFocused.userInput, true);
+    const ctrlV = PasteRetryCore.create({
+      readText: () => window.deck.clipboardReadText(),
+      readImage: pasteImageAsPath,
+      pasteText: (text) => term.paste(text),
+      pasteNative: nativePasteWhenFocused,
+      readKind: () => window.deck.clipboardKind(),
+      onFail: (kind) => {
+        pasteHint.textContent = PasteRetryCore.failureHint(kind);
+        pasteHint.hidden = false;
+        clearTimeout(pasteHintTimer);
+        pasteHintTimer = setTimeout(() => { pasteHint.hidden = true; }, 5000);
+      },
+      sendHeld: (d) => { const entry = terms.get(col.id); if (entry && entry.routeInput) entry.routeInput(d); else forwardInput(d); },
+      passes: ChatCore.passesInputHold,
+    });
+    disposers.push(() => { clearTimeout(pasteHintTimer); ctrlV.cancel(); });
+    // A pasted screenshot becomes a path, but only when the clipboard holds no text too: a
+    // page selection or a spreadsheet cell carries a picture next to its text, and that
+    // pastes the text (xterm) and never both.
     termEl.addEventListener('paste', (e) => {
       const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
       if (!items.some((it) => it.kind === 'file' && /^image\//.test(it.type))) return;
+      if (e.clipboardData.getData('text/plain')) return;
       e.preventDefault(); e.stopPropagation();
-      pasteImageAsPath();
+      pasteImageAsPath().then((ok) => {
+        if (ok) return;
+        window.deck.clipboardKind().catch(() => 'none').then((kind) => showToast(PasteRetryCore.pictureFailureHint(kind, '终端')));
+      });
     }, true);
 
     // Drag a file from Finder onto a column → insert its (shell-quoted) path,
@@ -3635,12 +3701,12 @@ function renderQuotaBar() {
         const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `${prefix}-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
         item.setAttribute('aria-describedby', tip.id);
         item.append(label, values, tip); bar.append(item);
-        item.addEventListener('click', (event) => {
+        item.addEventListener('click', async (event) => {
           const button = event.target.closest('.quota-login-copy');
           if (!button || !item.dataset.loginCommand) return;
           event.stopPropagation();
           try {
-            window.deck.clipboardWrite(item.dataset.loginCommand);
+            await window.deck.clipboardWrite(item.dataset.loginCommand);
             item.dataset.loginCopiedUntil = String(Date.now() + 1400);
             renderQuotaBar();
             // A mouse click focused the button, which would pin the detail open: let go once the tick is over.
@@ -3650,7 +3716,7 @@ function renderQuotaBar() {
               const active = document.activeElement;
               if (byMouse && active?.classList.contains('quota-login-copy') && item.contains(active)) active.blur();
             }, 1450);
-          } catch (_) { showToast('登录命令复制失败，请重试。'); }
+          } catch (_) { showToast('登录命令复制失败，请重试'); }
         });
         // Leaving the row on the way to the copy button keeps the detail for a moment (see .tip-hold).
         item.addEventListener('mouseleave', () => {

@@ -40,17 +40,21 @@
     b.addEventListener('click', (e) => { e.stopPropagation(); onClick(e, b); });
     return b;
   }
+  // The check belongs to the button's key, not to the clicked node: the page redraws while the
+  // write runs, and the new button must show it (copy-mark.js). The tooltip to go back to is kept
+  // on the node.
+  const copied = window.CopyMark.create({
+    find: (key) => document.querySelectorAll(`[data-fk="${window.CSS && CSS.escape ? CSS.escape(key) : key}"]`),
+    show: (b) => { b.innerHTML = host.ICONS.check; b.classList.add('done'); b.title = '已复制'; b.setAttribute('aria-label', '已复制'); },
+    hide: (b) => { b.innerHTML = host.ICONS.copy; b.classList.remove('done'); b.title = b.dataset.tip || ''; b.setAttribute('aria-label', b.dataset.tip || ''); },
+  });
   function copyButton(title, text, fk) {
-    return iconButton('copy', title, (_e, b) => {
-      try { host.clipboardWrite(text); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
-      b.innerHTML = host.ICONS.check; b.classList.add('done');
-      b.title = '已复制'; b.setAttribute('aria-label', '已复制');
-      clearTimeout(b.checkTimer);
-      b.checkTimer = setTimeout(() => {
-        b.innerHTML = host.ICONS.copy; b.classList.remove('done');
-        b.title = title; b.setAttribute('aria-label', title);
-      }, 1200);
+    const b = iconButton('copy', title, async () => {
+      try { await host.clipboardWrite(text); } catch (_) { host.showToast('没能复制到剪贴板，请再试一次'); return; }
+      copied.done(fk);
     }, fk);
+    b.dataset.tip = title;
+    return copied.adopt(fk, b);
   }
   const revealTitle = () => (host.platform === 'darwin' ? '在访达中显示' : host.platform === 'win32' ? '在资源管理器中显示' : '在文件管理器中显示');
   const shortPath = (p) => (host.home && p.startsWith(host.home) && /^[\\/]/.test(p.slice(host.home.length)) ? '~' + p.slice(host.home.length) : p);

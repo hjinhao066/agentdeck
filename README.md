@@ -104,6 +104,40 @@ by default and takes the key first, so search also answers to Ctrl+Alt+F (free i
 PowerShell, Claude Code and Windows Terminal; F3 is PowerShell's CharacterSearch).
 To use Ctrl+Shift+F, turn the switch off in the input method's settings (按键).
 
+Ctrl+V pastes the clipboard into a terminal on Windows, Linux and macOS (`paste-retry-core.js`;
+a Mac's Cmd+V is the native paste and is not touched).
+Clipboard history, Ditto and PixPin open the clipboard the moment it changes and a read
+made then comes back empty, so an empty read is tried again every 50 ms for about half a
+second, then Chromium's own paste is asked to deliver the text, and if that finds nothing
+either the column shows a hint for a few seconds (the clipboard is never left unread in
+silence): 「粘贴失败」 when nothing could be read (held by another program, or not text), 「粘贴不了」
+when the clipboard holds something that is neither text nor a screenshot (copied files).
+Chromium's paste is asked only while the terminal still has the focus, and a paste event of
+its that arrives after the 300 ms wait is dropped for 1.5 s, so pressing again as the hint says
+pastes once. The drop goes on whatever else is pressed (a left click, an ordinary key), but a paste
+chord lets exactly one paste through without ending it: Shift+Insert (also a voice tool's simulated
+one, such as Type4Me's; a further modifier held down does not matter), Ctrl+Shift+V and Cmd+V, for half
+a second. The late paste that comes after is still dropped. A mouse click does not count (a terminal
+column has no right-click paste).
+A second Ctrl+V meanwhile adds nothing, and keys typed meanwhile follow the paste in order.
+Ctrl+Shift+V, dropped files and bracketed paste are unchanged.
+
+Electron 44's clipboard is asynchronous (`writeText`, `readText` and `read` return Promises, and
+`readImage` is gone). Every copy button waits for `deck.clipboardWrite(text)`, which resolves only
+once the text is on the clipboard and rejects when it could not be written: the check then does not
+show and a message says so (a terminal selection stays selected; while it stays, Ctrl+C copies, so
+the message says to click the terminal to let go first if Ctrl+C is meant as the interrupt). The check
+on a copy button is kept as state per button (`copy-mark.js`), so a list that redraws while the write
+runs still shows it on the new button. Pasted screenshots are saved to `agentdeck-paste` in the temp
+folder and those older than 24 hours are removed at launch and on every save. A paste event that
+carries a picture the clipboard cannot give (an image file copied in the file manager) says the
+clipboard holds files and that only text and screenshots can be pasted. A screenshot is read from
+`clipboard.read()` as `image/png`; a clipboard that holds a picture and text pastes the text only.
+The deck reads through `clipboard:read` (`clipboard:read-sync` answers only a test profile, which has
+a private in-memory clipboard; `app.testClipboardImage` and `app.testClipboardWriteFails` let a test
+hold a picture or make copies fail). Tests for the main-process handlers run them against a fake
+asynchronous clipboard (`tests/clipboard-handlers.test.js`).
+
 ## Layout
 
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in

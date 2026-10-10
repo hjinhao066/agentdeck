@@ -174,8 +174,8 @@ ID 只接受 1–160 个 ASCII 字母、数字、下划线或连字符；标题�
 界面里的复制、刷新、关闭、展开/收起等常见动作一律是图标按钮（复制为两个重叠方框，成功后短暂变勾），
 都带悬停提示、`aria-label`、键盘焦点和不小于 28px 的点击面积。
 
-复制路径和编号统一使用 `deck.clipboardWrite(text)`，同步读取使用 `deck.clipboardRead()`；
-两者都走 release 的 `clipboard:write-sync` / `clipboard:read-sync` 主进程通道。
+复制路径和编号统一使用 `deck.clipboardWrite(text)`（返回 Promise，写进剪贴板后才完成，写失败会拒绝，调用方要 `await` 并在失败时提示、不打勾），
+测试里读取使用 `deck.clipboardRead()`；写走 `clipboard:write`，读走 `clipboard:read`，`clipboard:read-sync` 只在隔离测试 profile 里有值。
 隔离测试 profile 使用私有剪贴板，复制失败不会显示成功。
 
 ## 命令
