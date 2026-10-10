@@ -149,8 +149,8 @@ test('quota is a read-only, login-only endpoint that returns display fields with
   const raw = { version: '1.1.6', token: 'secret-token', rows: [
     { key: 'Claude:cn', provider: 'Claude', name: 'Claude 🇨🇳 CN', short: 'CN', flag: '🇨🇳', captain: true, status: 'normal', failed: false,
       cells: [{ key: '5h', remaining: 26, out: false, resetAt: now + 3600000, secret: 'x' }, { key: '7d', remaining: 61, out: false, resetAt: now + 86400000 }],
-      recoveryAt: null, sampledAt: now, account: 'hjinhao066@gmail.com', source: 'Claude 官方\n接口' + 'x'.repeat(80), configDir: '/Users/someone/.claude', accountKey: 'c93892d01d8a', credentialKey: 'cred', detail: '配置目录：~/.claude', accessToken: 'sk-ant-secret' },
-    { key: 'Codex', provider: 'Codex', name: 'Codex', short: 'Codex', status: 'usable', cells: [{ key: '7d', remaining: 140 }, { key: 'other', remaining: 5 }], sampledAt: 'yesterday', account: 'hj***@gmail.com' },
+      recoveryAt: null, sampledAt: now, account: 'alice@example.com', source: 'Claude 官方\n接口' + 'x'.repeat(80), configDir: '/Users/someone/.claude', accountKey: 'c93892d01d8a', credentialKey: 'cred', detail: '配置目录：~/.claude', accessToken: 'sk-ant-secret' },
+    { key: 'Codex', provider: 'Codex', name: 'Codex', short: 'Codex', status: 'usable', cells: [{ key: '7d', remaining: 140 }, { key: 'other', remaining: 5 }], sampledAt: 'yesterday', account: 'al***@example.com' },
     { key: 'Cursor', provider: 'Cursor', name: 'Cursor Grok', short: 'Cursor', status: 'out', cells: 'none', recoveryAt: now + 7200000, account: '未识别（本机当前登录）', source: { path: '~/.cursor' } },
     null, 'row'] };
   const { status, auth } = await start(t, {}, { getQuota: () => raw, now: () => now });
@@ -162,9 +162,9 @@ test('quota is a read-only, login-only endpoint that returns display fields with
   const body = JSON.parse(response.text);
   assert.deepEqual(body, { version: '1.1.6', now, rows: [
     { key: 'Claude:cn', provider: 'Claude', name: 'Claude 🇨🇳 CN', short: 'CN', flag: '🇨🇳', captain: true, status: 'normal', failed: false,
-      cells: [{ key: '5h', remaining: 26, out: false, resetAt: now + 3600000 }, { key: '7d', remaining: 61, out: false, resetAt: now + 86400000 }], recoveryAt: null, sampledAt: now, account: 'h***@gmail.com', source: 'Claude 官方 接口' + 'x'.repeat(48) },
+      cells: [{ key: '5h', remaining: 26, out: false, resetAt: now + 3600000 }, { key: '7d', remaining: 61, out: false, resetAt: now + 86400000 }], recoveryAt: null, sampledAt: now, account: 'a***@example.com', source: 'Claude 官方 接口' + 'x'.repeat(48) },
     // An unknown status is never passed on as usable, and an impossible percentage is dropped.
-    { key: 'Codex', provider: 'Codex', name: 'Codex', short: 'Codex', flag: '', captain: false, status: 'unknown', failed: false, cells: [], recoveryAt: null, sampledAt: null, account: 'h***@gmail.com', source: '' },
+    { key: 'Codex', provider: 'Codex', name: 'Codex', short: 'Codex', flag: '', captain: false, status: 'unknown', failed: false, cells: [], recoveryAt: null, sampledAt: null, account: 'a***@example.com', source: '' },
     { key: 'Cursor', provider: 'Cursor', name: 'Cursor Grok', short: 'Cursor', flag: '', captain: false, status: 'out', failed: false, cells: [], recoveryAt: now + 7200000, sampledAt: null, account: '', source: '' }] });
   // Reading needs no CSRF token, and there is nothing to write.
   assert.equal((await request(status, '/api/quota', { headers: { Authorization: auth.Authorization } })).status, 200);

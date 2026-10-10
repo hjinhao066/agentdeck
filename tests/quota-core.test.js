@@ -598,7 +598,7 @@ test('phone rows carry display fields only: account name, masked address, no con
   const official = (seat, at, five, week, extra = {}) => ({ ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
     { key: 'fiveHour', remaining: five, resetText: new Date(now + 2 * 3600000).toISOString() }, { key: 'weekly', remaining: week, resetText: new Date(now + 3 * 86400000).toISOString() }] }, at),
     seatId: seat.id, configDir: seat.configDir, accountBound: true, accountKey: `${seat.id}-account`, credentialKey: `${seat.id}-cred`, ...extra });
-  Q.observe(store, official(seats[0], now, 26, 61, { account: 'hjinhao@gmail.com' }), now);
+  Q.observe(store, official(seats[0], now, 26, 61, { account: 'alice@example.com' }), now);
   Q.observe(store, official(seats[1], now, 0, 40, { account: 'us***@example.com' }), now);
   Q.observe(store, { ...Q.screen('Codex', 'Weekly limit: 70% left (resets 10:00)', [], now), account: 'co***@example.com' }, now);
   const rows = Q.mobile(store, now, seats, 'cn');
@@ -607,7 +607,7 @@ test('phone rows carry display fields only: account name, masked address, no con
     ['Claude:cn', 'Claude hjinhao', 'hjinhao', '', true, 'normal'], ['Claude:us', 'Claude 识别中（us）', '识别中（us）', '', false, 'out'],
     ['Codex', 'Codex', 'Codex', '', false, 'normal'], ['Cursor', 'Cursor Grok', 'Cursor', '', false, 'unknown'], ['Antigravity', 'Gemini', 'Gemini', '', false, 'unknown']]);
   assert.deepEqual(rows[0].cells.map((c) => [c.key, c.remaining, c.out]), [['5h', 26, false], ['7d', 61, false]]);
-  assert.deepEqual([rows[0].account, rows[1].account, rows[2].account, rows[3].account], ['h***@gmail.com', 'u***@example.com', 'c***@example.com', '']);
+  assert.deepEqual([rows[0].account, rows[1].account, rows[2].account, rows[3].account], ['a***@example.com', 'u***@example.com', 'c***@example.com', '']);
   assert.equal(rows[1].cells[0].out, true);
   assert.equal(rows[1].recoveryAt, now + 2 * 3600000);
   // Where the numbers came from, as the desktop names it; nothing when there are none.
@@ -632,7 +632,7 @@ test('phone rows carry display fields only: account name, masked address, no con
   // A Captain on another provider marks that provider's row.
   assert.deepEqual(Q.mobile(store, now, seats, null, 'Codex').map((r) => r.captain), [false, false, true, false, false]);
   assert.equal(Q.mobile({}, now)[0].name, 'Claude');
-  for (const [value, masked] of [['a@b.co', 'a***@b.co'], ['hj***@gmail.com', 'h***@gmail.com'], ['未识别', ''], ['a b@c.d', ''], [null, ''], ['x@y@z', '']]) assert.equal(Q.maskAccount(value), masked);
+  for (const [value, masked] of [['a@b.co', 'a***@b.co'], ['al***@example.com', 'a***@example.com'], ['未识别', ''], ['a b@c.d', ''], [null, ''], ['x@y@z', '']]) assert.equal(Q.maskAccount(value), masked);
 });
 
 test('an upgraded CN/US profile lists US2 in both the desktop items and the phone rows', () => {

@@ -186,8 +186,8 @@ test('value rows: one row per account; seats sharing a log directory share a row
 
 test('view settings: the range, Token or 金额, and the cycle starts the user set; anything else dropped', () => {
   assert.deepEqual(C.viewPrefs(undefined), { days: 7, unit: 'tokens', starts: {} });
-  assert.deepEqual(C.viewPrefs({ days: 30, unit: 'usd', starts: { hjinhao066us: '2026-10-08', bad: '10/8', ['x'.repeat(300)]: '2026-10-08', other: 5 }, extra: 1 }),
-    { days: 30, unit: 'usd', starts: { hjinhao066us: '2026-10-08' } });
+  assert.deepEqual(C.viewPrefs({ days: 30, unit: 'usd', starts: { alice2: '2026-10-08', bad: '10/8', ['x'.repeat(300)]: '2026-10-08', other: 5 }, extra: 1 }),
+    { days: 30, unit: 'usd', starts: { alice2: '2026-10-08' } });
   assert.deepEqual(C.viewPrefs({ days: 14, unit: 'eur', starts: [] }), { days: 7, unit: 'tokens', starts: {} });
   assert.equal(C.viewPrefs({ starts: { ['__proto__']: '2026-10-08' } }).starts.__proto__, Object.prototype, 'no prototype key');
 });

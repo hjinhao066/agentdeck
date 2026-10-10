@@ -381,9 +381,21 @@
   // whose stored credential is damaged or expired reads as `error`, never as room, and never as the unverified fallback.
   let seatsForQuota = null, lastSeatChoices = null;
   // How a seat is named in any sentence (a review reason, a notice): the account signed in behind its directory, the part
-  // of the e-mail before the @ (the user's rule of 2026-10-08), never the fixed seat name or its flag. A directory nobody is
-  // known to be signed in at reads 未登录. The seat code stays in `--seat` and the hover text.
-  const seatLabel = (seat, info) => window.ClaudeSeatsCore?.seatDisplay ? window.ClaudeSeatsCore.seatDisplay(seat, { loggedIn: false, ...(info || {}) }).label : '账号未识别';
+  // of the e-mail before the @ (the user's rule of 2026-10-08), never the fixed seat name or its flag. A directory whose
+  // login is not known yet (the seat list could not be read, nothing remembered) reads 识别中, which is not 未登录: it
+  // says nothing about being signed out. Seats that read the same (two unknown ones, one account behind two directories)
+  // get a number in the order of the configured list, so a reason can tell them apart. The seat code and directory stay in
+  // `--seat` and in `title`, the hover text of the choice.
+  function seatChoices(seats, infoOf) {
+    const display = window.ClaudeSeatsCore?.seatDisplay;
+    const shown = seats.map((seat) => ({ seat, d: display ? display(seat, infoOf(seat) || {}) : { label: '账号未识别', title: '' } }));
+    const total = new Map(), seen = new Map();
+    for (const { d } of shown) total.set(d.label, (total.get(d.label) || 0) + 1);
+    return shown.map(({ seat, d }) => {
+      const nth = (seen.get(d.label) || 0) + 1; seen.set(d.label, nth);
+      return { id: seat.id, label: total.get(d.label) > 1 ? `${d.label} ${nth}` : d.label, title: d.title, configDir: seat.configDir };
+    });
+  }
   async function claudeSeatChoices() {
     const seats = window.QuotaCore.claudeSeats ? window.QuotaCore.claudeSeats(host.config.claudeSeats) : [];
     let infos = [];
@@ -392,8 +404,7 @@
     const described = window.ClaudeSeats?.described ? window.ClaudeSeats.described(raw) : raw;
     seatsForQuota = infos.length ? raw.map((s) => ({ ...s, info: infos.find((i) => i.id === s.id) || described.find((d) => d.id === s.id)?.info })) : described;
     const active = host.config.activeClaudeSeatId;
-    lastSeatChoices = seats.filter((s) => infos.find((i) => i.id === s.id)?.loggedIn !== false)
-      .map((s) => ({ id: s.id, label: seatLabel(s, seatsForQuota.find((x) => x.id === s.id)?.info), configDir: s.configDir }))
+    lastSeatChoices = seatChoices(seats.filter((s) => infos.find((i) => i.id === s.id)?.loggedIn !== false), (s) => seatsForQuota.find((x) => x.id === s.id)?.info)
       .sort((a, b) => (b.id === active) - (a.id === active));
     return lastSeatChoices;
   }
@@ -404,7 +415,7 @@
   // readings), answered without touching the board: the quota retry below asks it every heartbeat.
   function dispatcherReady() {
     const AV = window.AutoVerifyCore;
-    const seats = lastSeatChoices || (window.QuotaCore.claudeSeats ? window.QuotaCore.claudeSeats(host.config.claudeSeats).map((x) => ({ id: x.id, label: seatLabel(x, x.info), configDir: x.configDir })) : []);
+    const seats = lastSeatChoices || (window.QuotaCore.claudeSeats ? seatChoices(window.QuotaCore.claudeSeats(host.config.claudeSeats), (x) => x.info) : []);
     return !!AV.pickDispatcher({ commandOf: (c) => c.command || window.BoardCore.commandForAgent(c.agent), seats, stanceOf: commandStance }).cmd;
   }
   // A test instance never lets an automatic opener (the board's dispatcher, the auto reviewer) start a real model.

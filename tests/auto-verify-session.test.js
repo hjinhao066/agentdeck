@@ -889,22 +889,25 @@ test('a seat with a damaged credential reads as error and is never the unverifie
   assert.equal(app2.reviewers(card2).length, 0); assert.match(app2.card(card2.id).review_block.reason, /登录或额度查询出错/);
 });
 // A seat goes by its account in what the Captain reads (the user's rule of 2026-10-08): the part of the e-mail before the @,
-// no flag, no CN / US / US2; a directory nobody is known to be signed in at reads 未登录. `--seat us` stays in commands.
+// no flag, no CN / US / US2; a directory whose login nobody knows yet reads 识别中 (not 未登录: that says it is signed out),
+// and two that read the same carry a number. `--seat us` stays in commands. The seat codes are matched as whole words, so
+// an account such as bob.us is not mistaken for a seat name.
+const SEAT_CODE = /\b(?:CN|US2?)\b/;
 test('every seat out: the review reason, review_block and the notice to the Captain name the accounts, not CN / US or a flag', async (t) => {
   const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();
-  w.seatInfos = [{ id: 'cn', loggedIn: true, loginEmail: 'hjinhao066@gmail.com' }, { id: 'us', loggedIn: true, loginEmail: 'jinhao.h.sub@gmail.com' }];
+  w.seatInfos = [{ id: 'cn', loggedIn: true, loginEmail: 'alice@example.com' }, { id: 'us', loggedIn: true, loginEmail: 'bob.us@example.com' }];
   const card = await newCard(app, { important: true });
   const exec = await app.execute(card); await app.finish(exec, '做完');
   reading(w, 'cn', 0, 60); reading(w, 'us', 0, 60);
   await app.scan();
   assert.equal(app.reviewers(card).length, 0);
   const reason = app.card(card.id).review_block.reason;
-  assert.match(reason, /Claude Opus 5\.5（hjinhao066）：额度用尽/); assert.match(reason, /Claude Opus 5\.5（jinhao\.h\.sub）：额度用尽/);
+  assert.match(reason, /Claude Opus 5\.5（alice）：额度用尽/); assert.match(reason, /Claude Opus 5\.5（bob\.us）：额度用尽/);
   const notice = app.notices().find((n) => n.includes('不能自动开审查会话'));
-  assert.ok(notice && notice.includes('hjinhao066'));
-  for (const text of [reason, notice]) { assert.doesNotMatch(text, /\p{Regional_Indicator}/u); assert.doesNotMatch(text, /(?:CN|US2?)/i); }
+  assert.ok(notice && notice.includes('alice'));
+  for (const text of [reason, notice]) { assert.doesNotMatch(text, /\p{Regional_Indicator}/u); assert.doesNotMatch(text, SEAT_CODE); }
 });
-test('a seat directory nobody is known to be signed in at reads 未登录 in the reason', async (t) => {
+test('a seat directory whose login is not known yet reads 识别中, not 未登录, and two of them are told apart by a number', async (t) => {
   const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();
   w.seatInfos = [];   // the seat list could not be read and no account is remembered for either directory
   const card = await newCard(app, { important: true });
@@ -912,8 +915,20 @@ test('a seat directory nobody is known to be signed in at reads 未登录 in the
   reading(w, 'cn', 0, 60); reading(w, 'us', 0, 60);
   await app.scan();
   const reason = app.card(card.id).review_block.reason;
-  assert.match(reason, /Claude Opus 5\.5（未登录）：额度用尽/);
-  assert.doesNotMatch(reason, /\p{Regional_Indicator}/u); assert.doesNotMatch(reason, /(?:CN|US2?)/i);
+  assert.match(reason, /Claude Opus 5\.5（识别中 1）：额度用尽/); assert.match(reason, /Claude Opus 5\.5（识别中 2）：额度用尽/);
+  assert.doesNotMatch(reason, /未登录/);
+  assert.doesNotMatch(reason, /\p{Regional_Indicator}/u); assert.doesNotMatch(reason, SEAT_CODE);
+});
+test('one seat unknown and one known: only the repeated reading gets a number', async (t) => {
+  const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();
+  w.seatInfos = [{ id: 'us', loggedIn: true, loginEmail: 'bob.us@example.com' }];   // nothing is known about the cn directory
+  const card = await newCard(app, { important: true });
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  reading(w, 'cn', 0, 60); reading(w, 'us', 0, 60);
+  await app.scan();
+  const reason = app.card(card.id).review_block.reason;
+  assert.match(reason, /Claude Opus 5\.5（识别中）：额度用尽/); assert.match(reason, /Claude Opus 5\.5（bob\.us）：额度用尽/);
+  assert.doesNotMatch(reason, SEAT_CODE);
 });
 test('no signed-in Claude seat at all: nobody is picked and the reason says so (the default seat is not brought back)', async (t) => {
   const w = realWorld(t, ['cn', 'us'], 'cn'); const app = w.boot();

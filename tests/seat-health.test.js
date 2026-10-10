@@ -64,7 +64,7 @@ test('Windows and test profiles parse the credential file instead of only seeing
 });
 
 // ---- one colour per row ----
-const seat = (info) => ({ id: 'us', name: 'US', configDir: '~/.claude-us', info: { loggedIn: true, accountEmail: 'jinhao.h.sub@example.com', plan: 'Max', ...info } });
+const seat = (info) => ({ id: 'us', name: 'US', configDir: '~/.claude-us', info: { loggedIn: true, accountEmail: 'bob.sub@example.com', plan: 'Max', ...info } });
 const signedIn = { loggedIn: true, credential: { state: 'ok', bytes: 470, store: 'keychain' } };
 function official(at, extra = {}) {
   return { [Q.seatKey('us')]: { scope: 'claude', configDir: '~/.claude-us', credentialKey: 'k', accountKey: 'a',
@@ -138,7 +138,7 @@ test('both phone pages colour a row from its health, or from its status when an 
   assert.equal(Hub.rowHealth(bad).level, 'bad');
   assert.equal(Hub.quotaNote(bad, NOW), '登录凭据坏了 · 需要重新登录');
   assert.match(Hub.quotaState(bad, false), /^登录凭据坏了：钥匙串.*；需要重新登录/);
-  assert.match(Hub.quotaLabel({ ...bad, name: 'Claude jinhao.h.sub' }, NOW), /^Claude jinhao\.h\.sub；登录凭据坏了，需要重新登录/);
+  assert.match(Hub.quotaLabel({ ...bad, name: 'Claude bob.sub' }, NOW), /^Claude bob\.sub；登录凭据坏了，需要重新登录/);
   assert.equal(Hub.rowHealth({ status: 'out', cells: [] }).level, 'bad');
   assert.equal(Hub.rowHealth({ status: 'stale', cells: [] }).level, 'warn');
   assert.equal(Hub.rowHealth({ status: 'normal', failed: true, cells: [] }).level, 'warn');

@@ -15,7 +15,7 @@ const TRUNCATED = JSON.stringify({ claudeAiOauth: { accessToken: 'stand-in-' + '
 const EXPIRED = JSON.stringify({ claudeAiOauth: { accessToken: 'stand-in', expiresAt: Date.now() - 3600_000 } });
 const SEATS = [
   ['cn', '~/.claude', 'fine.seat', STAND_IN_CREDENTIAL, ['ok', 'ok', '']],
-  ['us', '~/.claude-us', 'jinhao.h.sub', TRUNCATED, ['bad', 'credential', '登录凭据坏了']],
+  ['us', '~/.claude-us', 'bob.sub', TRUNCATED, ['bad', 'credential', '登录凭据坏了']],
   ['us2', '~/.claude-us2', 'old.numbers', STAND_IN_CREDENTIAL, ['warn', 'stale', '数据已旧']],
   ['us3', '~/.claude-us3', 'query.fails', STAND_IN_CREDENTIAL, ['warn', 'failed', '查询失败']],
   ['us4', '~/.claude-us4', 'used.up', STAND_IN_CREDENTIAL, ['bad', 'exhausted', '额度用尽']],
@@ -119,7 +119,7 @@ test('sidebar: fine rows stay as they were; yellow and red rows say what is wron
     if (level === 'ok') expect(line(account)).not.toMatch(/【[红黄]】/);
     else expect(line(account), account).toContain(`【${level === 'bad' ? '红' : '黄'}】${label}：`);
   }
-  expect(line('jinhao.h.sub')).toMatch(/凭据文件里的登录凭据有 128 字节，不是合法 JSON.*需要重新登录这个席位/);
+  expect(line('bob.sub')).toMatch(/凭据文件里的登录凭据有 128 字节，不是合法 JSON.*需要重新登录这个席位/);
   expect(text).not.toMatch(/stand-in/);
 
   for (const theme of ['dark', 'light']) {
