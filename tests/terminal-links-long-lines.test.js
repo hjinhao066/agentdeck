@@ -56,16 +56,18 @@ for (const [name, text] of [
 }
 
 test('links found in ordinary lines are unchanged', () => {
-  // Exactly what findLinks returned before the change, quirks included.
+  // What findLinks returned before the change, except where a path took the
+  // prose after it or a relative path was linked from its second folder
+  // (tests/path-links.test.js has those cases).
   const kinds = (text) => findLinks(text).map((m) => `${m.kind}:${m.text}@${m.start}`);
   assert.deepEqual(kinds('see src/renderer.js:406 and main.js:12 now'), ['file:src/renderer.js:406@4', 'file:main.js:12@28']);
-  assert.deepEqual(kinds('open /Users/me/My Project/a.md 这里'), ['file:/Users/me/My Project/a.md 这里@5']);
+  assert.deepEqual(kinds('open /Users/me/My Project/a.md 这里'), ['file:/Users/me/My Project/a.md@5']);
   assert.deepEqual(kinds('https://example.com/a/b.js?x=1, then ./lib/x.ts'), ['url:https://example.com/a/b.js?x=1@0', 'file:./lib/x.ts@37']);
   assert.deepEqual(kinds('"file":"src/a.js:10","n":1.5'), ['file:src/a.js:10@8']);
-  assert.deepEqual(kinds('x/~src/a.js and node.js or and/or'), ['file:/~src/a.js and node.js or and/or@1']);
-  assert.deepEqual(kinds('a+src/b.js q@r/s.txt'), ['file:/b.js q@r/s.txt@5']);
+  assert.deepEqual(kinds('x/~src/a.js and node.js or and/or'), []);
+  assert.deepEqual(kinds('a+src/b.js q@r/s.txt'), ['file:a+src/b.js@0', 'file:q@r/s.txt@11']);
   assert.deepEqual(kinds('~/notes/todo.md:3:7'), ['file:~/notes/todo.md:3:7@0']);
-  assert.deepEqual(kinds('build/out/app.min.js.map'), ['file:/out/app.min.js.map@5']);
+  assert.deepEqual(kinds('build/out/app.min.js.map'), ['file:build/out/app.min.js.map@0']);
   assert.deepEqual(kinds('ok main.js:1, b.ts:22 x'), ['file:main.js:1@3', 'file:b.ts:22@14']);
 });
 

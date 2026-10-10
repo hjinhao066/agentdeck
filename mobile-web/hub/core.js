@@ -890,13 +890,17 @@
   const SAFE_URL = /^(https?:\/\/|mailto:)/i;
   // next to Chinese text a star needs no space around it: "这是*重点*内容"
   const EM_BEFORE = '(^|[\\s(（“"「【：，。、\\u3400-\\u9fff])', EM_AFTER = '(?=[\\s).,;:!?，。；：、）”"」】\\u3400-\\u9fff]|$)';
+  // "C:\…" up to white space, quotes or Chinese punctuation; single spaces as in "Program Files"
+  const WIN_PATH = /\b[A-Za-z]:\\(?:[^\s`"'<>|\u3000-\u303f\uff01-\uff60]| (?=[^\s`"'<>|]))*/g;
   const EM_STAR = new RegExp(EM_BEFORE + '\\*([^*\\s][^*\\n]*)\\*' + EM_AFTER, 'g'), EM_BAR = new RegExp(EM_BEFORE + '_([^_\\s][^_\\n]*)_' + EM_AFTER, 'g');
   function inline(src, opts) {
     const held = [], links = !!(opts && opts.links);
     const hold = (html) => '\u0000' + (held.push(html) - 1) + '\u0000';
     let s = String(src).replace(/\u0000/g, '');
     s = s.replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${esc(c)}</code>`));
-    s = s.replace(/\\([\\`*_{}[\]()#+.!|~>-])/g, (_, c) => hold(esc(c)));
+    // a Windows path keeps its backslashes: "C:\Users\me\.claude" holds no escaped dot
+    const winPaths = [...s.matchAll(WIN_PATH)].map((m) => [m.index, m.index + m[0].length]);
+    s = s.replace(/\\([\\`*_{}[\]()#+.!|~>-])/g, (all, c, at) => (c !== '\\' && winPaths.some(([a, b]) => at > a && at < b) ? all : hold(esc(c))));
     // a picture is named, not loaded: the page decides what opening it means
     s = s.replace(/!?\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"\n]*")?\)/g, (all, text, url) => {
       const label = text || url;

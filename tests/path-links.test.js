@@ -98,3 +98,41 @@ test('the chat view keeps the backslashes of a Windows path, so the link opens t
   // escapes elsewhere still work
   assert.equal(Hub.renderMarkdown('1\\. 不是列表 \\*不是斜体\\*'), '<p>1. 不是列表 *不是斜体*</p>');
 });
+
+// xterm rows of `cols` cells built the way xterm fills them: a wide glyph takes
+// two cells (the second has width 0); one that does not fit in the last column
+// goes to the next row and leaves that column empty (''), or holds the space
+// Windows' console writes there (' ').
+function fakeBuffer(text, cols, pad) {
+  const wide = (ch) => /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(ch);
+  const rows = [[]];
+  for (const ch of text) {
+    const w = wide(ch) ? 2 : 1;
+    if (rows[rows.length - 1].length + w > cols) {
+      while (rows[rows.length - 1].length < cols) rows[rows.length - 1].push({ chars: pad, width: 1 });
+      rows.push([]);
+    }
+    rows[rows.length - 1].push({ chars: ch, width: w });
+    if (w === 2) rows[rows.length - 1].push({ chars: '', width: 0 });
+  }
+  for (const row of rows) while (row.length < cols) row.push({ chars: '', width: 1 });
+  const lines = rows.map((cells, i) => ({
+    isWrapped: i > 0,
+    getCell: (x) => cells[x] && { getWidth: () => cells[x].width, getChars: () => cells[x].chars },
+  }));
+  return { length: lines.length, getLine: (i) => lines[i] };
+}
+const wrapped = new Function(source.slice(source.indexOf('function wrappedLineToCells('), start) + '\nreturn wrappedLineToCells;')();
+
+test('a wide character wrapped to the next row adds no space to the line the links are read from', () => {
+  const line = 'C:\\Users\\hjinh\\经验学习\\报告.md 和 C:\\Users\\hjinh\\b.json';
+  for (const pad of ['', ' ']) {
+    for (let cols = 20; cols <= 40; cols++) {
+      const got = wrapped(fakeBuffer(line, cols, pad), 0, cols);
+      assert.deepEqual(texts(win, got.str), ['C:\\Users\\hjinh\\经验学习\\报告.md', 'C:\\Users\\hjinh\\b.json'], `${cols} columns`);
+      assert.equal(got.colOf.length, got.str.length);
+    }
+  }
+  // where nothing wraps before a wide glyph, the line reads back as it was written
+  assert.equal(wrapped(fakeBuffer(line, 80, ''), 0, 80).str.trimEnd(), line);
+});

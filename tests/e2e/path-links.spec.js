@@ -15,7 +15,6 @@ const ROOT = path.resolve(__dirname, '../..');
 const PRINT = path.join(__dirname, 'fixtures', 'print-lines.js');
 const TERM = 'links-term', CHAT = 'links-chat';
 let application, page, profile, files, LINES, WANT;
-test.describe.configure({ mode: 'serial' });
 
 const col = (id) => page.locator(`.column[data-col-id="${id}"]`);
 const park = async () => { const size = page.viewportSize(); await page.mouse.move(size.width - 3, 3); };
@@ -64,6 +63,16 @@ test.beforeAll(async () => {
   await expect.poll(() => page.evaluate((ids) => typeof terms !== 'undefined' && ids.every((i) => terms.has(i)), [TERM, CHAT]), { timeout: 30000 }).toBe(true);
   await page.evaluate(() => document.fonts.ready);
 });
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus || !page || page.isClosed()) return;
+  // the terminal's rows ("~" marks a row that continues the one above), for the failure report
+  const screen = await page.evaluate((id) => {
+    const { term } = terms.get(id), buf = term.buffer.active, rows = [`cols ${term.cols}`];
+    for (let r = 0; r < buf.length; r++) { const ln = buf.getLine(r); if (ln && ln.translateToString(true).trim()) rows.push((ln.isWrapped ? '~' : ' ') + ln.translateToString(true)); }
+    return rows.join('\n');
+  }, TERM).catch((e) => String(e));
+  fs.writeFileSync(testInfo.outputPath('terminal-screen.txt'), screen + '\n\nLINES:\n' + LINES.join('\n') + '\n');
+});
 test.afterAll(async () => {
   if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
@@ -74,12 +83,15 @@ function terminalLinks(id, lines) {
   return page.evaluate(({ id, lines }) => {
     const { term } = terms.get(id);
     const buf = term.buffer.active, provider = term._core._linkProviderService.linkProviders[0];
+    // a narrow column wraps the lines; where a wide character moved to the next row
+    // the spacing at the wrap is not the line's own, so rows are matched without it
+    const bare = (t) => t.replace(/\s+/g, '');
     const out = [];
     for (const line of lines) {
       let row = -1;
       for (let r = 0; r < buf.length && row < 0; r++) {
         const ln = buf.getLine(r);
-        if (ln && !ln.isWrapped && wrappedLineToCells(buf, r, term.cols).str.trimEnd() === line) row = r;
+        if (ln && !ln.isWrapped && bare(wrappedLineToCells(buf, r, term.cols).str) === bare(line)) row = r;
       }
       if (row < 0) { out.push(null); continue; }
       let links = [];
