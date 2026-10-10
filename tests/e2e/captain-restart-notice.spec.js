@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const M = require('../../main-core');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 
 // AgentDeck restarts with a Captain in the deck. When the Captain's CLI comes back
 // into the conversation it already had (`claude --resume <id>`), it still holds the
@@ -34,6 +35,10 @@ async function start() {
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = captured;
   delete env.ELECTRON_RUN_AS_NODE;
   isolateShell(env, profile);
+  if (process.platform === 'win32') {
+    const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';   // Windows spells it Path
+    env[key] = profile + path.delimiter + (env[key] || '');
+  }
   application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
   page = await application.firstWindow();
@@ -55,7 +60,12 @@ require(${JSON.stringify(path.join(__dirname, 'fixtures/fake-agent.js'))});`);
   fs.writeFileSync(executable, process.platform === 'win32'
     ? `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`
     : `#!${process.execPath}\nrequire(${JSON.stringify(script)});\n`, { mode: 0o700 });
-  const cmd = `"${executable}"`;
+  // A Claude session starts only on a signed-in seat: a stand-in login for the default seat.
+  fs.mkdirSync(path.join(profile, 'seats-home', '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude', '.credentials.json'), STAND_IN_CREDENTIAL);
+  // PowerShell does not run a quoted path followed by arguments: on Windows the column calls it by name (start
+  // puts the profile first on PATH).
+  const cmd = process.platform === 'win32' ? 'claude' : `"${executable}"`;
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, captainTokenSaver: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 2,
     columns: [{ id: CAPTAIN, title: '队长', isMain: true, cmd, cwd: profile, modelSessionId: SESSION, modelSessionOwner: CAPTAIN, modelSessionCwd: profile }],

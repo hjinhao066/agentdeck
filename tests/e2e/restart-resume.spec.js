@@ -186,7 +186,9 @@ require(${JSON.stringify(path.join(__dirname, 'fixtures/fake-agent.js'))});`);
     ? `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`
     : `#!${process.execPath}\nrequire(${JSON.stringify(script)});\n`, { mode: 0o700 });
   const sessionId = '11111111-1111-4111-8111-111111111111';
-  const cmd = `"${executable}"`;
+  // PowerShell does not run a quoted path followed by arguments: on Windows the column calls it by name (the
+  // profile goes first on PATH below).
+  const cmd = process.platform === 'win32' ? 'claude' : `"${executable}"`;
   // A Claude session starts only on a signed-in seat: a stand-in login for the default seat.
   fs.mkdirSync(path.join(profile2, 'seats-home', '.claude'), { recursive: true });
   fs.writeFileSync(path.join(profile2, 'seats-home', '.claude', '.credentials.json'), STAND_IN_CREDENTIAL);
@@ -210,6 +212,10 @@ require(${JSON.stringify(path.join(__dirname, 'fixtures/fake-agent.js'))});`);
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = captured;
   delete env.ELECTRON_RUN_AS_NODE;
   isolateShell(env, profile2);
+  if (process.platform === 'win32') {
+    const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';   // Windows spells it Path
+    env[key] = profile2 + path.delimiter + (env[key] || '');
+  }
   let application, window;
   try {
     application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile2}`], env });
