@@ -47,7 +47,22 @@ const SECRET_STEM = /(?:(?:^|[._-])(?:creds|passwords?|passwd|api[_-]?keys?|priv
 // document's (design-tokens.md, github-auth.md): what a document holds is checked when it is read (`secretText`).
 const LOOSE_STEM = /(?:^|[._-])(?:secrets?|credentials?|tokens?|auth)$/;
 // What a backup copy adds to a name: auth.json.bak is auth.json, key.txt.old is key.txt.
-const BACKUP_TAIL = /(?:\.(?:bak|old|orig|backup|save|tmp|\d+)|~)+$/;
+// A copy's mark, at the end of a name or before its extension: auth.json.bak, auth.json.bak1, auth.json.2026-10-09,
+// auth.bak.json, auth_old.json, auth-backup.json, .env_bak, and the names Windows gives copies: auth - 副本.json,
+// auth - Copy (2).json, .env - 副本, auth (1).json (a browser's second download).
+const COPY_MARK = /(?: - (?:副本|copy)(?: ?\(\d+\))?| ?\(\d+\)|[_-](?:bak|old|orig|backup|copy|save|tmp)\d*|\.(?:bak|old|orig|backup|save|tmp)\d*|\.\d{4}-?\d{2}-?\d{2}(?:[-_t]?\d{2,6})?|\.\d+|~)$/;
+// The names a file may have been copied from, its own first.
+function copiedFrom(name) {
+  const strip = (value) => { let before; do { before = value; value = value.replace(COPY_MARK, ''); } while (value !== before && value); return value || before; };
+  const names = new Set([name, name.replace(/^(?:copy of |副本 ?)/, '')]);
+  for (const value of [...names]) {
+    const whole = strip(value);
+    names.add(whole);
+    const parts = /^(.+)(\.[a-z0-9]{1,8})$/.exec(whole);
+    if (parts) names.add(strip(parts[1]) + parts[2]);
+  }
+  return [...names];
+}
 // A file whose name holds one of these words anywhere is refused too (token.json, my_token.txt), unless it is
 // a delivered document: a report, page, PDF or picture (token-usage.md). Those still answer to the exact names,
 // extensions and stems above and to SECRET_DIRS. Folders are judged by SECRET_DIRS only.
@@ -74,7 +89,7 @@ function secretPath(real, { home, denied = [], platform = process.platform, lib 
   const parts = lower.split(/[\\/]+/).filter(Boolean);
   const name = parts[parts.length - 1] || '';
   if (parts.slice(0, -1).some((part) => SECRET_DIRS.has(part)) || SECRET_DIRS.has(name)) return true;
-  // The name as it is, and without a backup copy's tail.
+  // The name as it is, and the names it may have been copied from.
   const secretName = (value) => {
     if (SECRET_NAME.test(value) || SECRET_EXT.test(value) || SECRET_FILES.has(value)) return true;
     const document = DOCUMENT_EXT.test(value);
@@ -82,7 +97,7 @@ function secretPath(real, { home, denied = [], platform = process.platform, lib 
     const stem = value.replace(/\.[a-z0-9]{1,8}$/, '');
     return SECRET_STEM.test(stem) || SECRET_STEM.test(value) || (!document && (LOOSE_STEM.test(stem) || LOOSE_STEM.test(value)));
   };
-  if (secretName(name) || secretName(name.replace(BACKUP_TAIL, ''))) return true;
+  if (copiedFrom(name).some(secretName)) return true;
   // Inside an agent CLI's folder, wherever it is: only what reads as a document.
   if (parts.slice(0, -1).some((part) => CLI_DIR.test(part)) && !CLI_READABLE.test(name)) return true;
   if (denied.some((dir) => dir && inside(real, dir, platform, lib))) return true;
@@ -99,8 +114,19 @@ function secretPath(real, { home, denied = [], platform = process.platform, lib 
 // long random value. Placeholders (sk-xxxx, your-api-key, <token>) and code (process.env.X) are not keys.
 // Every pattern is bounded and starts at a word edge, so a long blob without spaces costs one pass.
 const PRIVATE_KEY_BLOCK = /-----BEGIN (?:[A-Z0-9]+ ){0,3}PRIVATE KEY(?: BLOCK)?-----/;
-const KEY_PREFIX = /(?<![A-Za-z0-9])(?:sk-(?:ant-|or-|proj-|live-|test-)?|gh[pousr]_|github_pat_|AKIA|xox[abposr]-|AIza)([A-Za-z0-9_-]{16,200})/g;
-const KEY_FIELD = /(?<![A-Za-z0-9_.-])["']?[A-Za-z0-9_.-]{0,40}(?:api[_-]?key|apikey|token|secret|passw(?:or)?d|access[_-]?key|private[_-]?key|credential)[A-Za-z0-9_.-]{0,40}["']?[ \t]{0,5}[:=][ \t]{0,5}["']?([A-Za-z0-9_+/=.~-]{20,200})/gi;
+// The same block base64-encoded once more (kubeconfig's client-key-data, XXX_KEY_B64=): "-----BEGIN" encodes to this.
+const PRIVATE_KEY_B64 = /(?<![A-Za-z0-9+/])LS0tLS1CRUdJTi[A-Za-z0-9+/]{20,120}/g;
+const KEY_PREFIX = /(?<![A-Za-z0-9])(?:gh[pousr]_|github_pat_|AKIA|xox[abposr]-|AIza)([A-Za-z0-9_-]{16,200})/g;
+// More providers (Hugging Face, Groq, GitLab, xAI, Stripe, npm, PyPI, Tavily, Replicate): these prefixes also start
+// ordinary words (npm_config_cache), so the key has to hold a random run of 20 or more between its dashes.
+const MORE_PREFIX = /(?<![A-Za-z0-9])(?:hf_|gsk_|glpat-|xai-|[sr]k_(?:live|test)_|npm_|pypi-|tvly-|r8_)([A-Za-z0-9_-]{20,200})/g;
+const AWS_TEMP_KEY = /(?<![A-Za-z0-9])ASIA([0-9A-Z]{16})(?![A-Za-z0-9])/g;
+// sk- keys (OpenAI, Anthropic, OpenRouter). Not after "-" or "/", and a key has a long random run between its
+// dashes: sk-hynix-hbm4-2026-05-02 in a market report's link or file name is a few short words.
+const SK_KEY = /(?<![A-Za-z0-9/-])sk-([A-Za-z0-9_-]{16,200})/g;
+// A field and its value: any amount of alignment around ":" or "=", or the value on the next line (YAML's "key:" then
+// an indented value, "key: |" or "key: >-" blocks, JSON's "key": then a new line). Bounded, so still one pass.
+const KEY_FIELD = /(?<![A-Za-z0-9_.-])["']?[A-Za-z0-9_.-]{0,40}(?:api[_-]?key|apikey|token|secret|passw(?:or)?d|access[_-]?key|private[_-]?key|credential)[A-Za-z0-9_.-]{0,40}["']?[ \t]{0,40}[:=][ \t]{0,40}(?:[|>][+-]?[ \t]{0,40})?(?:\r?\n[ \t]{0,80})?["']?([A-Za-z0-9_+/=.~-]{20,200})/gi;
 // A Telegram bot token: the bot's number, a colon, 35 random characters (the colon stops KEY_FIELD's value).
 const TELEGRAM_TOKEN = /(?<![0-9])[0-9]{8,10}:([A-Za-z0-9_-]{35})(?![A-Za-z0-9_-])/g;
 const PLACEHOLDER =/x{4,}|X{4,}|\*{3,}|your|example|placeholder|changeme|dummy|redacted|sample|fake|test[_-]?key|\.\.\./i;
@@ -111,8 +137,20 @@ function randomValue(value) {
 function secretText(text) {
   if (typeof text !== 'string' || !text) return false;
   if (PRIVATE_KEY_BLOCK.test(text)) return true;
+  // A base64 PEM: decode its first characters; a private key is refused, a certificate is not.
+  for (const match of text.matchAll(PRIVATE_KEY_B64)) {
+    const head = match[0].slice(0, match[0].length - (match[0].length % 4));
+    if (/PRIVATE KEY/.test(Buffer.from(head, 'base64').toString('latin1'))) return true;
+  }
   for (const match of text.matchAll(KEY_PREFIX)) if (randomValue(match[1])) return true;
-  for (const match of text.matchAll(KEY_FIELD)) if (randomValue(match[1])) return true;
+  for (const match of text.matchAll(SK_KEY)) if (randomValue(match[1]) && match[1].split('-').some((run) => run.length >= 20)) return true;
+  for (const match of text.matchAll(MORE_PREFIX)) if (randomValue(match[1]) && match[1].split(/[-_]/).some((run) => run.length >= 20)) return true;
+  for (const match of text.matchAll(AWS_TEMP_KEY)) if (randomValue(match[1])) return true;
+  for (const match of text.matchAll(KEY_FIELD)) {
+    // A value taken from the next line that is itself followed by ":" is the next key, not this one's value.
+    if (text[match.index + match[0].length] === ':' && /\n/.test(match[0])) continue;
+    if (randomValue(match[1])) return true;
+  }
   for (const match of text.matchAll(TELEGRAM_TOKEN)) if (randomValue(match[1])) return true;
   return false;
 }

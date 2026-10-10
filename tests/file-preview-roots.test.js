@@ -287,15 +287,16 @@ test('mixed slashes are the same path, for files, Settings folders and key files
 
 // ---- review round: keys and sign-in state that a D: project folder holds -------------------
 // Each file is named in the conversation, so only the key rules can stop it.
-async function refusedEverywhere(s, files) {
+// `roots`: open the folder as a report folder instead, for names with spaces the conversation's link finder stops at.
+async function refusedEverywhere(s, files, roots) {
   for (const file of files) {
-    assert.deepEqual(await s.read(file, { texts: s.named(file) }), { ok: false, code: 'denied' }, file);
+    assert.deepEqual(await s.read(file, roots ? { roots } : { texts: s.named(file) }), { ok: false, code: 'denied' }, file);
     assert.equal(localRefusal(file, { home: s.at('home') }), 'secret', file);
   }
 }
-async function readable(s, files) {
+async function readable(s, files, roots) {
   for (const file of files) {
-    const read = await s.read(file, { texts: s.named(file) });
+    const read = await s.read(file, roots ? { roots } : { texts: s.named(file) });
     assert.equal(read.ok, true, file);
     assert.equal(localRefusal(file, { home: s.at('home') }), '', file);
   }
@@ -445,6 +446,121 @@ test('the phone is not sent a text that holds a key, whatever the file is called
   assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
   // the desktop pane is the user's own screen: it still shows the file
   assert.equal(localRefusal(s.at(dir + 'config.yaml'), { home: s.at('home') }), '');
+});
+
+// ---- review round 3 ----------------------------------------------------------------------
+test('a field is read with any alignment and with its value on the next line', async (t) => {
+  const s = setup(t);
+  const dir = 'aiproject/Playground/cfg/';
+  const texts = {
+    'aligned.yaml': `name: hermes\ntoken:          ${hexKey(40)}\n`,
+    'aligned.env': `HOST=localhost\nAPI_KEY        = ${randomKey(32)}\n`,
+    'next-line.yaml': `model:\n  api_key:\n    ${randomKey(40)}\n`,
+    'block.yaml': `gateway:\n  token: |\n    ${randomKey(48)}\n`,
+    'folded.yaml': `gateway:\n  token: >-\n    ${randomKey(48)}\n`,
+    'next-line.json': `{\n  "token":\n    "${randomKey(36)}"\n}\n`,
+    'crlf.yaml': `api_key:\r\n  ${randomKey(40)}\r\n`,
+    'tabs.ini': `secret\t\t\t\t=\t\t${randomKey(30)}\n`,
+  };
+  for (const [name, text] of Object.entries(texts)) {
+    const file = s.put(dir + name, text);
+    assert.deepEqual(await s.read(file, { texts: s.named(file) }), { ok: false, code: 'denied' }, name);
+  }
+  // the next line holding the next key is not a value, nor is a count
+  const fine = {
+    'model-list.yaml': 'tokens:\n  model_name_2026_v1: 3\n  context_window_2026_v2: 8\nsecret_names:\n  projects_path_2026_v3: x\n',
+    'counts.yaml': `token_count:          ${'1234567890'.repeat(3)}\npassword:\n  - short\n`,
+  };
+  for (const [name, text] of Object.entries(fine)) {
+    const file = s.put(dir + 'ok/' + name, text);
+    assert.equal((await s.read(file, { texts: s.named(file) })).text, text, name);
+  }
+  // still one pass over a page of empty fields
+  const started = Date.now();
+  assert.equal(secretText(('token:' + ' '.repeat(39) + '|\n' + ' '.repeat(79) + '\n').repeat(8000)), false);
+  assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
+});
+
+test('a private key encoded once more in base64 is refused; a certificate is not', async (t) => {
+  const s = setup(t);
+  const pem = (kind) => `${'-----BEGIN ' + kind + '-----'}\n${crypto.randomBytes(120).toString('base64')}\n${'-----END ' + kind + '-----'}\n`;
+  const b64 = (kind) => Buffer.from(pem(kind)).toString('base64');
+  const dir = 'aiproject/Playground/kube/';
+  for (const [name, text] of Object.entries({
+    'kubeconfig-copy.yaml': `users:\n- name: admin\n  user:\n    client-certificate-data: ${b64('CERTIFICATE')}\n    client-key-data: ${b64('RSA PRIVATE KEY')}\n`,
+    'deploy.txt': `SSH_KEY_B64=${b64('OPENSSH PRIVATE KEY')}\n`,
+    'notes.md': `密钥：\n\n    ${b64('PRIVATE KEY')}\n`,
+    'ec.json': `{"data": "${b64('EC PRIVATE KEY')}"}`,
+  })) {
+    const file = s.put(dir + name, text);
+    assert.deepEqual(await s.read(file, { texts: s.named(file) }), { ok: false, code: 'denied' }, name);
+  }
+  const cert = s.put(dir + 'ok/ca.yaml', `clusters:\n- cluster:\n    certificate-authority-data: ${b64('CERTIFICATE')}\n`);
+  assert.equal((await s.read(cert, { texts: s.named(cert) })).ok, true);
+});
+
+test('Windows copy names are judged by the name they were copied from', async (t) => {
+  const s = setup(t);
+  // the folder is opened as a report folder: these names hold spaces, and only the key rules may refuse them
+  const roots = [s.at('aiproject/projectAlpha/reports')];
+  const at = (name) => s.put('aiproject/projectAlpha/reports/' + name, 'S');
+  await refusedEverywhere(s, ['.env - 副本', '.env - Copy', '.env (1)', '.env_bak', '.env-backup', 'auth - 副本.json', 'auth - Copy.json', 'auth - 副本 (2).json',
+    'auth (1).json', 'auth_old.json', 'auth-backup.json', 'auth.bak.json', 'auth.json.bak1', 'auth.json.2026-10-09', 'Copy of auth.json', 'key - 副本.txt', 'key (2).txt',
+    'id_rsa - 副本', 'deploy - Copy.env', 'credentials (3).json'].map(at), roots);
+  await readable(s, ['report - 副本.md', 'review (1).md', 'notes_old.md', 'plan-backup.md', 'monkey (2).txt', 'env - 副本.md', 'auth-flow (1).png', 'Copy of report.md',
+    'keyboard - Copy.md'].map((name) => s.put('aiproject/projectAlpha/reports/' + name, '文档')), roots);
+});
+
+test('SK hynix in a market report is not an sk- key', async (t) => {
+  const s = setup(t);
+  const dir = 'aiproject/Playground/market-intelligence/';
+  const fine = {
+    'post-market/2026-07-28_us_postmarket_review.md': '# 盘后\n\n- 来源：https://news.example.com/sk-hynix-hbm4-mass-production-2026-05-02\n- 研究包：sk-hynix-q1-2026-earnings-call-20260502.md\n',
+    'Analysis-Report/_archive/thesis.md': 'SK hynix 个股 Thesis，见 [链接](https://www.example.com/en/sk-hynix-reports-record-quarterly-results-2026-04-24/)。\n',
+    '研究包/search-results.json': '{"results": [{"url": "https://x.example.com/memory/sk-hynix-hbm-share-2026", "title": "SK hynix"}]}',
+    'handover.md': '交接：memory-sk-hynix-capex-plan-2026-v2 这份要更新。\n',
+    // after "/" or "-" it is part of a longer name, however random: a hashed file in a link
+    'sources.md': `图：https://cdn.example.com/assets/sk-${hexKey(32)}.png 和 chart-sk-${hexKey(32)}.svg\n`,
+  };
+  for (const [name, text] of Object.entries(fine)) {
+    const file = s.put(dir + name, text);
+    assert.equal((await s.read(file, { texts: s.named(file) })).text, text, name);
+  }
+  // real ones still are: one long random run between the dashes, after a space, "=" or a quote
+  for (const [name, text] of Object.entries({
+    'a.md': `用这个：${'sk' + '-proj-' + randomKey(100)}\n`,
+    'b.txt': `OPENAI=${'sk' + '-' + randomKey(48)}\n`,
+    'c.json': `{"k": "${'sk' + '-or-v1-' + hexKey(64)}"}`,
+  })) {
+    const file = s.put(dir + 'keys/' + name, text);
+    assert.deepEqual(await s.read(file, { texts: s.named(file) }), { ok: false, code: 'denied' }, name);
+  }
+});
+
+test('more providers by prefix, when the key is a long random run', () => {
+  const keys = { hf: 'hf' + '_' + randomKey(34), groq: 'gsk' + '_' + randomKey(52), gitlab: 'glpat' + '-' + randomKey(20), xai: 'xai' + '-' + randomKey(80),
+    stripe: 'sk' + '_live_' + randomKey(24), npm: 'npm' + '_' + randomKey(36), pypi: 'pypi' + '-' + randomKey(60), tavily: 'tvly' + '-' + randomKey(32),
+    replicate: 'r8' + '_' + randomKey(37), awsTemp: 'ASIA' + randomKey(16).toUpperCase().replace(/[^A-Z0-9]/g, 'Q') };
+  for (const [name, key] of Object.entries(keys)) assert.equal(secretText(`见 ${key} 。\n`), true, name);
+  for (const text of ['npm_config_cache_dir_2026_v2 在 CI 里设置', 'hf_hub_download(repo_id="org/model-2026")', 'ASIA-PACIFIC 2026 Q1 报告', 'xai-grok-4-fast-reasoning-2026',
+    'r8_model_version_2026_v12', 'pypi-release-notes-2026-10-09']) assert.equal(secretText(text), false, text);
+});
+
+test('a UTF-16 file is decoded before it is read for keys', async (t) => {
+  const s = setup(t);
+  const utf16 = (text, big) => {
+    const le = Buffer.from(text, 'utf16le');
+    return big ? Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(le).swap16()]) : Buffer.concat([Buffer.from([0xff, 0xfe]), le]);
+  };
+  const dir = 'aiproject/Playground/ps/';
+  const key = `api_key: ${'sk' + '-ant-api03-' + randomKey(80)}\r\n`;
+  for (const big of [false, true]) {
+    const file = s.put(dir + (big ? 'be' : 'le') + '-config.yaml', utf16(key, big));
+    assert.deepEqual(await s.read(file, { texts: s.named(file) }), { ok: false, code: 'denied' }, big ? 'UTF-16BE' : 'UTF-16LE');
+    const report = '# PowerShell 写出的报告\r\n\r\n一切正常。\r\n';
+    const plain = s.put(dir + (big ? 'be' : 'le') + '-report.md', utf16(report, big));
+    assert.equal((await s.read(plain, { texts: s.named(plain) })).text, report, big ? 'UTF-16BE' : 'UTF-16LE');
+  }
 });
 
 test('a backup copy is judged by the name it was copied from', async (t) => {

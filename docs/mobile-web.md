@@ -272,16 +272,20 @@ iOS 内嵌 PDF 只显示第一页，所以不用 iframe）、图片、纯文本�
   所以 `token-usage.md`、`design-tokens.md`、`github-auth.md` 能看，但仍受精确规则、目录黑名单和下面的内容检查约束），名字以 password/key/creds/cookie 等结尾的文件（`key.txt`、
   `openai_key.txt`、`mykey.txt` 也拒，`keyboard.md`、`monkey.txt` 不拒），名字以 token/secret/credential/auth 结尾的非文档文件，`service-account*.json`、`*.tfstate*`、
   `oauth*.json`、`storage_state*.json`（Playwright 登录态）、`*adminsdk*.json`、`kubeconfig*`、`rclone.conf`、`wg0.conf`、`*.dpapi`，
-  备份副本按原名判断（判断前去掉结尾的 `.bak/.old/.orig/.backup/.save/.tmp/~/.数字`：`auth.json.bak` 就是 `auth.json`），
+  副本按原名判断（名字结尾和扩展名前面的 `.bak/.old/.orig/.backup/.save/.tmp/~/.数字/.日期`、`_bak/-old/-backup` 等、Windows 的 ` - 副本`、` - Copy`、
+  ` (1)` 和开头的 `Copy of ` 都去掉再判：`auth.json.bak`、`auth.bak.json`、`auth - 副本.json`、`auth (1).json`、`.env - 副本`、`.env_bak` 都按原名拒绝），
   任何位置的 `.npmrc`、`.netrc`、`.pypirc`、`.pgpass`、`.my.cnf`、`.boto`、`.s3cfg`、`.envrc`、`.dockercfg`、`.git-credentials`、`.gitconfig`、shell 配置和历史，
   任何位置的 `.claude*`、`.codex`、`.gemini`、`.cursor`、`.config` 等目录里除文档和图片外的文件，`~/.config/agentdeck-remote`、AgentDeck 自己的数据目录。
 - 浏览器登录态：某一层父目录里有 `Local State` 文件的（Chromium 用户数据目录：Chrome、Edge、自动化用的 profile），整个目录和里面的一切都拒绝，
   上一层文件夹列表里也不显示这个目录；`Local State`、`Preferences`、`Secure Preferences`、`Login Data*`、`Web Data*`、`History`、`logins.json`、
   `key3/4.db`、`cookies.sqlite` 放在别处也按名字拒绝，`Local Storage`、`Session Storage`、`IndexedDB` 目录一律拒绝。
-- 手机端发文本前先查内容（`secretText`），命中就答「不在范围内」：私钥块（`-----BEGIN … PRIVATE KEY-----`）；`sk-`、`sk-ant-`、`sk-or-`、`ghp_`、`github_pat_`、
-  `AKIA`、`xox?-`、`AIza` 开头后面跟随机串；Telegram 机器人令牌（数字:35 位随机串）；`api_key`、`token`、`secret`、`password` 这类字段（YAML、JSON、env 写法）
-  后面跟 20 位以上、至少两个数字的随机值。占位符（`sk-xxxx`、`your-api-key`、`<token>`、`****`）和代码引用（`process.env.X`）不算。只查要发出去的那部分（最多 1MB），
-  图片和 PDF 不查。桌面预览栏不查内容（本机自己的屏幕）。
+- 手机端发文本前先查内容（`secretText`），命中就答「不在范围内」：私钥块（`-----BEGIN … PRIVATE KEY-----`），以及再用 base64 编过一次的私钥块
+  （kubeconfig 的 `client-key-data`、`XXX_KEY_B64=`，开头是 `LS0tLS1CRUdJTi`，解开看是不是 PRIVATE KEY，证书不拒）；`sk-`、`sk-ant-`、`sk-or-`
+  开头且破折号之间有一段 20 位以上随机串的（`sk-hynix-hbm4-2026-05-02` 这种几个短词连起来的不算，紧跟在 `-` 或 `/` 后面的也不算）；`ghp_`、`github_pat_`、
+  `AKIA`、`xox?-`、`AIza` 开头后面跟随机串；Telegram 机器人令牌（数字:35 位随机串）；`api_key`、`token`、`secret`、`password` 这类字段（YAML、JSON、env 写法，
+  冒号或等号两边可以对齐几十个空格，值也可以写在下一行或 YAML 的 `|`、`>-` 块里）后面跟 20 位以上、至少两个数字的随机值；下一行如果本身是另一个键就不算。
+  占位符（`sk-xxxx`、`your-api-key`、`<token>`、`****`）和代码引用（`process.env.X`）不算。先按 BOM 解码（UTF-8、UTF-16LE/BE）再查，只查要发出去的那部分
+  （最多 1MB），图片和 PDF 不查。桌面预览栏不查内容（本机自己的屏幕）。内容检查是启发式的，已知漏掉的写法见交付报告的「已知限制」。
 - 手机端不发有多个名字的文件（硬链接）：realpath 不展开硬链接，换个名字就看不出它是什么。
 - 设置里的文件夹不带 `*` 的（如 Playground），点名它本身只列出目录，不连带里面的文件；点名要在它下面至少一层。带 `*` 的（某个项目的 reports）点名本身就连带。
 - 桌面右侧预览栏走同一套拒绝规则（`localRefusal`）：密钥类文件和上面那些 Windows 路径不显示；位置不限，因为是本机用户自己点的。用编辑器打开不受影响。
