@@ -237,6 +237,17 @@ test('a public name that points at this machine or the local network is refused 
   assert.equal(Core.namedHost('data:text/plain,x'), '');
 });
 
+test('a page that asks before it is left never keeps the next preview or a reload out', () => {
+  // In Electron (checked outside the app) a page clicked once that set beforeunload made the main
+  // process's next loadURL end in ERR_ABORTED: the old page stayed under the new file's name.
+  const { calls } = standIn();
+  calls.handlers['side:preview-html']({}, { raw: path.join(report, 'index.html') });
+  const view = calls.views.find((v) => v.webContents.loaded.some((u) => u.startsWith('agentdeck-preview://')));
+  let left = false;
+  view.webContents.events['will-prevent-unload']({ preventDefault: () => { left = true; } });
+  assert.equal(left, true);
+});
+
 test('WebRTC sends no UDP from the page (it does not pass the request filter)', () => {
   // In the real app a page's STUN packets reached the local network / WireGuard address.
   const { calls } = standIn();

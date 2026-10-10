@@ -351,6 +351,10 @@ function registerSideIpc(ctx) {
     };
     wc.on('will-navigate', guard);
     wc.on('will-redirect', guard);
+    // A page the user clicked in once may ask before it is left (beforeunload). Nobody is
+    // asked here: the next preview or 重新加载 replaces it (unanswered, Electron cancelled the
+    // load and the old page stayed under the new file's name).
+    wc.on('will-prevent-unload', (event) => event.preventDefault());
     win.contentView.addChildView(pageView);
     place(pageView, pageBounds);
     return pageView;
