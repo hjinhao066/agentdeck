@@ -25,15 +25,15 @@ test.beforeAll(async () => {
   files = path.join(profile, 'f');
   const P = (...p) => path.join(files, ...p);
   fs.mkdirSync(P('Application Support', 'agentdeck'), { recursive: true });
-  fs.mkdirSync(P('.claude'));
-  for (const name of [path.join('.claude', 'settings.json'), path.join('.claude', 'settings.json.bak'), 'README.md', 'a.json', 'b.json'])
+  fs.mkdirSync(P('.vscode'));
+  for (const name of [path.join('.vscode', 'settings.json'), path.join('.vscode', 'settings.json.bak'), 'README.md', 'a.json', 'b.json'])
     fs.writeFileSync(P(name), name.endsWith('.md') ? '# 最急的两件\n' : '{"name":"' + path.basename(name) + '"}\n');
   fs.writeFileSync(P('Application Support', 'agentdeck', 'config.json'), '{"name":"config"}\n');
   fs.writeFileSync(P('Application Support', 'agentdeck', 'config.json.bak'), '{"name":"config.bak"}\n');
   // [line, the links it holds]
   const cases = [
-    [`改好了：${P('.claude', 'settings.json')}；改前的备份在同目录的 settings.json.bak`, [P('.claude', 'settings.json')]],
-    [`已改 ${P('.claude', 'settings.json')} 改前的备份在同目录的 settings.json.bak`, [P('.claude', 'settings.json')]],
+    [`改好了：${P('.vscode', 'settings.json')}；改前的备份在同目录的 settings.json.bak`, [P('.vscode', 'settings.json')]],
+    [`已改 ${P('.vscode', 'settings.json')} 改前的备份在同目录的 settings.json.bak`, [P('.vscode', 'settings.json')]],
     [`详见 ${P('README.md')}。最急的两件：`, [P('README.md')]],
     [`${P('README.md')} 里写了最急的两件`, [P('README.md')]],
     [`${P('a.json')} 和 ${P('b.json')}`, [P('a.json'), P('b.json')]],
@@ -154,7 +154,8 @@ test('each path is its own link, ending where the path ends, in the terminal and
     await expect.soft(page.locator('#sidePane .pv-title strong')).toHaveText('b.json');
     await links.nth(6).click();
     await expect.soft(page.locator('#sidePane .pv-title strong')).toHaveText('config.json');
-    // the file under ".claude" (its backslash before the dot kept on Windows)
+    // the file under ".vscode" (its backslash before the dot kept on Windows). Not .claude: the preview refuses
+    // what an agent CLI's folder holds besides documents, wherever it is (file-preview-core).
     await links.nth(0).click();
     await expect.soft(page.locator('#sidePane .pv-title strong')).toHaveText('settings.json');
   });
