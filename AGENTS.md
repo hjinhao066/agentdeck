@@ -102,6 +102,11 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   `archive-recovery.js` runs before that prune and puts a chat file nothing lists back into
   the archive (only one the user spoke in; never a 队长 chat; `config.json` copied aside
   first; never deletes or rewrites a chat). A test profile reads no backup outside itself.
+- Open columns are rebuilt at launch through a field whitelist (`renderer.js`,
+  `config.columns = saved.columns.map(...)`). A field the app must still find on a column
+  after a restart (`worktree`, `executor`/`webMode`, ...) has to be added there with its
+  type check and to `tests/relaunch-keeps-column-fields.test.js`. Archived entries and
+  restored columns are kept whole, so only an open column loses a forgotten field.
 - Archiving ends a terminal, so a session that is working, waiting on an answer or
   printing output is never archived, automatically or by click, and never asks first
   (`archiveColumn` shows a notice and stops). The automatic archive reads the terminal itself one more time
