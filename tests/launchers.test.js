@@ -28,10 +28,12 @@ test('a blank session offers Claude, Antigravity, Grok, Cursor CLI and Codex (Ch
 
 test('the dialogs offer the same launch commands as the blank-session buttons', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  // 创建队长 offers the Captain's own Claude command in Claude's place.
+  const captainAt = html.indexOf('<dialog id="mainDialog">'), captainEnd = html.indexOf('</dialog>', captainAt);
   const groups = [...html.matchAll(/<div class="presets">([\s\S]*?)<\/div>/g)]
-    .map((m) => [...m[1].matchAll(/data-cmd="([^"]*)"/g)].map((x) => x[1]));
-  assert.ok(groups.length >= 2);
-  for (const cmds of groups) assert.deepEqual(cmds, B.LAUNCHERS.map((l) => l.cmd));
+    .map((m) => ({ captain: m.index > captainAt && m.index < captainEnd, cmds: [...m[1].matchAll(/data-cmd="([^"]*)"/g)].map((x) => x[1]) }));
+  assert.ok(groups.length >= 2 && groups.some((g) => g.captain));
+  for (const g of groups) assert.deepEqual(g.cmds, B.LAUNCHERS.map((l) => g.captain && l.key === 'claude' ? require('../claude-seats-core').CLAUDE_COMMAND : l.cmd));
   assert.match(html, /<option value="cursor">Cursor CLI<\/option>/);
   assert.match(html, /<option value="codex">Codex \(ChatGPT\)<\/option>/);
 });

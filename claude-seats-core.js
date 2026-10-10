@@ -88,7 +88,8 @@
     return `codex --model gpt-6.1-sol --no-daemon -c model_reasoning_effort=${effort === 'xhigh' ? 'xhigh' : 'high'} --dangerously-bypass-approvals-and-sandbox`;
   }
   const CODEX_COMMAND = codexCommand();
-  const CLAUDE_COMMAND = 'claude --model claude-opus-5-5 --effort high --dangerously-skip-permissions';
+  // The Captain's own Claude command when none is saved (new Captain, Relay back from Codex).
+  const CLAUDE_COMMAND = 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort max';
   function relayCodexCommand(command, effort) {
     const words = String(command).match(/(?:[^\s"']|"[^"]*"|'[^']*')+/g) || [];
     const program = (words[0] === 'command' ? words[1] : words[0]) || '';
