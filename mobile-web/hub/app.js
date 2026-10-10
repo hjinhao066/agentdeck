@@ -31,6 +31,8 @@
     ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
     close: '<path d="M6 6l12 12M18 6 6 18"/>',
     alert: '<path d="M12 4 2.8 19.5h18.4L12 4Z"/><path d="M12 10v4.5m0 2.6v.2"/>',
+    // A seat that cannot work: a circle, so it is told from the warning triangle without colour.
+    stop: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5m0 3.2v.2"/>',
     done: '<circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.8 2.8L16.2 9.5"/>',
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
     todo: '<rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8M13 12h8M13 18h8"/>',
@@ -354,7 +356,7 @@
         cell.resetAt > now ? Core.longReset(cell.resetAt, now) + (cell.out ? '恢复' : '重置') : (cell.out ? '恢复' : '重置') + '时间未知');
     }
     const state = Core.quotaState(row, m.quotaFailed);
-    if (state) line('状态', state, 'none');
+    if (state) line('状态', state, Core.rowHealth(row).level === 'bad' ? 'out' : 'none');
     line('账号', row.account || '未知');
     line('来源', row.source || '未知');
     line('采样', row.sampledAt ? Core.sampledText(row, now).slice(3) : '暂无采样');
@@ -375,12 +377,17 @@
       const id = m.id + ':' + row.key, open = openQuota.has(id);
       const item = node('div', 'quota-item'); item.setAttribute('role', 'listitem');
       item.dataset.status = row.status; item.dataset.provider = row.provider;
+      const health = Core.rowHealth(row);
+      item.dataset.health = health.level;
       const button = node('button', 'quota-row'); button.type = 'button';
       button.setAttribute('aria-expanded', String(open));
       button.setAttribute('aria-label', Core.quotaLabel(row, now) + '；查看详情'); button.title = '查看详情';
       const name = node('span', 'quota-name');
       name.append(providerIcon(row), node('span', 'quota-name-text', [row.flag, row.short].filter(Boolean).join(' ')));
       if (row.captain) { const crown = node('span', 'quota-captain'); crown.title = '队长在用'; crown.innerHTML = svg('crown'); name.append(crown); }
+      // Yellow: a warning triangle; red: a circle. The shape tells them apart without colour. A used-up
+      // row already has its shape, the ⊘ in its cells.
+      if (health.level !== 'ok' && health.kind !== 'exhausted') { const mark = node('span', 'quota-health'); mark.innerHTML = svg(health.level === 'bad' ? 'stop' : 'alert'); mark.title = health.label; name.append(mark); }
       const values = node('span', 'quota-values');
       if (row.cells.length || row.status === 'out') {
         for (const cell of Core.quotaCells(row)) {
