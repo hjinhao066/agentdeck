@@ -34,9 +34,11 @@ const BINARY_EXT = /\.(?:zip|gz|tgz|bz2|xz|7z|rar|tar|dmg|pkg|iso|exe|dll|so|dyl
 const SECRET_EXT = /\.(?:pem|key|p12|pfx|jks|keystore|kdbx|ovpn|asc|gpg|ppk|mobileprovision|cer|crt|der)$/;
 // credentials.json, .credentials.json, auth.json, bot-token.txt, oauth_creds.json, api_key.txt …
 const SECRET_STEM = /(?:^|[._-])(?:secrets?|credentials?|creds|passwords?|passwd|tokens?|api[_-]?keys?|private[_-]?keys?|auth|cookies?|vault[_-]?pass)$/;
-// A file whose name holds one of these words anywhere is refused too (token-usage.md included):
-// the phone entry is public, and a false refusal costs less than a leaked key. Folders are judged by SECRET_DIRS.
+// A file whose name holds one of these words anywhere is refused too (token.json, my_token.txt), unless it is
+// a delivered document: a report, page, PDF or picture (token-usage.md). Those still answer to the exact names,
+// extensions and stems above and to SECRET_DIRS. Folders are judged by SECRET_DIRS only.
 const SECRET_WORD = /token|secret|credential/;
+const DOCUMENT_EXT = /\.(?:md|markdown|html?|pdf|png|jpe?g|gif|webp|bmp|ico|svg|avif)$/;
 const SECRET_NAME = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519).*|known_hosts|authorized_keys|\.htpasswd|login\.keychain(?:-db)?|vps-access\.json|.*vault-pass.*)$/;
 
 const insensitive = (platform) => platform === 'darwin' || platform === 'win32';
@@ -54,7 +56,7 @@ function secretPath(real, { home, denied = [], platform = process.platform, lib 
   const name = parts[parts.length - 1] || '';
   if (parts.slice(0, -1).some((part) => SECRET_DIRS.has(part)) || SECRET_DIRS.has(name)) return true;
   if (SECRET_NAME.test(name) || SECRET_EXT.test(name)) return true;
-  if (!dir && SECRET_WORD.test(name)) return true;
+  if (!dir && SECRET_WORD.test(name) && !DOCUMENT_EXT.test(name)) return true;
   const stem = name.replace(/\.[a-z0-9]{1,8}$/, '');
   if (SECRET_STEM.test(stem) || SECRET_STEM.test(name)) return true;
   if (denied.some((dir) => dir && inside(real, dir, platform, lib))) return true;

@@ -101,21 +101,37 @@ test('key files are refused in the Settings folders, named or not', async (t) =>
   const s = setup(t);
   const dir = 'aiproject/projectAlpha/reports/';
   const secrets = ['.env', '.env.local', '.env.production', 'auth.json', 'server.key', 'cert.pem', 'store.p12', 'store.pfx', 'id_rsa', 'id_rsa.pub', 'id_rsa_backup',
-    'id_ed25519', 'id_ed25519.pub', 'id_ed25519-old', 'token-usage.md', 'api-tokens-report.md', 'my-secret-plan.md', 'secretary.txt', 'aws-credential.md', 'credentials.json',
-    'secrets/plan.md', '.secrets/plan.md', 'credentials/plan.md', '.ssh/plan.md', 'sub/secrets/deep/plan.md'].map((rel) => s.put(dir + rel, 'SECRET'));
+    'id_ed25519', 'id_ed25519.pub', 'id_ed25519-old', 'token.json', 'my_token.txt', 'api-tokens.yaml', 'secretary.txt', 'aws-credential.ini', 'credentials.json',
+    'bot-token.md', 'oauth-secret.md', 'token-usage.env', 'token-usage.md.key',
+    'secrets/a.md', '.secrets/plan.md', 'credentials/plan.md', '.ssh/plan.md', 'sub/secrets/deep/plan.md', 'secrets/token-usage.md'].map((rel) => s.put(dir + rel, 'SECRET'));
   for (const file of secrets) {
     assert.deepEqual(await s.read(file, { texts: s.named(file) }), { ok: false, code: 'denied' }, file);
     assert.deepEqual(await s.read(file), { ok: false, code: 'denied' }, file);
   }
-  // a folder named after the word is a folder, not a key file; its key-named files stay closed
+  // delivered documents that only mention the word: reports, pages, PDFs and pictures open
+  const documents = { 'token-usage.md': '用量报告', 'api-tokens-report.md': '报告', 'my-secret-plan.markdown': '计划', 'aws-credential-review.html': '<p>审查</p>',
+    'token-usage.pdf': '%PDF-1.4', 'Token-Chart.PNG': 'png' };
+  for (const [rel, data] of Object.entries(documents)) {
+    const file = s.put(dir + rel, data);
+    const read = await s.read(file, { texts: s.named(file) });
+    assert.equal(read.ok, true, rel);
+    // still only when named
+    assert.deepEqual(await s.read(file), { ok: false, code: 'denied' }, rel);
+  }
+  assert.equal((await s.read(s.at(dir + 'token-usage.md'), { texts: s.named(s.at(dir + 'token-usage.md')) })).text, '用量报告');
+  // a folder named after the word is a folder, not a key file
   const plain = s.put(dir + 'token-notes/summary.md', '总结');
   assert.equal((await s.read(plain, { texts: s.named(plain) })).text, '总结');
-  // a listing leaves them out
+  // a listing leaves the key files out and keeps the documents
   const listing = await s.read(s.at(dir.slice(0, -1)), { texts: s.named(s.at(dir.slice(0, -1))) });
-  assert.deepEqual(listing.entries.map((e) => e.name), ['sub', 'token-notes', 'review.md']);
-  // the same words anywhere in the name, any case
-  for (const name of ['/Users/me/reports/Token-Usage.md', '/Users/me/reports/SECRET.txt', '/Users/me/reports/x.CREDENTIALS.md', '/Users/me/x/ID_RSA2', '/Users/me/x/.ENV',
-    '/Users/me/x/Credentials/a.md', 'D:\\aiproject\\p\\reports\\Auth.JSON', 'D:\\aiproject\\p\\reports\\a.PFX']) assert.equal(secretPath(name, { home: '/Users/me' }), true, name);
+  assert.deepEqual(listing.entries.map((e) => e.name),
+    ['sub', 'token-notes', 'api-tokens-report.md', 'aws-credential-review.html', 'my-secret-plan.markdown', 'review.md', 'Token-Chart.PNG', 'token-usage.md', 'token-usage.pdf']);
+  // the words anywhere in a name that is not a document, any case; a document whose name ends in the word
+  for (const name of ['/Users/me/reports/Token.JSON', '/Users/me/reports/My_Token.TXT', '/Users/me/reports/SECRET.txt', '/Users/me/reports/x.CREDENTIALS.md', '/Users/me/x/ID_RSA2',
+    '/Users/me/x/.ENV', '/Users/me/x/Credentials/a.md', '/Users/me/x/Secrets/token-usage.md', 'D:\\aiproject\\p\\reports\\Auth.JSON', 'D:\\aiproject\\p\\reports\\a.PFX',
+    'D:\\aiproject\\p\\reports\\secrets\\a.md']) assert.equal(secretPath(name, { home: '/Users/me' }), true, name);
+  for (const name of ['/Users/me/reports/Token-Usage.md', '/Users/me/reports/secret-plan.HTML', '/Users/me/reports/credential-flow.svg', 'D:\\aiproject\\p\\reports\\token-usage.pdf'])
+    assert.equal(secretPath(name, { home: '/Users/me' }), false, name);
   assert.equal(secretPath('/Users/me/reports/token-notes', { home: '/Users/me', dir: true }), false);
 });
 
@@ -178,10 +194,10 @@ test('letter case does not matter on Windows, in paths, Settings folders or key 
 
 test('8.3 short names are written out in full before anything is decided', { skip: onlyWindows }, async (t) => {
   const s = setup(t);
-  const secret = s.put('aiproject/projectAlpha/reports/credentials-backup.md', 'SECRET');
+  const secret = s.put('aiproject/projectAlpha/reports/credentials-backup.txt', 'SECRET');
   const shortSecret = shortPath(secret);
   if (!shortSecret) return t.skip('this volume keeps no 8.3 names');
-  // CREDEN~1.MD does not carry the word, the real name does
+  // CREDEN~1.TXT does not carry the word, the real name does
   assert.doesNotMatch(path.basename(shortSecret).toLowerCase(), /credential/);
   assert.deepEqual(await s.read(shortSecret, { texts: s.named(shortSecret) }), { ok: false, code: 'denied' });
   assert.equal(localRefusal(shortSecret, { home: s.at('home') }), 'secret');
@@ -269,7 +285,7 @@ test('the desktop preview pane refuses what the phone refuses, and shows other c
   // any folder is fine on the desktop: the user clicked it on this computer
   assert.equal(localRefusal(s.at('outside/private.md'), { home }), '');
   assert.equal(SideMain.readPreview(s.at('outside/private.md'), s.at('outside/private.md'), home).text, '外面的私人文件');
-  for (const rel of ['outside/.env', 'outside/auth.json', 'outside/a.key', 'outside/id_rsa_old', 'outside/token-usage.md', 'outside/secrets/a.md', 'outside/credentials/a.md']) {
+  for (const rel of ['outside/.env', 'outside/auth.json', 'outside/a.key', 'outside/id_rsa_old', 'outside/my_token.txt', 'outside/token.json', 'outside/secrets/a.md', 'outside/credentials/a.md']) {
     const file = s.put(rel, 'SECRET');
     assert.equal(localRefusal(file, { home }), 'secret', rel);
     const shown = SideMain.readPreview(file, file, home);
@@ -277,6 +293,11 @@ test('the desktop preview pane refuses what the phone refuses, and shows other c
     assert.equal(shown.text, undefined, rel);
   }
   assert.equal(localRefusal(s.at('outside/none.md'), { home }), 'missing');
+  // a report that only mentions the word is shown
+  const usage = s.put('outside/token-usage.md', '# 用量');
+  assert.equal(localRefusal(usage, { home }), '');
+  assert.equal(SideMain.readPreview(usage, usage, home).text, '# 用量');
+  fs.rmSync(usage);
   // a folder listing leaves key files out
   const listing = SideMain.readPreview(s.at('outside'), s.at('outside'), home);
   assert.deepEqual(listing.entries.map((e) => e.name), ['projectBeta', 'private.md']);

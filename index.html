@@ -86,7 +86,7 @@
     <button id="mobileWebSaveOrigin" class="btn" type="button">保存访问地址</button>
     <label for="mobileWebPreviewRoots">手机可预览的其他文件夹（每行一个）</label>
     <textarea id="mobileWebPreviewRoots" rows="2" autocomplete="off" spellcheck="false" aria-describedby="mobileWebPreviewHint"></textarea>
-    <p id="mobileWebPreviewHint" class="hint">对话里点名的文件，除了家目录和临时目录，也能从这些文件夹在手机上打开。写完整路径，* 代表任意一层文件夹。密钥、.env、名字带 token、secret、credential 的文件始终打不开。</p>
+    <p id="mobileWebPreviewHint" class="hint">对话里点名的文件，除了家目录和临时目录，也能从这些文件夹在手机上打开。写完整路径，* 代表任意一层文件夹。密钥、.env、auth.json 始终打不开；名字带 token、secret、credential 的文件只有报告、网页、PDF 和图片能打开。</p>
     <button id="mobileWebSavePreview" class="btn" type="button">保存预览文件夹</button>
     <p id="mobileWebStatus" class="hint" role="status"></p>
     <div class="mobile-web-access" hidden>

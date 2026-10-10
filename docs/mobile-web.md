@@ -267,7 +267,8 @@ iOS 内嵌 PDF 只显示第一页，所以不用 iframe）、图片、纯文本�
   Windows 上大小写不分、正反斜杠混用都按同一路径处理；`\\?\`、`\\.\`、UNC（`\\电脑\共享`）路径、NTFS 备用数据流（`a.md:xxx`、`a.md::$DATA`）
   和 Windows 会自动去掉的结尾点或空格（`.env.`）一律拒绝；`a.md:12` 在 Windows 上永远是 `a.md` 的第 12 行。
 - 密钥类一律拒绝，点名也不行：`.ssh`、`.gnupg`、`.aws`、`secrets`、`.secrets`、`credentials` 等目录，`.agents-vault-pass`、`.env*`、`auth.json`、
-  `id_rsa*`、`id_ed25519*`、`*.pem/*.key/*.p12/*.pfx` 等，文件名里任何位置带 token、secret、credential 的文件（`token-usage.md` 也算），名字以 auth/password 等结尾的文件，
+  `id_rsa*`、`id_ed25519*`、`*.pem/*.key/*.p12/*.pfx` 等，文件名里任何位置带 token、secret、credential 的非文档文件（`token.json`、`my_token.txt`；交付文档 `.md/.markdown/.html/.pdf` 和图片除外，
+  所以 `token-usage.md` 能看，但它仍受上面的精确规则和目录黑名单约束），名字以 token/secret/auth/password 等结尾的文件（`bot-token.md` 也拒），
   `.claude*`、`.codex`、`.gemini`、`.config` 等目录里除文档和图片外的文件，`~/.config/agentdeck-remote`、AgentDeck 自己的数据目录，以及 shell 配置和历史。
 - 桌面右侧预览栏走同一套拒绝规则（`localRefusal`）：密钥类文件和上面那些 Windows 路径不显示；位置不限，因为是本机用户自己点的。用编辑器打开不受影响。
 - 未点名的路径不管存不存在都答「不在范围内」，不泄露是否存在。
