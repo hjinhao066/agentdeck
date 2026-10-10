@@ -1806,7 +1806,8 @@
   function revealRetired(chatId, turnId, role) {
     const col = host.columns().find((c) => c.isMain);
     const v = col && views.get(col.id);
-    if (!v) return;
+    // they are shown only in the 队长 column: without one, the click says so instead of doing nothing
+    if (!v) { host.showToast('这是清空前的队长对话，要在队长那一列里看；现在没有队长，建好队长后再点这条。'); return; }
     host.jumpToColumn(col);
     if (modeOf(col) !== 'chat') setMode(col.id, 'chat');
     v.showRetired = true;
