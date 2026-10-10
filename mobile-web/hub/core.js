@@ -234,7 +234,12 @@
   // recognised by its lines being part of it.
   function cleanReply(text, said = '', prompt = '') {
     const known = squash(said);
-    const rows = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n');
+    let whole = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+    // A reply is saved trimmed, which takes the indent off the first row of a file
+    // diff left at its top: that row gets its indent back so it goes with the diff.
+    const head = whole.split(/\n[ \t]*\n/)[0].split('\n');
+    if (head.length > 1 && /^\S/.test(head[0]) && head.slice(1).some((l) => DIFF_ROW.test(l))) whole = '    ' + whole;
+    const rows = whole.split('\n');
     const blocks = rows.slice(prompt ? echoTail(rows, prompt) : 0).join('\n').split(/\n[ \t]*(?:\n[ \t]*)+/);
     // A notice cut by the screen edge ends on the next row, sometimes after an empty one.
     let notice = false;
