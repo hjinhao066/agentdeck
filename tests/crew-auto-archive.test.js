@@ -131,3 +131,13 @@ test('a failed session in the 10 quiet minutes is kept even if the card is done'
   const s = { tasks: [failed({ boardId: 'c1', doneAt: NOW - 2 * MIN })] };
   assert.equal(M.archivable(s, 'worker', 0, NOW, M.ARCHIVE_AFTER, { c1: { status: 'done' } }), false);
 });
+
+test('terminal queries are not output: an idle Claude asking for the cursor position stays quiet', () => {
+  // Claude Code 2.1.295 sends ESC[?6n every few seconds while it waits; that alone
+  // kept every finished session "printing" and none was archived.
+  assert.equal(M.drawsOutput('\x1b[?6n'), false);
+  assert.equal(M.drawsOutput('\x1b[?6n'.repeat(40)), false);
+  for (const query of ['\x1b[6n', '\x1b[5n', '\x1b[c', '\x1b[0c', '\x1b[>c', '\x1b[>0c']) assert.equal(M.drawsOutput(query), false, JSON.stringify(query));
+  assert.equal(M.drawsOutput(''), false);
+  for (const out of ['x', '\x1b[?6nDone', '\x1b[2J\x1b[H', '\x1b[?25l', '\x1b[38;2;153;153;153mRan\x1b[39m', '\r\n']) assert.equal(M.drawsOutput(out), true, JSON.stringify(out));
+});
