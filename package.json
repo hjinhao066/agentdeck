@@ -156,7 +156,8 @@
       "bark-policy.js",
       "bark-delivery.js",
       "bark-calendar.js",
-      "notification-policy.js"
+      "notification-policy.js",
+      "THIRD_PARTY_NOTICES.md"
     ],
     "mac": {
       "target": "dmg",
