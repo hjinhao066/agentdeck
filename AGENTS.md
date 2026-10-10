@@ -186,9 +186,15 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   The zero-token watcher/poll heartbeat claims only new start edges, not content
   changes or worker activity; respect durable claims and held cards. Automatic
   verification (`docs/task-board-api.md`「自动验收」) is claimed once per review round
-  there too: never open a second reviewer for a round, never review with the
-  executor's own provider/model family, never mark a card done without a clear
-  reviewer verdict, and keep it inside the ordinary `new` queue and limits. Tests must
+  there too: never open a second reviewer for a round, never mark a card done
+  without a clear reviewer verdict, and keep it inside the ordinary `new` queue and
+  limits. The reviewer is a fresh Claude session of its own (Opus 5.5, Sonnet 5.5 for a
+  simple card), never Gemini/agy (the user's rule of 2026-10-09). Reviewer and dispatcher
+  providers are chosen by `QuotaCore.commandStance`, the reading `quota` shows: out,
+  erroring and stale/unread are never taken for "has quota" (Gemini is the dispatcher only
+  with a fresh reading that shows room, else Claude Haiku 5.5), and a session's title
+  names the provider and model that really run. A reviewer that cannot start tells the
+  Captain at once; nothing waits unseen. Tests must
   use the isolated profile task store and stand-in agents, never real shared data.
 - Clearing the 队长's context keeps the old chat as a `captainArchive` file under
   the old id. The 队长 column shows those read-only from the chats already loaded

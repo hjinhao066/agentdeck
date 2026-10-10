@@ -8,6 +8,7 @@ const vm = require('vm');
 const { TaskStore } = require('../task-board');
 const B = require('../board-core');
 const M = require('../main-core');
+const AV = require('../auto-verify-core');
 
 function runtime(t, dispatcher = 'gemini') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-drag-start-'));
@@ -16,11 +17,14 @@ function runtime(t, dispatcher = 'gemini') {
   const columns = [captain], created = [], sent = [], requests = [];
   const state = { colId: captain.id, tasks: [], pending: [], waitlist: [] };
   const store = new TaskStore(path.join(root, 'tasks'), { sessions: () => columns });
-  let quotaOut = false, afterRequest;
+  let quotaOut = false, afterRequest, stanceFn = null, seatList = null;
   const window = {
-    MainCore: M, BoardCore: B,
+    MainCore: M, BoardCore: B, AutoVerifyCore: AV,
     QuotaCore: {
+      claudeSeats: () => seatList || [{ id: 'default', name: 'Claude', configDir: '~/.claude' }],
       commandQuota: () => ({ out: quotaOut }),
+      // the passive reading the dispatcher choice asks (QuotaCore.commandStance): every command is out together or has room
+      commandStance: (_s, cmd, _seats, seatId) => (stanceFn ? stanceFn(cmd, seatId) : quotaOut ? 'out' : 'ok'),
       // This harness flags every command out together, so there is no same-tier peer to switch to.
       quotaFallback: (_store, cmd) => quotaOut
         ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' }
@@ -42,7 +46,7 @@ function runtime(t, dispatcher = 'gemini') {
   const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] } });
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
   window.MainSession.init({
-    config: { mainSession: state, folders: [], taskBoard: { dispatcher } },
+    config: { mainSession: state, folders: [], taskBoard: { dispatcher }, activeClaudeSeatId: 'default' },
     saveConfig() {}, columns: () => columns, terms: new Map(), columnLabel: (c) => c.id,
     platform: 'darwin', userComposing: () => false,
     createSession: (col) => { created.push(col); columns.push(col); return col; },
@@ -54,6 +58,8 @@ function runtime(t, dispatcher = 'gemini') {
     board: window.TaskBoard, store, state, created, sent, requests,
     add: (extra = {}) => store.add({ project: '测试项目', title: 'Test', detail: 'Precise instructions.', ...extra }).card,
     setQuota: (value) => { quotaOut = value; },
+    setStance: (fn) => { stanceFn = fn; },
+    setSeats: (list) => { seatList = list; },
     afterRequest: (callback) => { afterRequest = callback; },
     tick: () => window.MainSession.onTick(captain.id, { alive: true, state: 'done' }),
   };
@@ -158,4 +164,47 @@ test('dispatcher reservations reject replaced and delivered claim keys', (t) => 
   r.store.dispatched({ id: card.id, key });
   assert.equal(r.store.dispatch({ id: card.id, key, session_id: 'delivered-dispatcher' }).ignored, true);
   assert.equal(r.store.list()[0].dispatch_session_id, null);
+});
+
+// ---- who the dispatcher is: Gemini only while it has room, otherwise a Claude Haiku 5.5 session ----
+test('Gemini with room dispatches on Gemini; out, stale or erroring Gemini dispatches on Claude Haiku 5.5, and the title says which', async (t) => {
+  for (const [gemini, expected] of [['ok', 'agy'], ['low', 'agy'], ['out', 'claude'], ['unknown', 'claude'], ['error', 'claude']]) {
+    const r = runtime(t), card = r.add({ title: '画图：全景图（Opus 5.5）' });
+    r.setStance((cmd) => (/^agy/.test(cmd) ? gemini : 'ok'));
+    const result = await r.board.requestStart(card.id);
+    assert.equal(result.dispatcher, 'gemini', 'the key of the setting; the session behind it is the cheap dispatcher');
+    assert.equal(r.created.length, 1, gemini);
+    const col = r.created[0];
+    if (expected === 'agy') {
+      assert.match(col.cmd, /^agy .*gemini-3\.8-flash-high/); assert.equal(col.title, '调度：画图：全景图（Gemini 3.8 Flash（Antigravity））');
+    } else {
+      assert.match(col.cmd, /^claude --dangerously-skip-permissions --model claude-haiku-5-5 --effort medium$/);
+      assert.equal(col.title, '调度：画图：全景图（Claude Haiku 5.5）', 'never the executor\'s label from the card, never a different model from the one that runs');
+      assert.equal(col.displayTitle, col.title);
+    }
+    assert.equal(col.dispatcherCardId, card.id);
+    assert.match(r.sent[0].text, /new --task-id .*--project/);
+  }
+});
+
+test('the dispatcher skips a Claude seat that is out, and carries the seat it took', async (t) => {
+  const r = runtime(t), card = r.add();
+  r.setSeats([{ id: 'default', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/.claude-us' }]);
+  r.setStance((cmd, seatId) => (/^agy/.test(cmd) ? 'out' : seatId === 'default' ? 'out' : 'ok'));
+  await r.board.requestStart(card.id);
+  assert.equal(r.created.length, 1);
+  assert.match(r.created[0].cmd, /^claude .*claude-haiku-5-5/);
+  assert.equal(r.created[0].claudeSeatId, 'us'); assert.equal(r.created[0].claudeConfigDir, '~/.claude-us');
+});
+
+test('Gemini and every Claude seat out: the start waits in the ordinary quota queue and opens one dispatcher when room returns', async (t) => {
+  const r = runtime(t), card = r.add();
+  r.setQuota(true);
+  r.setStance(() => 'out');
+  const queued = await r.board.requestStart(card.id);
+  assert.equal(queued.queued, true); assert.equal(r.created.length, 0);
+  assert.match(r.store.list()[0].dispatch_wait, /额度用尽/);
+  r.setQuota(false); r.setStance((cmd) => (/^agy/.test(cmd) ? 'unknown' : 'ok'));
+  r.tick(); await new Promise(setImmediate); await new Promise(setImmediate);
+  assert.equal(r.created.length, 1); assert.match(r.created[0].cmd, /claude-haiku-5-5/);
 });

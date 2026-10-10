@@ -503,6 +503,10 @@ test('Gemini drag dispatches once, dragging back keeps the session fence, and bl
   await page.evaluate((fake) => {
     const original = BoardCore.commandForAgent;
     BoardCore.commandForAgent = (agent, ...args) => agent === 'agy' ? fake : original(agent, ...args);
+    // the dispatcher is chosen by quota reading: the stand-in has room, and the Haiku candidate is a stand-in too (no real model starts)
+    const stance = QuotaCore.commandStance;
+    QuotaCore.commandStance = (store, cmd, ...args) => (cmd === fake ? 'ok' : stance(store, cmd, ...args));
+    AutoVerifyCore.DISPATCHERS.find((c) => c.id === 'claude-haiku').command = fake + ' --haiku-stand-in';
     TaskBoard.settings('gemini');
   }, FAKE);
   await page.locator('#navTop .nav-row[data-nav="tasks"]').click();

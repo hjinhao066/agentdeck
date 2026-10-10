@@ -619,6 +619,24 @@
     if (stance === 'out') return quotaPlan('queue', { ...base, reason: 'out', held: 'out' });
     return quotaPlan('open', { ...base, reason: 'low', held: 'low' });
   }
+  // The one question automatic choosers ask (the reviewer for a --verify card, the board's
+  // dispatcher): may a session of this command start now, on this Claude seat? It reads the
+  // same passive reading `quota` shows (commandQuota/summary), and answers
+  //   ok / low / unmetered  usable (low: at or under QUOTA_LOW_PERCENT of the 5-hour window)
+  //   out                   exhausted, or the seat is signed out
+  //   error                 the seat's login or credential is bad
+  //   unknown               no reading, an old one, only "no error seen", or a query that keeps
+  //                         failing: never taken for "has quota"
+  function commandStance(store, command, seats, seatId, now = Date.now()) {
+    const cmd = String(command || '');
+    const member = tierMember(cmd);
+    const quota = readCommandQuota(store, cmd, seats, seatId, now) || (member ? readCommandQuota(store, member.command, seats, seatId, now) : null);
+    const stance = quotaStance(quota);
+    if (stance === 'out' || stance === 'unmetered') return stance;
+    if (quota.health?.level === 'bad') return 'error';
+    if (stance !== 'unknown' && quota.failures > 0) return 'unknown';
+    return stance;
+  }
   function commandQuota(store, command, seats, activeSeatId, now = Date.now()) {
     const cmd = String(command || '').trim();
     const bin = cmd.match(/^(claude|codex|cursor-agent|agy|antigravity|gemini)(?:\s|$)/i)?.[1]?.toLowerCase();
@@ -655,6 +673,6 @@
     });
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, seatHealth, HEALTH_LEVELS, HEALTH_KINDS, commandQuota, QUOTA_LOW_PERCENT, QUOTA_TIERS, quotaSwitchNote, quotaFallbackTitle, quotaFallback, text, maskAccount, mobile };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, seatHealth, HEALTH_LEVELS, HEALTH_KINDS, commandQuota, commandStance, quotaStance, QUOTA_LOW_PERCENT, QUOTA_TIERS, quotaSwitchNote, quotaFallbackTitle, quotaFallback, text, maskAccount, mobile };
 
 });

@@ -328,7 +328,8 @@ skipped.
 任务看板数据、CLI、自动流转及界面的读写入口见
 [任务看板接口说明](docs/task-board-api.md)。正本是 `~/.agents/boards/tasks/<项目名>.json`；
 `new --task-id ... --project ...` 绑定卡片，命令回执自动流转，文件监听和每 60 秒巡检
-发现外部开始操作。`TaskBoard.startCard(id)` 默认用 Gemini Flash 调度，设置可改回队长。
+发现外部开始操作。`TaskBoard.startCard(id)` 默认开便宜的调度会话：Gemini Flash 有新鲜读数、有余量时用它，已用尽、报错或读数过期则改开 Claude Haiku 5.5；设置可改回队长。
+带 `--verify` 的卡交回执后，程序另起一个新的 Claude 审查会话（重要的 Opus 5.5，简单的 Sonnet 5.5），挑有额度的席位，标题写实际跑的模型；不再用 Gemini/agy 做审查者。
 队长 `task move` 回 doing 不自动开调度员；未归档的关联会话阻止重复自动调度。
 额度/登录/限流失败不累计连续失败；开新会话前检查所选 provider/Claude 席位额度，
 已用尽的任务排队到额度恢复，显示「额度用尽，稍后自动开」。

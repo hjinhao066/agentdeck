@@ -21,8 +21,8 @@ const savedCap = M.MAX_ACTIVE;
 function world(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-autoverify-session-'));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); M.MAX_ACTIVE = savedCap; });
-  const w = { root, dir: path.join(root, 'tasks'), out: new Set(), pressure: null, failOps: new Map() };
-  w.config = { folders: [], archived: [], mainSession: { colId: 'captain', tasks: [], pending: [], inflight: [], waitlist: [], gen: 1, cmd: '' }, concurrencyCap: 5 };
+  const w = { root, dir: path.join(root, 'tasks'), out: new Set(), stale: new Set(), seatOut: new Set(), seats: null, pressure: null, failOps: new Map() };
+  w.config = { folders: [], archived: [], mainSession: { colId: 'captain', tasks: [], pending: [], inflight: [], waitlist: [], gen: 1, cmd: '' }, concurrencyCap: 5, activeClaudeSeatId: 'default' };
   w.columns = [{ id: 'captain', isMain: true, cmd: '' }];
   w.boot = () => boot(w);
   return w;
@@ -50,6 +50,14 @@ function boot(w, persisted) {
     },
     MainCore: M, BoardCore: B, AutoVerifyCore: AV, ClaudeSeatsCore: require('../claude-seats-core'),
     QuotaCore: {
+      claudeSeats: () => w.seats || [{ id: 'default', name: 'Claude', configDir: '~/.claude' }],
+      // The passive reading `quota` shows, as the choosers ask it (QuotaCore.commandStance): a command prefix or a
+      // Claude seat can be out, and a prefix can have only an old or missing reading (unknown).
+      commandStance: (_store, cmd, _seats, seatId) => {
+        if (/^claude/.test(String(cmd)) && w.seatOut.has(seatId)) return 'out';
+        if ([...w.out].some((p) => String(cmd).startsWith(p))) return 'out';
+        return [...w.stale].some((p) => String(cmd).startsWith(p)) ? 'unknown' : 'ok';
+      },
       commandQuota: (_store, cmd) => ({ out: [...w.out].some((p) => String(cmd).startsWith(p)) }),
       // Same out-set as commandQuota. This harness does not model same-tier switches.
       quotaFallback: (_store, cmd) => {
@@ -277,14 +285,14 @@ test('a verify card is reviewed automatically: right provider, full task, one se
   await app.scan();
   const [reviewer, ...extra] = app.reviewers(card);
   assert.equal(extra.length, 0); assert.ok(reviewer);
-  assert.match(reviewer.cmd, /^agy .*gemini-3\.8-flash-high/, 'Claude executor → Gemini reviewer, from the dispatcher table');
+  assert.match(reviewer.cmd, /^claude .*--model claude-sonnet-5-5 /, 'a simple card: a new Claude session, Sonnet 5.5, never another provider');
   assert.equal(reviewer.boardAttempt, AV.reviewAttemptId(card.id, 1)); assert.deepEqual([...reviewer.reviews], [exec.id]);
-  assert.equal(reviewer.title, '审查：修登录');
+  assert.equal(reviewer.title, '审查：修登录（Claude Sonnet 5.5）', 'the title says what really runs');
   const [prompt] = app.texts(reviewer);
   for (const part of ['修登录', '把登录修好', '第二句：登录页已改，测试 a.test.js 通过。', '/repo/login.js', '/repo/shot.png', exec.id, '只审不改', '不跑全量 E2E']) assert.ok(prompt.includes(part), part);
   const bound = app.card(card.id);
   assert.equal(bound.session_id, reviewer.id); assert.equal(bound.review_session, true); assert.equal(bound.review_claim.delivered, true);
-  assert.deepEqual(bound.assignee.agent, 'Antigravity'); assert.equal(bound.exec_receipt.assignee.model, 'claude-sonnet-5-5');
+  assert.deepEqual(bound.assignee.agent, 'Claude'); assert.equal(bound.assignee.model, 'claude-sonnet-5-5'); assert.equal(bound.exec_receipt.assignee.model, 'claude-sonnet-5-5');
   assert.ok(w.flushes > 0, 'config flushed before the claim was marked delivered');
   // Heartbeat reruns, extra start events, a restart: still exactly one reviewer and one prompt.
   for (let i = 0; i < 3; i++) await app.scan();
@@ -380,13 +388,13 @@ test('a rejection whose executor session no longer exists goes to the Captain in
 
 test('no acceptable reviewer: the card stays in review, says why, the Captain is told once, and nothing is opened — also after quota recovers or a restart', async (t) => {
   const w = world(t); let app = w.boot();
-  w.out.add('agy'); w.out.add('codex');
   const card = await newCard(app);
   const exec = await app.execute(card); await app.finish(exec, '做完');
+  w.out.add('claude');   // the executor has run; now every Claude seat is out
   await app.scan();
   let c = app.card(card.id);
   assert.equal(c.status, 'review'); assert.equal(app.reviewers(card).length, 0); assert.equal(c.review_block.round, 1);
-  assert.match(c.review_block.reason, /额度用尽/); assert.match(c.review_block.reason, /同属 Anthropic/);
+  assert.match(c.review_block.reason, /额度用尽/); assert.match(c.review_block.reason, /Claude 各席位/);
   assert.equal(app.notices().filter((n) => n.includes('不能自动开审查会话')).length, 1);
   w.out.clear();
   for (let i = 0; i < 3; i++) await app.scan();
@@ -399,13 +407,93 @@ test('no acceptable reviewer: the card stays in review, says why, the Captain is
   assert.equal(app.card(card.id).review_block, null); assert.equal(app.card(card.id).review_session, true);
 });
 
-test('an executor of unknown make is never reviewed by a guess', async (t) => {
+test('the reviewer no longer depends on who made the executor: any executor gets a fresh Claude session', async (t) => {
+  for (const command of ['node fake-agent.js --screen-only', CODEX, SONNET]) {
+    const w = world(t); const app = w.boot();
+    const card = await newCard(app);
+    const exec = await app.execute(card, command); await app.finish(exec, '做完');
+    await app.scan();
+    const [reviewer, ...extra] = app.reviewers(card);
+    assert.equal(extra.length, 0); assert.ok(reviewer, command);
+    assert.match(reviewer.cmd, /^claude .*--model claude-sonnet-5-5 /); assert.equal(app.card(card.id).review_session, true);
+    assert.notEqual(reviewer.id, exec.id, 'a separate session from the executor');
+  }
+});
+
+// ---- who the automatic reviewer is, through the whole loop (fake quota state, no session starts a model) ----
+test('Gemini out or with an old reading changes nothing: the reviewer is a fresh Claude session and its title names it, not the executor', async (t) => {
+  for (const mode of ['out', 'stale']) {
+    const w = world(t); const app = w.boot();
+    const card = await newCard(app, { title: '修登录（Opus 5.5 high·066us）' });
+    const exec = await app.execute(card); await app.finish(exec, '做完');
+    (mode === 'out' ? w.out : w.stale).add('agy');
+    await app.scan();
+    const [reviewer, ...extra] = app.reviewers(card);
+    assert.equal(extra.length, 0); assert.ok(reviewer, mode);
+    assert.match(reviewer.cmd, /^claude .*--model claude-sonnet-5-5 /);
+    assert.equal(reviewer.title, '审查：修登录（Claude Sonnet 5.5）', 'the title is the model that runs, not the executor\'s label on the card');
+    assert.doesNotMatch(reviewer.displayTitle, /Opus|Gemini/);
+    assert.equal(app.card(card.id).assignee.model, 'claude-sonnet-5-5');
+  }
+});
+test('an important card is reviewed by Opus 5.5, and its title says Opus 5.5', async (t) => {
+  const w = world(t); const app = w.boot();
+  const card = await newCard(app, { important: true });
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  await app.scan();
+  const [reviewer] = app.reviewers(card);
+  assert.match(reviewer.cmd, /^claude .*--model claude-opus-5-5 --effort high/);
+  assert.equal(reviewer.title, '审查：修登录（Claude Opus 5.5）');
+});
+test('a Claude seat that is out is skipped: the reviewer opens on the first seat with room and carries that seat', async (t) => {
+  const w = world(t);
+  w.seats = [{ id: 'cn', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/.claude-us' }];
+  w.config.activeClaudeSeatId = 'cn';
+  const app = w.boot();
+  const card = await newCard(app);
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  w.seatOut.add('cn');
+  await app.scan();
+  const [reviewer] = app.reviewers(card);
+  assert.ok(reviewer); assert.equal(reviewer.claudeSeatId, 'us'); assert.equal(reviewer.claudeConfigDir, '~/.claude-us');
+  // the active seat has room: nothing extra is attached, a new session defaults to it
+  const w2 = world(t); w2.seats = w.seats; w2.config.activeClaudeSeatId = 'cn';
+  const app2 = w2.boot(); const card2 = await newCard(app2);
+  const exec2 = await app2.execute(card2); await app2.finish(exec2, '做完');
+  await app2.scan();
+  const [reviewer2] = app2.reviewers(card2);
+  assert.ok(reviewer2); assert.equal(reviewer2.claudeSeatId, undefined);
+});
+test('every Claude seat out: the card stays in review with the reason and the Captain is told, not left waiting on a queue entry', async (t) => {
+  const w = world(t);
+  w.seats = [{ id: 'cn', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/.claude-us' }];
+  w.config.activeClaudeSeatId = 'cn';
+  const app = w.boot();
+  const card = await newCard(app);
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  w.seatOut.add('cn'); w.seatOut.add('us');
+  await app.scan();
+  assert.equal(app.reviewers(card).length, 0); assert.equal(w.config.mainSession.waitlist.length, 0);
+  assert.match(app.card(card.id).review_block.reason, /额度用尽/);
+  assert.equal(app.notices().filter((n) => n.includes('不能自动开审查会话')).length, 1);
+});
+test('a reviewer that cannot start after all (quota, crash) tells the Captain at once how to put another in; its own written verdict is not that case', async (t) => {
   const w = world(t); const app = w.boot();
   const card = await newCard(app);
-  const exec = await app.execute(card, 'node fake-agent.js --screen-only'); await app.finish(exec, '做完');
+  const exec = await app.execute(card); await app.finish(exec, '做完');
   await app.scan();
-  assert.equal(app.reviewers(card).length, 0); assert.match(app.card(card.id).review_block.reason, /看不出执行会话/);
-  assert.equal(app.card(card.id).status, 'review');
+  const [review] = app.reviewers(card);
+  await app.api.submit({ action: 'session-exit', code: 7 }, review);
+  const told = app.notices().filter((n) => n.includes('自动审查会话') && n.includes('没能跑起来'));
+  assert.equal(told.length, 1);
+  assert.ok(told[0].includes(card.id)); assert.match(told[0], /new --task-id .* --reviews <执行会话> --command "claude .*claude-opus-5-5/); assert.match(told[0], /不用等它/);
+  // a reviewer's own "不通过" is a finding, not a failure to start
+  const w2 = world(t); const app2 = w2.boot();
+  const card2 = await newCard(app2);
+  const exec2 = await app2.execute(card2); await app2.finish(exec2, '做完'); await app2.scan();
+  const [review2] = app2.reviewers(card2);
+  await app2.finish(review2, '不通过：缺断言', { failed: '不通过：缺断言' });
+  assert.equal(app2.notices().filter((n) => n.includes('没能跑起来')).length, 0);
 });
 
 test('a reviewer that cannot start yet waits in the ordinary queue (limit, memory, quota) and opens exactly once', async (t) => {
@@ -432,7 +520,7 @@ test('a reviewer that cannot start yet waits in the ordinary queue (limit, memor
   again.api.onTick('captain', again.entries.get('captain')); await tick();
   assert.equal(again.reviewers(card).length, 0); assert.equal(again.api.memoryHeld(), true);
   // pressure over but the reviewer's own quota is out: still waiting
-  w.pressure = 1; w.out.add('agy');
+  w.pressure = 1; w.out.add('claude');
   again.api.onTick('captain', again.entries.get('captain')); await tick();
   assert.equal(again.reviewers(card).length, 0);
   // everything clear: opens once, however many ticks follow
@@ -579,7 +667,7 @@ test('one receipt opens exactly one reviewer; a supplement before the reviewer s
   await app.scan();
   const [reviewer, ...extra] = app.reviewers(card);
   assert.equal(extra.length, 0); assert.equal(reviewer.boardAttempt, AV.reviewAttemptId(card.id, 2));
-  assert.match(reviewer.cmd, /^agy .*gemini-3\.8-flash-high/, 'still a different provider from the Claude executor');
+  assert.match(reviewer.cmd, /^claude .*claude-sonnet-5-5/, 'a fresh Claude session again');
   assert.ok(app.texts(reviewer)[0].includes('补充做完'));
   for (let i = 0; i < 3; i++) await app.scan();
   assert.equal(app.reviewers(card).length, 1, 'still exactly one reviewer for round 2');
@@ -607,7 +695,7 @@ test('a receipt that arrives while the reviewer is working voids that review and
   await app.scan(); await app.scan();
   const reviewers = app.reviewers(card);
   assert.equal(reviewers.length, 2); const r2 = reviewers.find((c) => c.boardAttempt === AV.reviewAttemptId(card.id, 2)); assert.ok(r2, 'round 2 has its own reviewer');
-  assert.match(r2.cmd, /^agy .*gemini-3\.8-flash-high/);
+  assert.match(r2.cmd, /^claude .*claude-sonnet-5-5/);
   assert.equal(app.card(card.id).session_id, r2.id);
   await app.scan(); assert.equal(app.reviewers(card).length, 2);
 });

@@ -26,55 +26,79 @@ function fixture(t, sessions = () => []) {
   return { root, dir, store, add, bind, event, get, executed, reviewer };
 }
 
-// ---- who may review ----
-test('the reviewer is never from the executor\'s own provider/model family, and the table order decides among the rest', () => {
-  const commandOf = (c) => c.command || c.agent;
-  const cases = [
-    [{ agent: 'Claude', model: 'claude-sonnet-5-5' }, 'gemini-flash'],
-    [{ agent: 'Claude', model: 'default' }, 'gemini-flash'],
-    [{ agent: 'Antigravity', model: 'gemini-3.8-flash-high' }, 'codex-sol'],
-    [{ agent: 'Antigravity', model: 'default' }, 'codex-sol'],
-    [{ agent: 'Codex', model: 'gpt-6.1-sol' }, 'gemini-flash'],
-    [{ agent: 'Cursor', model: 'grok-4.7-high-fast' }, 'gemini-flash'],
-    // Cursor and agy run other makers' models: the model name decides, not the harness.
-    [{ agent: 'Cursor', model: 'claude-opus-5-5-high' }, 'gemini-flash'],
-    [{ agent: 'Antigravity', model: 'claude-opus-4-6-thinking' }, 'gemini-flash'],
-    [{ agent: 'Antigravity', model: 'gpt-oss-120b-medium' }, 'gemini-flash'],
-  ];
-  for (const [executor, expected] of cases) {
-    const picked = AV.pickReviewer({ executor, commandOf });
-    assert.equal(picked.candidate.id, expected, JSON.stringify(executor));
-    assert.notEqual(picked.family, AV.familyOf(executor));
-    assert.equal(picked.executorFamily, AV.familyOf(executor));
+// ---- who may review: a fresh Claude session, by the quota reading; never another provider ----
+const SEATS = [{ id: 'cn', label: 'CN' }, { id: 'us', label: 'US' }, { id: 'us2', label: 'US2' }];
+// stanceOf over a table: { cn: 'out', ... } by seat id for Claude commands; anything else 'ok'.
+const bySeat = (table) => (cmd, seatId) => (/^claude/.test(cmd) ? table[seatId] || 'ok' : 'ok');
+test('a card that is not simple is reviewed by Opus 5.5, a simple one by Sonnet 5.5, in a new Claude session', () => {
+  const card = { id: 't', title: 'x' };
+  const receipt = (extra = {}) => ({ text: '做完了', files: ['/a'], assignee: { agent: 'Claude', model: 'claude-sonnet-5-5' }, ...extra });
+  const label = (c, r) => AV.pickReviewer({ card: c, receipt: r, seats: SEATS, stanceOf: bySeat({}) }).candidate.label;
+  assert.equal(label(card, receipt()), 'Claude Sonnet 5.5', 'short receipt, one file, not marked important: simple');
+  assert.equal(label({ ...card, important: true }, receipt()), 'Claude Opus 5.5', 'marked 高优先级');
+  assert.equal(label(card, receipt({ files: ['/a', '/b', '/c', '/d'] })), 'Claude Opus 5.5', 'many files');
+  assert.equal(label(card, receipt({ text: '长'.repeat(801) })), 'Claude Opus 5.5', 'long receipt');
+  assert.equal(label(card, receipt({ assignee: { agent: 'Claude', model: 'claude-opus-5-5' } })), 'Claude Opus 5.5', 'an Opus executor means it was judged important');
+  assert.equal(label(card, receipt({ assignee: { agent: 'Codex', model: 'gpt-6.1-sol' } })), 'Claude Sonnet 5.5', 'who made the executor does not matter');
+  assert.equal(label(card, undefined), 'Claude Sonnet 5.5');
+  // never another provider, whoever executed and whatever the quota table says
+  for (const executor of [null, {}, { agent: 'Antigravity', model: 'gemini-3.8-flash-high' }, { agent: 'Codex', model: 'default' }, { agent: 'Custom agent', model: 'default' }]) {
+    const picked = AV.pickReviewer({ card: { ...card, important: true }, receipt: receipt({ assignee: executor }), seats: SEATS, stanceOf: bySeat({}) });
+    assert.match(picked.cmd, /^claude --dangerously-skip-permissions --model claude-opus-5-5 /); assert.equal(picked.family, 'anthropic');
   }
+  assert.ok(AV.CANDIDATES.every((c) => /^claude /.test(c.command)), 'no Gemini, agy, Codex or Cursor candidate left');
 });
-test('exhausted providers are skipped; with nothing left there is no reviewer and the reasons say why', () => {
-  const commandOf = (c) => c.command || c.agent;
-  const out = new Set();
-  const quotaOut = (cmd) => out.has(cmd);
-  out.add('agy');
-  assert.equal(AV.pickReviewer({ executor: { agent: 'Claude', model: 'claude-opus-5-5' }, commandOf, quotaOut }).candidate.id, 'codex-sol');
-  out.add('codex');
-  const none = AV.pickReviewer({ executor: { agent: 'Claude', model: 'claude-opus-5-5' }, commandOf, quotaOut });
-  assert.equal(none.candidate, undefined); assert.equal(none.cmd, undefined);
-  assert.match(none.reason, /Gemini 3\.8 Flash（Antigravity）：额度用尽/); assert.match(none.reason, /Codex GPT-6\.1 Sol：额度用尽/);
-  assert.match(none.reason, /Claude Opus 5\.5：与执行会话同属 Anthropic/); assert.match(none.reason, /Opus 4\.6 Thinking（Antigravity）：与执行会话同属 Anthropic/);
-  // Codex executor with Gemini out falls to Opus; with Opus out too, nobody is left.
-  out.clear(); out.add('agy');
-  assert.equal(AV.pickReviewer({ executor: { agent: 'Codex', model: 'default' }, commandOf, quotaOut }).candidate.id, 'claude-opus');
-  out.add(AV.CANDIDATES.find((c) => c.id === 'claude-opus').command);
-  assert.equal(AV.pickReviewer({ executor: { agent: 'Codex', model: 'default' }, commandOf, quotaOut }).candidate.id, 'agy-opus-46');
-  out.add(AV.CANDIDATES.find((c) => c.id === 'agy-opus-46').command);
-  assert.match(AV.pickReviewer({ executor: { agent: 'Codex', model: 'default' }, commandOf, quotaOut }).reason, /^没有可用的审查者/);
+test('a Claude seat that is out is skipped, the first one with room is taken, and a seat the quota cannot judge is not taken for having room', () => {
+  const pick = (table, extra = {}) => AV.pickReviewer({ simple: false, seats: SEATS, stanceOf: bySeat(table), ...extra });
+  assert.equal(pick({}).seat.id, 'cn', 'the seat a new session defaults to leads');
+  assert.equal(pick({ cn: 'out' }).seat.id, 'us');
+  assert.equal(pick({ cn: 'out', us: 'error' }).seat.id, 'us2');
+  assert.equal(pick({ cn: 'low', us: 'ok' }).seat.id, 'us', 'a seat with plenty beats one at the threshold');
+  assert.equal(pick({ cn: 'low', us: 'out', us2: 'out' }).seat.id, 'cn', 'low is still usable when nothing better is left');
+  // unknown (stale, missing, failing query) is never "has quota": a seat that is ok wins over it, even when listed later
+  assert.equal(pick({ cn: 'unknown', us: 'ok' }).seat.id, 'us');
+  // with only unknown readings left the Claude session is still the last resort, flagged unverified
+  const weak = pick({ cn: 'unknown', us: 'out', us2: 'unknown' });
+  assert.equal(weak.seat.id, 'cn'); assert.equal(weak.unverified, true); assert.match(weak.cmd, /^claude /);
+  // every seat out or broken: nobody, with a reason that names each
+  const none = pick({ cn: 'out', us: 'out', us2: 'error' });
+  assert.equal(none.cmd, undefined); assert.match(none.reason, /^没有可用的审查者/);
+  assert.match(none.reason, /Claude Opus 5\.5（CN）：额度用尽/); assert.match(none.reason, /（US2）：登录或额度查询出错/);
 });
-test('an executor whose model cannot be identified gets no reviewer instead of a guess', () => {
-  for (const executor of [null, undefined, {}, { agent: 'Custom agent', model: 'default' }, { agent: 'Shell', model: 'default' }, { agent: 'Cursor', model: 'default' }]) {
-    const picked = AV.pickReviewer({ executor, commandOf: (c) => c.agent || c.command });
-    assert.equal(picked.cmd, undefined); assert.match(picked.reason, /看不出执行会话/);
+test('Gemini, agy and Codex quota never matter to the reviewer, and a stand-in candidate table is judged by the same reading', () => {
+  // exhausted Gemini and stale Codex change nothing
+  const stance = (cmd) => (/^agy/.test(cmd) ? 'out' : /^codex/.test(cmd) ? 'unknown' : 'ok');
+  assert.match(AV.pickReviewer({ simple: false, seats: SEATS, stanceOf: stance }).cmd, /^claude /);
+  // a candidate table swapped in by a test: first usable in preference order, judged as written
+  const table = [{ id: 'stand-in', label: '替身审查员', family: 'x', command: 'node stand-in.js' }];
+  assert.equal(AV.pickReviewer({ candidates: table, seats: SEATS, stanceOf: () => 'unmetered' }).candidate.id, 'stand-in');
+  assert.match(AV.pickReviewer({ candidates: table, seats: SEATS, stanceOf: () => 'unknown' }).reason, /替身审查员：额度读数过期或没有/);
+});
+test('the dispatcher is Gemini Flash only while a fresh reading shows room; otherwise a Claude Haiku 5.5 session on a seat with room', () => {
+  const commandOf = (c) => c.command || (c.agent === 'agy' ? 'agy --model gemini-3.8-flash-high' : c.agent);
+  const dispatch = (gemini, claude = {}) => AV.pickDispatcher({ commandOf, seats: SEATS, stanceOf: (cmd, seatId) => (/^agy/.test(cmd) ? gemini : claude[seatId] || 'ok') });
+  assert.equal(dispatch('ok').candidate.id, 'gemini-flash');
+  assert.equal(dispatch('low').candidate.id, 'gemini-flash');
+  for (const gemini of ['out', 'unknown', 'error', 'unmetered']) {
+    const picked = dispatch(gemini);
+    assert.equal(picked.candidate.id, 'claude-haiku', `Gemini ${gemini}`); assert.equal(picked.seat.id, 'cn');
+    assert.match(picked.cmd, /--model claude-haiku-5-5 --effort medium/);
   }
-  // Even if every candidate were the same family as the executor, none is returned.
-  const same = AV.pickReviewer({ executor: { agent: 'Claude', model: 'x' }, candidates: [{ id: 'c', label: 'C', family: 'anthropic', agent: 'claude' }], commandOf: (c) => c.agent });
-  assert.equal(same.cmd, undefined);
+  assert.equal(dispatch('out', { cn: 'out' }).seat.id, 'us', 'a Claude seat that is out is skipped too');
+  const weak = dispatch('out', { cn: 'unknown', us: 'out', us2: 'out' });
+  assert.equal(weak.candidate.id, 'claude-haiku'); assert.equal(weak.unverified, true);
+  const none = dispatch('out', { cn: 'out', us: 'out', us2: 'out' });
+  assert.equal(none.cmd, undefined); assert.match(none.reason, /Gemini 3\.8 Flash（Antigravity）：额度用尽/);
+});
+test('a review title says what really runs: the executor\'s marks on the card title come out, the real provider and model go in', () => {
+  const t = (title, label = 'Claude Opus 5.5') => AV.reviewTitle(title, label);
+  assert.equal(t('修登录'), '审查：修登录（Claude Opus 5.5）');
+  assert.equal(t('画图：大一统全景图页面（放进 Hermes 网站，Opus 5.5）'), '审查：画图：大一统全景图页面（放进 Hermes 网站）（Claude Opus 5.5）');
+  assert.equal(t('2.0.5 集成（Opus 5.5 high·066us）', 'Claude Sonnet 5.5'), '审查：2.0.5 集成（Claude Sonnet 5.5）');
+  assert.equal(t('统一下载器(Gemini 3.8 Flash)'), '审查：统一下载器（Claude Opus 5.5）');
+  assert.equal(t('修（登录）页面（Opus·US2）'), '审查：修（登录）页面（Claude Opus 5.5）');
+  assert.ok(t('标题'.repeat(100)).length <= 80); assert.ok(t('标题'.repeat(100)).endsWith('（Claude Opus 5.5）'));
+  assert.equal(AV.reviewTitle('修登录（Opus）', 'Claude Haiku 5.5', 120, '调度：'), '调度：修登录（Claude Haiku 5.5）');
 });
 test('verdicts: only a leading 通过/不通过 counts; anything else is unclear and never a pass', () => {
   for (const text of ['通过：文件都在，测试跑过', '  **通过** 全部核对', '【通过】ok', '验收通过。', '通过', 'PASS: all good']) assert.equal(AV.verdict(text), 'pass', text);
@@ -284,9 +308,9 @@ test('a second receipt while the reviewer works: the review is void, the new rec
   assert.equal(event(card.id, 'failed', '不通过：旧结论', reviewer(card.id, 1), 'rev1').ignored, true);
   assert.equal(event(card.id, 'complete', '通过：旧结论', reviewer(card.id, 1), 'rev1').ignored, true);
   assert.equal(get(card.id).status, 'review'); assert.equal(get(card.id).review_round, 2); assert.ok(!get(card.id).review_reject);
-  // the new reviewer is picked from the executor's make (never the same provider)
-  const picked = AV.pickReviewer({ executor: get(card.id).exec_receipt.assignee, commandOf: (c) => c.id });
-  assert.notEqual(picked.family, 'anthropic');
+  // the new round's reviewer is a fresh Claude session again, picked from the new receipt
+  const picked = AV.pickReviewer({ card: get(card.id), receipt: get(card.id).exec_receipt, seats: SEATS, stanceOf: bySeat({}) });
+  assert.match(picked.cmd, /^claude /);
 });
 test('only a different written receipt from the original executor voids a running review', (t) => {
   const { store, add, bind, event, get, executed, reviewer } = fixture(t);
@@ -398,8 +422,8 @@ test('the Captain briefing describes the automatic loop, stays static, and leave
   const M = require('../main-core');
   const text = require('./fixtures/captain-rulebook').rulebook('darwin');
   assert.equal(M.instructions('darwin'), M.instructions('darwin'));
-  assert.match(text, /程序自动开一个和执行会话不同提供方的审查会话/); assert.match(text, /审查员的原话自动发回原执行会话返工/);
-  assert.match(text, /连续失败两次 held，先由队长决定，不再自动重试/); assert.match(text, /选不出审查者（同一提供方或额度用尽）时卡片停在 review 并写明原因/);
+  assert.match(text, /程序自动另起一个新的 Claude 审查会话（重要的用 Opus 5.5，简单的用 Sonnet 5.5/); assert.doesNotMatch(text, /不同提供方的审查会话/); assert.match(text, /审查员的原话自动发回原执行会话返工/);
+  assert.match(text, /连续失败两次 held，先由队长决定，不再自动重试/); assert.match(text, /选不出审查者（Claude 各席位额度都用尽或出错）时卡片停在 review 并写明原因/);
   assert.match(text, /16\. 重要的活完成后，派 Gemini 3\.8 Flash/);
   assert.doesNotMatch(text, /auto-review-|review_round/);
 });

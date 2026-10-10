@@ -156,6 +156,34 @@ test('heartbeat claims external start edges exactly once, ignores ordinary edits
   store.dispatched({ id: manual.id, key: manualKey }); heartbeat.scan();
   assert.equal(starts.length, 2); assert.equal(store.list().find((c) => c.id === manual.id).dispatch_claim.key, manualKey);
 });
+test('the program never moves a todo, 需要你 or held card into 进行中 or opens a dispatcher for it; only a start asked for on the board does, and it leaves its own mark', (t) => {
+  // The 10-10 00:29 cards: the trail showed one write that changed status together with start_previous_status 'todo'.
+  // That signature is the board's own start (claim on a todo card). The heartbeat only ever claims a card that is already doing.
+  const { store, add, root } = fixture(t);
+  const todo = add({ title: 'todo' }), asked = add({ title: 'needs you' });
+  store.move({ id: asked.id, status: 'needs_user' });
+  const held = add({ title: 'held' });
+  const file = path.join(root, 'tasks', '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  Object.assign(doc.cards.find((c) => c.id === held.id), { status: 'doing', flag: 'held', consecutive_failures: 2 }); fs.writeFileSync(file, JSON.stringify(doc));
+  const before = store.list().map((c) => [c.id, c.status, c.flag]);
+  const starts = [], logs = [];
+  const heartbeat = new TaskHeartbeat(store, { onStart: (input) => starts.push(input), log: (line) => logs.push(line) });
+  for (let i = 0; i < 4; i++) heartbeat.scan();
+  assert.deepEqual(store.list().map((c) => [c.id, c.status, c.flag]), before, 'no card changed place');
+  assert.equal(store.list().find((c) => c.id === todo.id).status, 'todo');
+  assert.equal(store.list().find((c) => c.id === asked.id).status, 'needs_user');
+  assert.equal(starts.filter((s) => s.id !== held.id).length, 0, 'no dispatcher for a todo or 需要你 card');
+  assert.equal(starts.some((s) => s.id === held.id), false, 'no dispatcher for a held card');
+  assert.equal(logs.length, 0);
+  // the user's own start moves a todo card to doing and records where it came from; the heartbeat's claim of a card
+  // someone else put into doing records 'doing'
+  const fromBoard = store.claim({ id: todo.id }).card;
+  assert.equal(fromBoard.status, 'doing'); assert.equal(fromBoard.start_previous_status, 'todo');
+  const external = add({ title: 'moved by another tool' });
+  store.move({ id: external.id, status: 'doing' });
+  heartbeat.scan();
+  assert.equal(store.list().find((c) => c.id === external.id).start_previous_status, 'doing');
+});
 test('external completion persists dependent unlocks in the shared JSON without starting those cards', (t) => {
   const { store, add, root } = fixture(t); const a = add(), b = add({ project: 'dependent', depends_on: [a.id] });
   const file = path.join(root, 'tasks', '测试项目.json'); const doc = JSON.parse(fs.readFileSync(file));

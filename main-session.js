@@ -312,6 +312,23 @@
     const checked = M.checkCommand(plan.cmd);
     return checked.error || !checked.cmd ? { ...plan, action: 'queue', reason: 'out', held: 'out', note: '', cmd: plan.cmd } : { ...plan, cmd: checked.cmd };
   }
+  // Claude seats an automatic chooser (the reviewer of a --verify card, the board's dispatcher) may
+  // use, in the order a new session would take them: the active seat first. A seat that is signed
+  // out is left out; one whose login cannot be read stays, and its quota reading decides.
+  async function claudeSeatChoices() {
+    const seats = window.QuotaCore.claudeSeats ? window.QuotaCore.claudeSeats(host.config.claudeSeats) : [];
+    let infos = [];
+    try { infos = (await window.deck.claudeSeats?.()) || []; } catch (_) {}
+    const active = host.config.activeClaudeSeatId;
+    return seats.filter((s) => infos.find((i) => i.id === s.id)?.loggedIn !== false)
+      .map((s) => ({ id: s.id, label: s.name || s.id, configDir: s.configDir }))
+      .sort((a, b) => (b.id === active) - (a.id === active));
+  }
+  // The same passive reading as the `quota` command (QuotaCore.commandStance): out, error and
+  // unknown (old or missing) are never taken for "has quota".
+  const commandStance = (cmd, seatId) => window.QuotaCore.commandStance(host.config.quotas, cmd, host.config.claudeSeats, seatId || host.config.activeClaudeSeatId);
+  // A seat other than the one a new session defaults to travels with the session, as `new --seat` does.
+  const seatMeta = (seat) => seat && seat.id !== host.config.activeClaudeSeatId ? { claudeSeatId: seat.id, claudeConfigDir: seat.configDir } : {};
   function notedTitle(title, note) { return window.QuotaCore.quotaFallbackTitle(title, note); }
   function launchMeta(metadata, plan) {
     const meta = { ...(metadata || {}) };
@@ -369,10 +386,21 @@
       return { card, dispatcher: 'captain' };
     }
     if (freeSlots() <= 0) { boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度会话无空位，请队长安排。`); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
-    const cmd = window.BoardCore.commandForAgent('agy');
-    const plan = quotaPlan(cmd);
+    // Gemini only while a fresh reading says it has room; out, stale or erroring: a Claude Haiku
+    // session. When nothing is usable the Claude one is still the choice, and the ordinary quota
+    // queue below holds it until the account has room again.
+    const AV = window.AutoVerifyCore;
+    const seats = await claudeSeatChoices();
+    const picked = AV.pickDispatcher({ commandOf: (c) => c.command || window.BoardCore.commandForAgent(c.agent), seats, stanceOf: commandStance });
+    const fallback = AV.DISPATCHERS.find((c) => c.command);
+    const choice = picked.cmd ? picked : { candidate: fallback, cmd: fallback.command, seat: null };
+    const checkedDispatcher = M.checkCommand(choice.cmd);
+    if (checkedDispatcher.error) { boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度会话的命令不能用（${checkedDispatcher.error}），请队长安排。`); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
+    const cmd = checkedDispatcher.cmd;
+    const seatInfo = seatMeta(choice.seat);
+    const plan = quotaPlan(cmd, seatInfo.claudeSeatId);
     if (plan.action === 'queue') {
-      const waiting = await boardRequest('dispatchWait', { id, key, message: quotaQueueText(plan, card.title, true) });
+      const waiting = await boardRequest('dispatchWait', { id, key, message: picked.reason ? `${quotaQueueText(plan, card.title, true)}（${picked.reason}）` : quotaQueueText(plan, card.title, true) });
       if (!waiting.ignored) quotaStarts.set(id, { id, key });
       return { card: waiting.card, queued: true };
     }
@@ -382,8 +410,10 @@
     if (reserved.ignored) return { card: reserved.card, ignored: true };
     const cli = M.boardCli(host.platform);
     const prompt = M.dispatcherInstructions(host.platform, card);
-    const title = plan.action === 'switch' ? notedTitle('调度：' + card.title, plan.note) : '调度：' + card.title;
-    const col = host.createSession({ id: sessionId, title, displayTitle: title, cmd: plan.cmd, captainCrew: true, project: card.project, dispatcherCardId: id }, true);
+    // The title names what really runs (the card's own title may end with the executor's make).
+    const plain = AV.reviewTitle(card.title, plan.action === 'switch' ? plan.to : choice.candidate.label, 120, '调度：');
+    const title = plan.action === 'switch' ? notedTitle(plain, plan.note) : plain;
+    const col = host.createSession({ id: sessionId, title, displayTitle: title, cmd: plan.cmd, captainCrew: true, project: card.project, dispatcherCardId: id, ...(plan.action === 'switch' && plan.provider !== 'Claude' ? {} : seatInfo) }, true);
     if (plan.action === 'switch') announceSwitch(col, title, plan);
     dispatch(col, prompt + `\n整理后用 ${cli} new --task-id ${id} --project ${JSON.stringify(card.project)} --title "标题" --task "整理后的任务" --agent … 派出去，然后 complete 说明派给谁。拿不准就 ask 交队长。`, title);
     await boardRequest('dispatched', { id, key });
@@ -478,28 +508,36 @@
       await boardRequest('reviewDispatched', { id, key: input.key });
       return { card, ignored: true };
     }
-    const picked = AV.pickReviewer({ executor: card.exec_receipt?.assignee, candidates: AV.CANDIDATES,
-      commandOf: (c) => c.command || window.BoardCore.commandForAgent(c.agent), quotaOut: (cmd) => !!commandQuota(cmd)?.out });
+    // A fresh Claude session of its own (user's rule of 2026-10-09): Opus 5.5, Sonnet 5.5 for a simple
+    // card, on the first seat whose quota reading says there is room. Nothing usable: the card stays in
+    // review with the reason and the Captain is told (reviewBlocked), never left waiting on a dead reviewer.
+    const seats = await claudeSeatChoices();
+    const picked = AV.pickReviewer({ card, receipt: card.exec_receipt, candidates: AV.CANDIDATES, seats, stanceOf: commandStance });
     const checked = picked.cmd ? M.checkCommand(picked.cmd) : null;
     if (!picked.cmd || checked.error) {
       await boardRequest('reviewBlocked', { id, key: input.key, reason: picked.reason || checked.error });
       return { card, blocked: true };
     }
     const executor = sessionById(card.exec_receipt?.session_id);
-    const title = window.BoardCore.cleanText('审查：' + card.title, 80).replace(/\s+/g, ' ');
-    const metadata = { project: card.project, reviews: executor ? [executor.id] : [], boardId: id, autoReviewRound: claim.round };
+    // the title says what really runs, not what the executor's card title was labelled
+    const title = AV.reviewTitle(window.BoardCore.cleanText(card.title, 200), picked.candidate.label).replace(/\s+/g, ' ');
+    const metadata = { project: card.project, reviews: executor ? [executor.id] : [], boardId: id, autoReviewRound: claim.round, ...seatMeta(picked.seat) };
     if (executor?.trustedCwd && executor.trustedCwd === executor.cwd) metadata.trustedCwd = executor.trustedCwd;
+    let held = null;
     const placed = await withQueue(async () => {
       const current = await findCard(id);
       if (state() !== s || !current || current.review_claim?.key !== input.key || current.review_claim.delivered ||
         current.status !== 'review' || current.review_round !== claim.round || current.review_session === true ||
         s.waitlist.some((w) => w.metadata?.boardId === id) || [...host.columns(), ...(host.config.archived || [])].some((c) => c.boardId === id && c.boardAttempt === attempt)) return false;
-      await placeSession(title, checked.cmd, executor?.cwd || '', attempt, AV.reviewPrompt({ card, receipt: card.exec_receipt }), metadata);
+      const result = await placeSession(title, checked.cmd, executor?.cwd || '', attempt, AV.reviewPrompt({ card, receipt: card.exec_receipt }), metadata);
+      // queued on the quota (the reading changed between the pick and now): say so, do not wait unseen
+      if (result.queued && result.plan?.action === 'queue') held = result.result;
       return true;
     });
     host.flushConfig?.();   // the queue entry is on disk before the claim is marked delivered
     await boardRequest('reviewDispatched', { id, key: input.key });
-    return placed ? { card, reviewer: picked.candidate.id } : { card, ignored: true };
+    if (held) boardNotice(`卡片 ${id}「${card.title}」的自动审查会话（${picked.candidate.label}）没能马上开：${held} 额度恢复前这一轮没有审查结论；不想等就 new --task-id ${id} --reviews ${executor?.id || '<执行会话>'} 另派一个 Claude 审查会话。`);
+    return placed ? { card, reviewer: picked.candidate.id, ...(picked.unverified ? { unverified: true } : {}) } : { card, ignored: true };
   }
   async function startReview(id, input) {
     try { return await runVerify('review', id, input, startReviewOnce); }
@@ -1597,6 +1635,13 @@
     if (task.boardId && !boardRecorded) {
       const type = receipt.failed ? 'failed' : receipt.question ? 'ask' : receipt.source === 'fallback' ? 'fallback' : 'complete';
       autoBoardEvent(task, type, receipt.failed || receipt.question || receipt.summary, receipt.source || 'automatic');
+    }
+    // An automatic reviewer that could not run (quota, crash, never started) is not a verdict and not a
+    // finding. The reading that picked it was wrong or has changed, so the Captain is told at once, with
+    // the way out, rather than finding the card with no review.
+    const reviewCol = receipt.failed && receipt.source !== 'command' && task.boardId ? host.columns().find((c) => c.id === task.colId) : null;
+    if (reviewCol && window.AutoVerifyCore?.isReviewAttempt(reviewCol.boardAttempt)) {
+      boardNotice(`卡片 ${task.boardId} 的自动审查会话「${reviewCol.displayTitle || reviewCol.title || reviewCol.id}」没能跑起来（${receipt.source === 'quota' ? '额度用尽' : '会话出错或退出'}）：${String(receipt.failed).split('\n')[0].slice(0, 160)}。这一轮审查没有结论。不用等它：new --task-id ${task.boardId} --reviews <执行会话> --command "claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high"（简单的卡用 claude-sonnet-5-5；可加 --seat 换有额度的席位）另派一个，旧会话可归档。`);
     }
     const dispatcher = host.columns().find((c) => c.id === task.colId && c.dispatcherCardId);
     const delegatedQueue = dispatcher && state()?.waitlist.some((w) => w.metadata?.boardId === dispatcher.dispatcherCardId);
