@@ -11,7 +11,8 @@ const crypto = require('node:crypto');
 
 const FilePreview = require('../../file-preview-core');
 const BatteryCore = require('../../battery-core');
-const { todoRequest, TODO_BASE_KEYS } = require('../../mobile-web');
+const { todoRequest, taskActionRequest, TODO_BASE_KEYS } = require('../../mobile-web');
+const HubCore = require('../../mobile-web/hub/core');
 
 const HUB = path.join(__dirname, '..', '..', 'mobile-web', 'hub');
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/releases.js': ['releases.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
@@ -39,12 +40,13 @@ function readJson(req) {
 // The list form answers like a build before part clocks (no baseKeys).
 // todoStore: a real TodoStore answering exactly as this build's mobile-web.js does.
 // files: { home, … } for file-preview-core, the real rules over a stand-in home folder; null is a build without api/file.
-async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', battery = null, sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], todoStore = null, plainCookie = false, files = null, progress = null }) {
+// taskActions: false plays a build without POST api/tasks (马上派人做 / 排到最前).
+async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', taskActions = true, battery = null, sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], todoStore = null, plainCookie = false, files = null, progress = null }) {
   // plainCookie: WebKit refuses Secure cookies over http, even on localhost.
   const base = `/${id}/`, cookieName = plainCookie ? `agentdeck_${id}` : `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
   const machine = { id, label, mode: 'online', token: crypto.randomBytes(32).toString('hex'), devices: new Set(), failures: 0, bannedUntil: 0,
-    requests: [], messages: [], sessions, cards, outputs, quota, files, progress, fileReads: [], boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoStore, todoWrites: [], todoRefuse: '', busy: false, queued: [],
+    requests: [], messages: [], taskWrites: [], sessions, cards, outputs, quota, files, progress, fileReads: [], boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoStore, todoWrites: [], todoRefuse: '', busy: false, queued: [],
     releaseQueued() { machine.busy = false; machine.captain.turns.push(...machine.queued.splice(0)); },
     captain: captain ? { id: `${id}-captain`, title: '队长', status: (sessions.find((s) => s.isMain) || { status: 'idle' }).status, turns } : null,
     setMode(mode) { machine.mode = mode; },
@@ -92,7 +94,7 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     if (machine.mode === 'legacy') return json(res, 401, { error: 'Unauthorized.' });
     if (req.method === 'POST' && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Same origin required.' });
     // Unauthenticated capability probe; fixed, non-sensitive fields only.
-    if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath', ...(machine.todos || machine.todoStore ? ['todos'] : []), ...(machine.files ? ['files'] : [])], machine: { id, label, platform }, appVersion });
+    if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath', ...(machine.todos || machine.todoStore ? ['todos'] : []), ...(machine.files ? ['files'] : []), ...(taskActions ? ['task-actions'] : [])], machine: { id, label, platform }, appVersion });
     if (req.method === 'POST' && url.pathname === '/login') {
       const body = await readJson(req);
       const ban = Math.ceil((machine.bannedUntil - Date.now()) / 1000);
@@ -182,6 +184,31 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       machine.relay.job = { id: crypto.randomBytes(6).toString('hex'), status: 'switching', fromId: state.currentId, fromName: name(state.seats.find((s) => s.current) || { name: '' }),
         targetId: seat.id, targetName: name(seat), startedAt: Date.now(), finishedAt: null, error: '' };
       return json(res, 200, { started: true, id: machine.relay.job.id });
+    }
+    // 马上派人做 / 排到最前, like mobile-web.js + the desktop: the same refusals (HubCore rules), a request
+    // handed to the Captain when there is one, else waiting; one 下一个做 card. The board then reads again.
+    if (req.method === 'POST' && url.pathname === '/api/tasks' && taskActions) {
+      const body = await readJson(req);
+      machine.taskWrites.push(body);
+      const input = body && taskActionRequest(body);
+      if (!input) return json(res, 400, { error: 'Invalid task request.' });
+      const card = machine.cards.find((c) => c.id === input.id);
+      if (!card) return json(res, 409, { error: '这张卡已经不在看板上了。' });
+      const now = new Date().toISOString();
+      if (input.op === 'dispatch-now') {
+        const state = HubCore.dispatchNowState(card);
+        if (state.pending) return json(res, 200, { ok: true, outcome: 'pending', card: { id: card.id, title: card.title } });
+        if (!state.enabled) return json(res, 409, { error: state.reason });
+        Object.assign(card, { dispatch_now: { at: now, host: hostname, delivered: !!machine.captain }, updated: now });
+        machine.setCards(machine.cards);
+        return json(res, 200, { ok: true, outcome: machine.captain ? 'delivered' : 'waiting', card: { id: card.id, title: card.title } });
+      }
+      const state = HubCore.nextUpState(card);
+      if (!state.enabled && !state.on) return json(res, 409, { error: state.reason });
+      for (const other of machine.cards) if (other !== card) delete other.next_up;
+      Object.assign(card, { important: true, next_up: card.next_up || now, updated: now });
+      machine.setCards(machine.cards);
+      return json(res, 200, { ok: true, outcome: 'next', card: { id: card.id, title: card.title } });
     }
     if (req.method === 'GET' && url.pathname === '/api/todos' && machine.todoStore) return json(res, 200, { ...machine.todoStore.phone(), baseKeys: TODO_BASE_KEYS });
     if (req.method === 'POST' && url.pathname === '/api/todos' && machine.todoStore) {

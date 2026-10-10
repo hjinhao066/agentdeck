@@ -3518,6 +3518,8 @@ button.tbv-lane-n b { color: var(--tbv-need); }
 .tbv-lane-prio { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 7px 0 5px; border-radius: 9px; background: var(--prio-soft); color: var(--prio); font-family: var(--mono); font-size: 12px; font-weight: 700; line-height: 18px; }
 .tbv-lane-prio svg { width: 12px; height: 12px; stroke-width: 2.2; }
 .tbv-d-crumb .tbv-prio { margin-top: 0; }
+/* 下一个做: the one card 队长 sends out next, a ring on top of the 高优先级 edge */
+.tbv-card[data-next="true"], .tbv-card[data-next="true"]:hover { box-shadow: var(--tbv-shadow), inset 3px 0 0 var(--prio), inset 0 0 0 1px color-mix(in srgb, var(--prio) 55%, transparent), 0 0 24px -9px color-mix(in srgb, var(--prio) 60%, transparent); }
 .tbv-d-prio[aria-pressed="true"] { color: var(--prio); background: var(--prio-soft); }
 .tbv-d-prio[aria-pressed="true"]:hover:not(:disabled) { color: var(--prio); background: color-mix(in srgb, var(--prio) 24%, transparent); }
 .tbv-d-prio[aria-pressed="false"] svg path { fill: none; }
@@ -3652,6 +3654,26 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
 .tbv-d-moves button[data-status="done"] { --c: var(--tbv-done); --c-lit: var(--tbv-done-lit); }
 .tbv-d-moves button:hover { background: var(--tbv-chip-hi); color: var(--tbv-ink); }
 .tbv-d-moves button.active { color: var(--tbv-ink); font-weight: 600; border-color: color-mix(in srgb, var(--c-lit) 70%, transparent); background: color-mix(in srgb, var(--c-lit) 16%, transparent); cursor: default; }
+/* 马上派人做 (main) and 排到最前 (second) over 移到. A grey one says why underneath. */
+.tbv-d-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tbv-act {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 14px 0 11px; border-radius: 10px;
+  font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer;
+}
+.tbv-act-ico { display: inline-flex; width: 15px; height: 15px; }
+.tbv-act-ico svg { width: 15px; height: 15px; }
+.tbv-act-now { flex: 1 1 auto; border: 0; background: var(--tbv-cta); color: var(--tbv-cta-ink); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 8px 18px -8px rgba(98, 104, 240, .8); }
+.tbv-act-now:hover:not(:disabled) { filter: brightness(1.1); }
+.tbv-act-next { flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--prio) 55%, transparent); background: var(--prio-soft); color: var(--prio); }
+.tbv-act-next:hover:not(:disabled) { background: color-mix(in srgb, var(--prio) 22%, transparent); }
+.tbv-act-next[aria-pressed="true"] { background: var(--prio); color: var(--prio-ink); border-color: var(--prio); }
+.tbv-act:disabled { cursor: default; box-shadow: none; filter: none; }
+.tbv-act-now:disabled { background: var(--tbv-chip); color: var(--tbv-ink-3); box-shadow: inset 0 0 0 1px var(--tbv-rim); }
+.tbv-act-next:disabled:not([aria-pressed="true"]) { background: transparent; color: var(--tbv-ink-3); border-color: var(--tbv-rim); }
+.tbv-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tbv-d-act-why { margin: 0; font-size: 12px; line-height: 1.5; color: var(--tbv-ink-2); }
+.tbv-d-act-why.pending::before { content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 7px 1px 1px; border-radius: 50%; background: var(--prio); vertical-align: middle; }
+.tbv-d-who-name.asked { color: var(--prio); font-weight: 600; }
 .tbv-d-meta { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; color: var(--tbv-ink-3); font-variant-numeric: tabular-nums; }
 .tbv-d-meta span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 

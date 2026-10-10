@@ -231,9 +231,10 @@ test('task board: the mark, the order, the group count, the drawer toggle and th
   await page.locator('.tbv-card[data-card-id="legacy"]').click();
   const toggle = page.locator('.tbv-d-prio');
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-  await expect(toggle).toHaveAttribute('aria-label', '标为高优先级（排到最前，队长优先安排）');
+  await expect(toggle).toHaveAttribute('aria-label', '标为高优先级');
   const button = await toggle.evaluate((n) => ({ title: n.title, text: n.textContent.trim(), svg: !!n.querySelector('svg'), w: n.getBoundingClientRect().width, h: n.getBoundingClientRect().height }));
-  expect(button.title).toBe('标为高优先级（排到最前，队长优先安排）'); expect(button.text).toBe(''); expect(button.svg).toBe(true);
+  // the tooltip also says how the flag differs from 排到最前 (board-dispatch-now.spec.js)
+  expect(button.title).toMatch(/^标为高优先级\n高优先级可以标好几张/); expect(button.text).toBe(''); expect(button.svg).toBe(true);
   expect(button.w).toBeGreaterThanOrEqual(28); expect(button.h).toBeGreaterThanOrEqual(28);
   await toggle.click();
   await expect.poll(() => readCard('legacy').important).toBe(true);

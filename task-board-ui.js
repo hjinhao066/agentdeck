@@ -31,7 +31,13 @@
     copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
     check: svg('<path d="m5 12 5 5 9-10"/>'),
     flag: svg('<path d="M5.5 21V4"/><path d="M5.5 4.6h12l-2.7 4 2.7 4h-12z" fill="currentColor"/>'),
+    // 马上派人做: a bolt (now); 排到最前 / 下一个做: an arrow up to a line (to the top)
+    now: svg('<path d="M13 2.8 5 13.4h6.2L10.6 21.2 19 10.4h-6.3z" fill="currentColor" stroke-width="1.4"/>'),
+    top: svg('<path d="M5 4h14"/><path d="M12 20V8.5"/><path d="m7 13 5-5 5 5"/>'),
   };
+  // The flag and 排到最前 side by side: what each one does.
+  const FLAG_TIP = '高优先级可以标好几张：都排在普通卡前面，队长优先安排。\n「排到最前」只给一张：排在所有卡最前面，队长下一个就派它。';
+  const NEXT_TIP = '下一个做：你点了「排到最前」，队长下一个就派它';
   // The 高优先级 mark: a flag with its own colour, never a status colour. An
   // unfinished card wears it solid with a short label; a finished one keeps a quiet outline.
   const PRIORITY_TIP = '高优先级：你点名要优先做的事，排在同一栏最前面';
@@ -211,7 +217,13 @@
     const [state, stateLabel] = dotState(c);
     // The dot only tells whether a doing card is really being worked on; the column already names every other status.
     if (c.status === 'doing') { const dot = el('i', 'tbv-state ' + state); dot.title = stateLabel; row.append(dot); node.dataset.run = state; }
-    if (item.high) { row.append(priorityMark('tbv-prio', item.urgent, item.urgent ? '高优' : '')); if (item.urgent) node.dataset.priority = 'high'; }
+    if (item.next) {
+      // one mark: 下一个做 already says it is first
+      const m = el('span', 'tbv-prio tbv-next');
+      m.innerHTML = ICON.top; m.append(el('span', 'tbv-prio-text', '下一个做'));
+      m.setAttribute('role', 'img'); m.setAttribute('aria-label', '下一个做'); m.title = NEXT_TIP;
+      row.append(m); node.dataset.priority = 'high'; node.dataset.next = 'true';
+    } else if (item.high) { row.append(priorityMark('tbv-prio', item.urgent, item.urgent ? '高优' : '')); if (item.urgent) node.dataset.priority = 'high'; }
     row.append(el('h3', 'tbv-title', c.title));
     if (c.flag === 'quota') row.append(el('span', 'tbv-tag failed', U.flagText(c)));
     if (c.flag === 'failed') row.append(el('span', 'tbv-tag failed', '失败'));
@@ -243,8 +255,8 @@
     if (c.status === 'needs_user') mark('tbv-beacon');
     const session = c.session_id ? host.session(c.session_id) : null;
     const who = session ? session.label : U.ownerLabel(c, null);
-    node.title = [c.title, item.urgent ? '高优先级' : '', news !== item.waitLabel ? news : '', item.waitLabel, `${who}${U.modelLabel(c) ? ' · ' + U.modelLabel(c) : ''}`, c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', '点开看详情；拖动或 Alt+方向键 移动'].filter(Boolean).join('\n');
-    node.setAttribute('aria-label', `${c.title}，${item.urgent ? '高优先级，' : ''}${U.labelOf(c.status)}${c.flag === 'failed' ? '，失败' : ''}${c.status === 'needs_user' ? '，' + (item.question || '队长还没把问题整理出来') : ''}。回车看详情，Alt 加方向键移动`);
+    node.title = [c.title, item.next ? '下一个做' : item.urgent ? '高优先级' : '', news !== item.waitLabel ? news : '', item.waitLabel, `${who}${U.modelLabel(c) ? ' · ' + U.modelLabel(c) : ''}`, c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', '点开看详情；拖动或 Alt+方向键 移动'].filter(Boolean).join('\n');
+    node.setAttribute('aria-label', `${c.title}，${item.next ? '下一个做，' : item.urgent ? '高优先级，' : ''}${U.labelOf(c.status)}${c.flag === 'failed' ? '，失败' : ''}${c.status === 'needs_user' ? '，' + (item.question || '队长还没把问题整理出来') : ''}。回车看详情，Alt 加方向键移动`);
     node.addEventListener('click', () => { if (suppressClick) return; openDetail(c.id); });
     node.addEventListener('keydown', (e) => cardKey(e, item, lane));
     node.addEventListener('pointerdown', (e) => startCardDrag(e, node, item, lane));
@@ -604,7 +616,7 @@
     if (at < 0 || at >= ids.length) { focusAfter = null; return; }
     // 高优先级 cards lead the column: a card cannot be moved across that line.
     const column = lane.columns.find((col) => col.key === c.status).cards;
-    if (column[at].urgent !== item.urgent) { focusAfter = null; announce('高优先级的卡片固定排在这一栏最前面'); return; }
+    if (column[at].urgent !== item.urgent || column[at].next !== item.next) { focusAfter = null; announce(item.next || column[at].next ? '「下一个做」的卡片固定排在这一栏最前面' : '高优先级的卡片固定排在这一栏最前面'); return; }
     if (at >= CELL_LIMIT) expanded.add(lane.key + '/' + c.status);
     applyMove(c, c.status, e.key === 'ArrowUp' ? { before: ids[at] } : { after: ids[at] });
   }
@@ -783,6 +795,55 @@
     focusAfter = '.tbv-d-prio';
     await refresh();
   }
+  // 马上派人做 / 排到最前: the request goes through MainSession; the drawer redraws from the board.
+  async function dispatchNow(card) {
+    try {
+      const { outcome } = await api().dispatchNow(card.id);
+      const said = outcome === 'waiting' ? '这台电脑没有队长，打开队长后才会派' : outcome === 'pending' ? '已经交给队长了，等它派人' : '已交给队长，马上派人';
+      host.showToast(said); announce(`「${card.title}」${said}`);
+    } catch (error) { host.showToast('没交出去：' + friendly(error)); }
+    detailKey = ''; focusAfter = '.tbv-act-now:enabled, .tbv-act-next:enabled, .tbv-d-close';
+    await refresh();
+  }
+  async function nextUp(card) {
+    try {
+      await api().nextUp(card.id);
+      const said = window.MainSession && window.MainSession.exists() ? '已排到最前，队长下一个派它' : '已排到最前；打开队长后，它是下一个';
+      host.showToast(said); announce(`「${card.title}」${said}`);
+    } catch (error) { host.showToast('没排上：' + friendly(error)); }
+    detailKey = ''; focusAfter = '.tbv-act-next:enabled, .tbv-act-now:enabled, .tbv-d-close';
+    await refresh();
+  }
+  // The two buttons over 移到, each grey with its reason when it cannot be used.
+  function actions(c) {
+    const Hub = window.HubCore;
+    const now = Hub.dispatchNowState(c), next = Hub.nextUpState(c);
+    const box = el('section', 'tbv-d-section tbv-d-act');
+    box.setAttribute('aria-label', '马上安排');
+    const row = el('div', 'tbv-d-actions');
+    const button = (cls, icon, text, state, tip, run) => {
+      const b = el('button', 'tbv-act ' + cls);
+      b.type = 'button';
+      const i = el('i', 'tbv-act-ico'); i.innerHTML = icon; i.setAttribute('aria-hidden', 'true');
+      b.append(i, el('span', null, text));
+      b.disabled = !state.enabled;
+      b.title = state.enabled ? tip : state.reason;
+      b.onclick = () => { if (b.disabled) return; b.disabled = true; run(); };
+      return b;
+    };
+    const go = button('tbv-act-now', ICON.now, now.pending ? '已交给队长' : '马上派人做', now, '交给队长，请它马上派一个队员来做这张卡', () => dispatchNow(c));
+    const top = button('tbv-act-next', ICON.top, next.on ? '下一个做' : '排到最前', next, '设成最高优先级，排到待办最前面，队长下一个就派它', () => nextUp(c));
+    top.setAttribute('aria-pressed', String(!!next.on));
+    row.append(go, top);
+    box.append(row);
+    // the reason a grey 马上派人做 gives, in words on the page (not only in its tooltip)
+    if (!now.enabled) {
+      const why = el('p', 'tbv-d-act-why' + (now.pending ? ' pending' : ''), now.reason);
+      why.id = 'tbv-act-why'; go.setAttribute('aria-describedby', why.id);
+      box.append(why);
+    }
+    return box;
+  }
   async function sendAnswer(card, box, button) {
     const text = box.value.trim();
     if (!text) { box.focus(); return; }
@@ -830,7 +891,8 @@
     const high = U.isHigh(c);
     if (high) crumb.append(priorityMark('tbv-prio', U.isUrgent(c), '高优先级'));
     // One click sets or clears the mark; the flag is lit while it is set.
-    const prio = iconButton('tbv-d-prio', ICON.flag, high ? '取消高优先级' : '标为高优先级（排到最前，队长优先安排）');
+    const prio = iconButton('tbv-d-prio', ICON.flag, high ? '取消高优先级' : '标为高优先级');
+    prio.title = (high ? '取消高优先级' : '标为高优先级') + '\n' + FLAG_TIP;
     prio.setAttribute('aria-pressed', String(high));
     prio.onclick = () => { prio.disabled = true; setPriority(c, !high); };
     const close = iconButton('tbv-d-close', ICON.close, '关闭详情 (Esc)');
@@ -861,7 +923,8 @@
     const who = el('div', 'tbv-d-who');
     if (session && session.col) { const badge = el('span'); host.renderBadge(badge, session.col); if (!badge.hidden) who.append(badge); }
     else if (U.modelLabel(c)) who.append(el('span', 'tbv-model', U.modelLabel(c)));
-    who.append(el('span', 'tbv-d-who-name', session ? session.label : U.ownerLabel(c, null)));
+    const asked = !session || !session.col ? U.dispatchNote(c) : '';
+    who.append(el('span', 'tbv-d-who-name' + (asked ? ' asked' : ''), asked || (session ? session.label : U.ownerLabel(c, null))));
     if (session) {
       const go = iconButton('tbv-d-open', ICON.terminal, `打开「${session.label}」的终端`);
       go.onclick = () => host.openSession(c.session_id);
@@ -891,7 +954,7 @@
       b.onclick = () => { if (!on) applyMove(c, col.key, null); };
       moves.append(b);
     });
-    body.append(section('移到', moves));
+    body.append(actions(c), section('移到', moves));
 
     const meta = el('div', 'tbv-d-meta');
     meta.append(el('span', null, [c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', c.rework_count > 0 ? `返工 ${c.rework_count} 次` : '', '编号 ' + c.id].filter(Boolean).join(' · ')), copyButton(c.id, '复制卡片编号'));

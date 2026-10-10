@@ -30,6 +30,8 @@ Windows 使用相同的用户主目录布局，随现有 `~/.agents` 私有 git 
 | rework_count | 累计验收驳回次数 |
 | created / updated | ISO 日期；updated 可作为编辑的乐观并发版本 |
 | archived | boolean，归档不删除文件或卡片，依赖仍可引用完成卡 |
+| dispatch_now | 可选。用户点了「马上派人做」：`{at, host, delivered}`，`host` 是点的那台电脑（`os.hostname()`），`delivered` 表示已经交给那台电脑的队长。队长 `new --task-id` 绑上队员、或卡片完成时删掉。见「马上派人做、排到最前」 |
+| next_up | 可选 ISO 时间。用户点了「排到最前」：这张待办是「下一个做」。全看板同时只有一张；离开待办、改回普通优先级、绑上队员时删掉 |
 | important | 可选 boolean，默认 false。**这就是「高优先级」**：用户点名要优先、要立刻开始的卡片（只有普通和高优先级两档）。没有这个字段的旧卡片按普通处理。除了下面「高优先级」一节的标记和排序，它保留原有作用：这类卡片交队长调度，不交便宜调度员。与 verify 独立 |
 
 程序还保存 `attempt_id`、`review_session`、`attempt_closed`、`last_event`、
@@ -71,6 +73,8 @@ await TaskBoard.startCard(card.id); // 显式开始，按 dispatcher 设置调�
 await TaskBoard.requestStart(card.id); // 拖到进行中：与 startCard 使用同一派活路径
 await TaskBoard.reorder(card.id, { before: otherCard.id }); // 同项目排序，也可 after；无锚点放末尾
 await TaskBoard.answer(card.id, '用户的答案'); // 回答需要你，交给队长继续推进
+await TaskBoard.dispatchNow(card.id); // 马上派人做：交给队长，请它立刻派一个队员
+await TaskBoard.nextUp(card.id);      // 排到最前：队长下一个就派它
 TaskBoard.settings();              // {dispatcher:'gemini'}
 TaskBoard.settings('captain');     // 持久化到本机 config.json
 TaskBoard.autoVerify();            // true；默认开启自动验收
@@ -84,6 +88,8 @@ unsubscribe();
 | `list(filter = {})` | 可选 `project`、`status`、`archived`、`priority`（`high` 或 `normal`）；`archived: true` 表示包含归档卡，并非只返回归档卡 | `Promise<Card[]>`，按 project/order/id 排序 |
 | `add(input)` | 必填 `project`、非空 `title`；可选 `id`、`detail`（默认空）、`depends_on`（默认空数组）、`verify`、`important`（均默认 false）、`priority`（`high` 等同 `important: true`，给了就以它为准） | `Promise<{card, notices}>`；创建 todo 卡，order 为本项目最大值 + 1，有未完成前置时 flag=blocked |
 | `setPriority(id, level)` | 用户在界面上点的入口。id 是卡片、会话或排队项；level 为 `high` 或 `normal` | `Promise<string>`（一句结果）。有卡片就改卡片；把还在待办的卡片标成高优先级时给队长发一条看板通知 |
+| `dispatchNow(id)` | 用户点「马上派人做」。拒绝已完成、有人在做、等你回答、前置没做完的卡（错误就是给用户看的原因） | `Promise<{card, outcome}>`，outcome 为 `delivered`（队长已收到）、`waiting`（这台电脑没有队长，等队长打开后再交）、`pending`（之前点过，还在等） |
+| `nextUp(id)` | 用户点「排到最前」。只接受待办卡 | `Promise<{card, outcome: 'next'}>`；设成高优先级、排到项目最前、成为唯一的「下一个做」，告诉队长一次 |
 | `update(id, patch, updated)` | patch 仅含 title/detail/order/depends_on/verify/important；updated 必填 | `Promise<{card, notices}>` |
 | `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；移入 doing 时保留未归档会话作为占用标记并检查前置；其他移动清除绑定 |
 | `archiveDone(project?)` | 省略 project 则归档全部项目中未归档的 done 卡 | `Promise<{cards, notices}>`；可重复调用 |
@@ -152,7 +158,8 @@ ID 只接受 1–160 个 ASCII 字母、数字、下划线或连字符；标题�
 - 高优先级：未完成的高优先级卡片在标题前带实心蓝色旗标「高优」，卡片左边一条同色细边，并排在
   同一格的最前面（两类内部仍按拖动顺序）；项目标题栏显示「旗标 + 未完成的高优先级数量」，折叠时也看得到。
   已完成的只留一个不上色的小旗，不再前移。旗标有悬停提示和 `aria-label="高优先级"`。详情抽屉右上角的
-  旗形图标按钮（`aria-pressed`）点一下标记、再点取消。Alt+↑/↓ 和拖动不能把卡片移过两类之间的分界线。
+  旗形图标按钮（`aria-pressed`）点一下标记、再点取消；它的悬停提示写明和「排到最前」的区别（高优先级可以标好几张，
+  「排到最前」只给一张、队长下一个就派它）。Alt+↑/↓ 和拖动不能把卡片移过两类之间的分界线。
   蓝色只用于这个标记（`--prio`），不和干活中（黄）、失败/停在确认（红）、完成（绿）、额度（橙黄）混用。
 - 「需要你」提醒条：每个等待中的卡片是一个按钮，点开该卡详情；「处理」打开第一个。
 - 点卡片（或键盘 Enter）打开详情抽屉，显示完整说明、负责会话和相关文件；通过会话入口
@@ -300,6 +307,29 @@ CLI 没有 task update、settings 或 start 子命令；这些操作使用界面
 - **用户自己点**：把一张还在待办、没人做的卡片标成高优先级，会经回执通道告诉队长一次
   「用户在任务看板把卡片 X 标为高优先级…请立刻安排」；已经在做的卡片、取消标记、队长自己的命令都不发通知。
 - **原有路由不变**：`important` 的卡片拖到进行中仍然交队长调度，不交便宜调度员。
+
+## 马上派人做、排到最前
+
+卡片详情抽屉里「移到」那一行正上方有两个按钮；手机总台的任务卡片下面也有同样两个。
+
+- **马上派人做**（主按钮）：把卡交给队长，请它马上派一个队员。走和待办 @ai 交给队长同一条路：
+  队长的回执通道（`receipts --wait`）收到一条「【任务看板】用户要求马上派：标题（卡片 id）。项目：…。请读这张卡，
+  用 new --task-id … 派一个队员；已经派了就回一句派给了谁」，**不往队长输入框里打字**。卡片原地不动（还在待办），
+  卡上和详情「谁在做」写「已交给队长 · 等派人」；队长 `new --task-id` 绑上队员后这一行消失，「谁在做」换成队员名字。
+  卡片上的请求是 `dispatch_now`，先写进看板（看板写锁下标成已交出，两处同时交也只告诉队长一次），再进回执通道。
+  - 变灰并在按钮下面写明原因：已完成（「这张卡已经完成了，不用再派」）、已经有队员在做（绑着没结束、没失败的会话）、
+    等你回答、前置卡没做完、已经交给队长了。失败或额度停下的卡可以再点。看板文件对这些情况同样拒绝，界面只是先说出来。
+  - **这台电脑没有队长**：请求照样记在卡上，写「这台电脑没有队长，打开队长后才会派」；这台电脑一有队长（新建、
+    重启后回来、看板变化时巡检），就把等着的请求交给它，只交一次。别的电脑点的请求只由那台电脑的队长接。
+- **排到最前**（次按钮）：设成高优先级、排到这个项目的最前面，并成为全看板唯一的「下一个做」（再点另一张，标记移过去，
+  前一张保留高优先级）。卡片标题前是蓝色「下一个做」标记（代替「高优」，同一个蓝色），排在同一格所有高优先级卡前面；
+  队长收到一次「用户在任务看板把卡片 X 排到了最前…它是下一个要做的，有空位就先派它」。只有待办卡能点；
+  离开待办、改回普通优先级或绑上队员时标记消失。和右上角旗子的区别：旗子是「高优先级」，可以标好几张；
+  「排到最前」只给一张，队长下一个就派它。
+- **手机总台**：`POST api/tasks`，正文只能是 `{op: 'dispatch-now' | 'next-up', id}`，多一个字段就 400；
+  和发消息给队长同一套登录、Origin、Fetch Metadata 和 CSRF 校验，读完正文再校验一次。桌面端按自己的按钮同样处理，
+  拒绝时回 409 和一句原因。`api/info` 的 capabilities 带 `task-actions` 的电脑才显示按钮。手机先问还在等的请求所在的
+  电脑、再问领过这张卡的电脑、再问有队长的电脑。已完成的卡在手机上不显示这两个按钮。
 
 ## startCard、心跳与调度
 

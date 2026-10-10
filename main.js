@@ -156,9 +156,12 @@ handleMain('todos:request', (_event, payload) => {
 });
 let fleetClient = null;
 handleMain('task-board:request', (_event, payload) => {
-  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'priority', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched', 'noteWorktree'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'priority', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched', 'noteWorktree', 'dispatchNow', 'dispatchNowWaiting', 'dispatchNowDelivered', 'nextUp'].includes(payload.op)) throw new Error('Invalid task board operation.');
   const result = taskStore[payload.op](payload.input || {});
   if (fleetClient && payload.op !== 'list') fleetClient.noteResult(result);
+  // 马上派人做 / 排到最前 change what the open board shows at once (已交给队长, 下一个做); a
+  // missed or slow folder event must not leave the drawer on the old words.
+  if (['dispatchNow', 'dispatchNowDelivered', 'nextUp'].includes(payload.op) && !result.ignored) send('task-board:changed', {});
   return result;
 });
 handleMain('worktree:prepare', async (_event, payload) => {
@@ -1158,6 +1161,8 @@ app.whenReady().then(async () => {
     // 待我处理: the same list and actions as the desktop page.
     getAttention: () => requestMobile('attention'),
     writeAttention: (input) => requestMobile('attention-write', input),
+    // 马上派人做 / 排到最前 on a card: the desktop's own two buttons, nothing else.
+    writeTasks: (input) => requestMobile('board-action', input),
     // Like pasted screenshots, phone images reach the Captain as file paths.
     uploadDir: path.join(app.getPath('userData'), 'mobile-uploads'),
     // Files the phone may preview: what the conversation named, plus the report folders; this app's own data never.
