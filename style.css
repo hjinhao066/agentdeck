@@ -422,6 +422,19 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 [data-level="out"] > .quota-meter { background: color-mix(in srgb, var(--quota-out-fill) 22%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quota-out-fill) 40%, transparent); }
 .quota-item[data-state="exhausted"], .quota-item[data-auth-status="logged-out"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, transparent); }
 .quota-item[data-auth-status="logged-out"] [data-window="5h"] .quota-none { color: var(--quota-out); font-weight: 600; }
+/* A seat that is not fine (QuotaCore.seatHealth): yellow when the numbers are old or the last read
+   failed, red when it cannot work (damaged or expired login, signed out, used up). The name takes
+   the colour and a mark follows it: a triangle for yellow, a circle for red, so the shape alone
+   tells them apart. A fine row keeps its usual look. */
+.quota-health { display: inline-flex; flex: 0 0 auto; }
+.quota-health svg { width: 12px; height: 12px; }
+.quota-item[data-health="warn"] .quota-name { color: var(--quota-low); }
+.quota-item[data-health="bad"] .quota-name { color: var(--quota-out); font-weight: 600; }
+.quota-item[data-health="bad"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, transparent); }
+.qt-health { display: flex; align-items: flex-start; gap: 6px; font-weight: 600; }
+.qt-health .quota-health { margin-top: 3px; }
+.qt-health.warn { color: var(--quota-low); }
+.qt-health.bad { color: var(--quota-out); }
 /* Too narrow for the reset times: keep the two remaining percentages only. */
 @container (max-width: 215px) {
   .quota-cell .quota-reset { display: none; }

@@ -362,6 +362,16 @@ button.at-done-toggle { display: flex; align-items: center; gap: 8px; width: 100
 [data-level="out"] > .quota-meter { background: color-mix(in srgb, var(--quota-out-fill) 55%, transparent); }
 [data-level="none"] > .quota-meter::after { opacity: .45; }
 .quota-row-note { flex: 0 0 100%; padding: 3px 0 0 24px; font-size: 12px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+/* A seat that is not fine (QuotaCore.seatHealth): yellow for old numbers or a failed read, red when it
+   cannot work. The name takes the colour and a mark follows it (triangle / circle), so the shape
+   tells the two apart without colour; a fine seat stays as it was. */
+.quota-health { display: inline-flex; flex: none; }
+.quota-health svg { width: 14px; height: 14px; stroke-width: 2.1; }
+.quota-item[data-health="warn"] :is(.quota-name-text, .quota-health) { color: var(--quota-low); }
+.quota-item[data-health="bad"] :is(.quota-name-text, .quota-health) { color: var(--quota-out); }
+.quota-item[data-health="bad"] .quota-name-text { font-weight: 650; }
+.quota-item[data-health="bad"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, transparent); }
+.quota-item[data-health="bad"]:not([data-status="out"]) .quota-row-note { color: var(--quota-out); }
 .quota-detail { margin: 0; padding: 0 8px 6px 32px; }
 .detail-line { display: flex; align-items: baseline; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.45; }
 .detail-key { flex: none; width: 40px; color: var(--muted); }

@@ -5,6 +5,7 @@ const { promisify } = require('util');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const STAND_IN_CREDENTIAL = require('./fixtures/stand-in-credential');
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '../..');
@@ -91,7 +92,7 @@ test.beforeEach(async () => {
   home = path.join(profile, 'seats-home');
   for (const dir of ['.claude', '.claude-us']) {
     fs.mkdirSync(path.join(home, dir), { recursive: true });
-    fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}'); // existence stand-in; never a real credential
+    fs.writeFileSync(path.join(home, dir, '.credentials.json'), STAND_IN_CREDENTIAL); // stand-in; never a real credential
   }
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test', accountUuid: 'perpetual-cn-fixture' }, hasCompletedOnboarding: true }));
   fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test', accountUuid: 'perpetual-us-fixture' }, hasCompletedOnboarding: true }));
@@ -382,7 +383,7 @@ test('automatic rotation runs CN to US2 to US and wraps to recovered CN without 
   test.setTimeout(150000);
   const dir = path.join(home, '.claude-us2');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, '.credentials.json'), '{}');
+  fs.writeFileSync(path.join(dir, '.credentials.json'), STAND_IN_CREDENTIAL);
   fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us2@example.test', accountUuid: 'perpetual-us2-fixture' }, hasCompletedOnboarding: true }));
   await confirmedQuotas();
   await nativeUsage(CN);
