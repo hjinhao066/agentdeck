@@ -79,6 +79,8 @@
     if (machine.state !== 'online') return `${name} 还没连上，现在发不出去，${stay}`;
     const captain = machine.snap && machine.snap.captain;
     if (!captain || !captain.id || captain.status === 'unavailable') return `${name} 的队长还没启动，先在那台电脑上创建队长，${stay}`;
+    // Its terminal process ended (the desktop shows 已退出): nothing goes in until it is started again.
+    if (captain.status === 'exited') return `${name} 的队长终端已经退出，现在发不出去。先在那台电脑上重新启动队长，${stay}`;
     if (!machine.csrf) return `${name} 的安全校验还没就绪，刷新后再试。`;
     return '';
   }
@@ -91,6 +93,8 @@
     if (result.status === 502) return `${name} 离线，消息没有发出，也没有转给另一台电脑。`;
     if (result.status === 401) return `${name} 的登录已失效，消息没有发出。`;
     if (result.status === 403) return `${name} 的安全校验已过期，消息没有发出。刷新后再试。`;
+    // The computer's own reason (no 队长 running there), when it is written for people.
+    if (result.status === 409 && result.body && typeof result.body.error === 'string' && /[\u4e00-\u9fff]/.test(result.body.error)) return `${name} 没有接收这条消息：${result.body.error.slice(0, 160)}`;
     return `${name} 没有接收这条消息（HTTP ${result.status}）。`;
   }
 

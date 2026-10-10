@@ -3721,10 +3721,11 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
         const entry = terms.get(col.id), info = AgentInfo.resolveAgentInfo(col, entry);
         const task = [...(MainSession.state()?.tasks || [])].reverse().find((t) => t.colId === col.id);
         const active = entry?.alive && (entry.state === 'working' || entry.sendingPrompt || task?.status === 'working');
-        const failed = !active && (task?.status === 'failed' || col.lastReceipt?.failed || entry && !entry.alive);
-        const status = entry?.alive && ['input', 'quota'].includes(entry.state) ? entry.state
+        const failed = !active && (task?.status === 'failed' || col.lastReceipt?.failed);
+        // The desktop sidebar's words: a process that ended is 已退出, a finished terminal 已完成.
+        const status = entry && !entry.alive ? 'exited' : entry?.alive && ['input', 'quota'].includes(entry.state) ? entry.state
           : active ? 'working' : failed ? 'failed'
-          : ['queued', 'waiting', 'asking', 'done'].includes(task?.status) ? task.status : 'idle';
+          : ['queued', 'waiting', 'asking', 'done'].includes(task?.status) ? task.status : entry?.state === 'done' ? 'done' : 'idle';
         return { id: col.id, title: columnLabel(col), model: info.model || info.provider || '未知模型',
           status, isMain: !!col.isMain, project: String(col.project || '').slice(0, 120),
           receipt: String(col.lastReceipt?.summary || col.lastReceipt?.failed || '').slice(0, 1000) };

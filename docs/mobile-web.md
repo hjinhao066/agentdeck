@@ -142,7 +142,7 @@ AgentDeck 更新后，点标题栏右上角「重新加载页面」图标（带�
 | GET | `/api/tasks` | `{cards}` 只读看板 |
 | GET | `/api/output?id=…` | `{id,title,text}` 队员最近输出 |
 | GET | `/api/quota` | `{rows,version,now}` 只读额度行：服务端按白名单重建字段，账号统一打码为 `h***@example.com`，带 `source` 来源说明（至多 60 字，如 `Claude OAuth usage`），不含配置目录、token 或原始明细 |
-| POST | `/api/captain` | `{message, images?, deduplicationKey?}` + CSRF，`images` 为至多 6 个上传 id，接受后 `{queued:true}`。`deduplicationKey` 为 16–64 位字母数字 `_-`：同一设备同一 key 只交给队长一次，重复请求回第一次的结果（第一次还在排队就等它），第一次失败的 key 会被忘掉以便重试；同一 key 换了内容回 409。`api/info` 的 capabilities 带 `send-dedupe` |
+| POST | `/api/captain` | `{message, images?, deduplicationKey?}` + CSRF，`images` 为至多 6 个上传 id，接受后 `{queued:true}`。`deduplicationKey` 为 16–64 位字母数字 `_-`：同一设备同一 key 只交给队长一次，重复请求回第一次的结果（第一次还在排队就等它），第一次失败的 key 会被忘掉以便重试；同一 key 换了内容回 409。电脑上没有在运行的队长时回 409 `{error}`，`error` 是可直接给用户看的原因；其他失败仍是 500。`api/info` 的 capabilities 带 `send-dedupe` |
 | POST | `/api/upload` | 原始图片字节 + CSRF，返回 `{id}` |
 | GET | `/api/relay` | `{captainId,currentId,switching,seats,job,now}` 队长所在账号和可换的账号。`seats[]` 只有 `id,name,provider,account(已打码),current,selectable,reason,weekly,recoveryAt,cells`；`reason` 为 `current/login/onboarding/exhausted/low/unknown/''`，只有 `''` 和 `unknown` 可选。`job` 是手机发起的最近一次切换 `{id,status:switching|done|failed,fromId,fromName,targetId,targetName,startedAt,finishedAt,error}`，只在内存里，应用重启后为 `null` |
 | POST | `/api/relay` | `{seatId, expectCurrent?}` + CSRF，发起手动切换（桌面端 Relay 的同一条路径）。立即返回 `{started:true,id}`，结果轮询 GET。桌面端拒绝时 409 `{started:false,error}`，`error` 是可直接给用户看的原因，队长不变 |

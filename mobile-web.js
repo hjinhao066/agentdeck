@@ -647,11 +647,17 @@ class MobileWebServer {
       // and CSRF secret again immediately before queuing a command.
       const current = this.writeCredential(req, res, prefixed);
       if (!current) return;
-      if (key === undefined) { await this.sources.sendCaptain(body.message, files); return this.json(res, 200, { queued: true }); }
-      // The desktop gets a key of its own for this phone's key: main may give up on a slow renderer
-      // (5 s) that still queues the message later, and only the renderer can tell the retry of it.
-      const result = await this.sendOnce(current.hash + ':' + key, hash(JSON.stringify([body.message, images])), () => this.sources.sendCaptain(body.message, files, hash('desktop:' + current.hash + ':' + key)));
-      return result ? this.json(res, 200, result) : this.json(res, 409, { error: 'This deduplicationKey was used for a different message.' });
+      try {
+        if (key === undefined) { await this.sources.sendCaptain(body.message, files); return this.json(res, 200, { queued: true }); }
+        // The desktop gets a key of its own for this phone's key: main may give up on a slow renderer
+        // (5 s) that still queues the message later, and only the renderer can tell the retry of it.
+        const result = await this.sendOnce(current.hash + ':' + key, hash(JSON.stringify([body.message, images])), () => this.sources.sendCaptain(body.message, files, hash('desktop:' + current.hash + ':' + key)));
+        return result ? this.json(res, 200, result) : this.json(res, 409, { error: 'This deduplicationKey was used for a different message.' });
+      } catch (err) {
+        // No 队长 running on this computer (MainSession.sendMessage): the phone shows why. Anything else stays a 500.
+        if (!/^请先在 AgentDeck 创建并启动队长/.test(String(err?.message || ''))) throw err;
+        return this.json(res, 409, { error: '请先在 AgentDeck 创建并启动队长。' });
+      }
     }
     // 待我处理: the same login, Origin, Fetch Metadata and CSRF checks as a
     // message to the Captain, re-checked after the body is read. A reply goes
