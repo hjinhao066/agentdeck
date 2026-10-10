@@ -1108,7 +1108,7 @@ app.whenReady().then(async () => {
       return data;
     },
     getQuota: () => requestMobile('quota'),
-    sendCaptain: (message, images) => requestMobile('captain', { message, images }),
+    sendCaptain: (message, images, deduplicationKey) => requestMobile('captain', { message, images, ...(deduplicationKey ? { deduplicationKey } : {}) }),
     // Which account the Captain is on, and moving it to another: the desktop's own manual switch.
     getRelay: () => requestMobile('relay'),
     switchRelay: (input) => requestMobile('relay-switch', input),

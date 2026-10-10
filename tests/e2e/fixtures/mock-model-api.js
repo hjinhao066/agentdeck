@@ -4,7 +4,8 @@
 // Responses API (Codex) for the CLI to finish a turn. Nothing leaves the machine.
 const http = require('http');
 
-function start() {
+// delay(body): milliseconds to hold a Claude Messages answer back (a model still thinking).
+function start({ delay } = {}) {
   const requests = [];
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -20,18 +21,21 @@ function start() {
       };
       if (req.method === 'POST' && /\/v1\/messages(\?|$)/.test(req.url)) {
         const message = { id: 'msg_probe', type: 'message', role: 'assistant', model: body.model || 'probe', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+        const wait = typeof delay === 'function' ? Number(delay(body)) || 0 : 0;
         if (!body.stream) {
-          res.writeHead(200, { 'content-type': 'application/json' });
-          return res.end(JSON.stringify({ ...message, content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }));
+          return setTimeout(() => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ...message, content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }));
+          }, wait);
         }
-        return stream([
+        return setTimeout(() => stream([
           ['message_start', { message: { ...message, content: [], stop_reason: null } }],
           ['content_block_start', { index: 0, content_block: { type: 'text', text: '' } }],
           ['content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'probe reply' } }],
           ['content_block_stop', { index: 0 }],
           ['message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }],
           ['message_stop', {}],
-        ]);
+        ]), wait);
       }
       if (req.method === 'POST' && /\/responses(\?|$)/.test(req.url)) {
         return stream([

@@ -5,8 +5,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const vm = require('vm');
+const { spawn } = require('child_process');
 const B = require('../board-core');
 const M = require('../main-core');
 
@@ -50,7 +52,7 @@ function runtime() {
     config, platform: 'darwin', columns: () => columns, terms,
     saveConfig() {}, flushConfig() {}, showToast() {}, columnLabel: (c) => c.displayTitle || c.title || c.id,
     userComposing: () => false, isBackstage: (c) => !!c.captainCrew && !c.isMain, focusedId: () => '',
-    lastTurnTs: () => 0, dumpScreen: (term) => term.screen || '', agentInForeground: async () => true,
+    lastTurnTs: () => 0, dumpScreen: (term) => term.screen || '', agentInForeground: async () => true, quotaText: () => 'Claude 剩余 80%',
     createMain: (c) => { const col = { ...c, id: 'captain' }; return col; },
     createSession: (c) => {
       if (h.failOpen && c.title === h.failOpen) throw new Error('开不出来');
@@ -424,4 +426,112 @@ test('a sub-captain\'s stage report still replaces an unread automatic notice, a
   const later = await r.text('main-receipts', r.captain);
   assert.match(later, /做完了/);
   assert.doesNotMatch(later, /用哪个模板/);
+});
+
+// A child queued for a slot (memory, concurrency or quota) is the sub-captain's too: its ledger lists
+// it under 排队等空位, and the queued request carries its subCaptainId. After a restart nothing on
+// the sub-captain's screen keeps it busy (its receipts --wait is gone) and no child receipt waits yet.
+test('D: a sub-captain whose only child still waits in the queue is not archived automatically', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  r.h.memory = 4; // critical memory: new sessions queue
+  assert.match(await r.text('create-child', sub, { title: '排队子会话', task: 'x' }), /排队/);
+  await r.api.submit({ action: 'complete', result: '阶段一：拆好了，子会话排队中', files: [] }, sub);
+  await r.text('main-receipts', r.captain);
+  r.state().inflight = []; // the Captain finished the turn that read it
+  const task = r.state().tasks.findLast((t) => t.colId === sub.id);
+  task.doneAt = task.sentAt = Date.now() - 60 * MIN;
+  const entry = Object.assign(r.terms.get(sub.id), { state: 'done', lastOutputAt: Date.now() - 60 * MIN });
+  r.api.onTick(sub.id, entry);
+  assert.ok(r.columns.includes(sub), 'archived while its child waits for a slot');
+  assert.equal(r.state().waitlist.find((w) => w.title === '排队子会话')?.metadata?.subCaptainId, sub.id, 'the queued child is still its own');
+});
+
+// The 编辑 dialog with a new command or folder respawns the column (renderer.js respawnColumn):
+// the same column object, a new id. The stand-in does what respawnColumn does, telling MainSession
+// as respawnColumn does for a sub-captain.
+function respawn(r, col) {
+  const oldId = col.id;
+  col.id = 'c-board-respawned-' + oldId;
+  r.terms.set(col.id, r.terms.get(oldId));
+  r.terms.delete(oldId);
+  if (col.subCaptain) r.api.subCaptainIdChanged?.(oldId, col.id);
+  return col;
+}
+
+test('a sub-captain whose column was respawned with a new id still leads its children', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  const kid = await r.child(sub, '子会话A');
+  await r.api.submit({ action: 'complete', result: 'A 第一轮', files: [] }, kid);
+  respawn(r, sub); // the user changed its model in the 编辑 dialog
+  await r.text('main-tell', r.captain, { to: kid.id, message: '再做一轮' });
+  await r.api.submit({ action: 'complete', result: 'A 第二轮', files: [] }, kid);
+  assert.doesNotMatch(await r.text('main-receipts', r.captain), /A 第二轮/, 'a child receipt went to the Captain');
+  const subView = await r.text('main-receipts', sub);
+  assert.match(subView, /A 第一轮/, 'its untaken receipt from before the respawn is still its own');
+  assert.match(subView, /A 第二轮/);
+  assert.match(await r.text('main-ledger', sub), new RegExp(kid.id), 'its ledger still lists the child');
+  assert.match(await r.text('main-tell', sub, { to: kid.id, message: '第三轮' }), /已发给|待补充/, 'it can still tell its child');
+});
+
+// The real board-cli against a stand-in app whose requests the real MainSession answers, by token.
+function boardApp(controlDir, callers, r) {
+  fs.mkdirSync(path.join(controlDir, 'requests'), { recursive: true });
+  fs.mkdirSync(path.join(controlDir, 'responses'), { recursive: true });
+  const timer = setInterval(() => {
+    for (const name of fs.readdirSync(path.join(controlDir, 'requests')).filter((n) => n.endsWith('.json'))) {
+      const file = path.join(controlDir, 'requests', name);
+      let request;
+      try { request = JSON.parse(fs.readFileSync(file, 'utf8')); fs.unlinkSync(file); } catch (_) { continue; }
+      const { token, ...message } = request;
+      const caller = callers.get(token);
+      const reply = (payload) => fs.writeFileSync(path.join(controlDir, 'responses', `${request.id}.json`), JSON.stringify(payload));
+      if (!caller) { reply({ done: true, error: 'Control request rejected: terminal is not conductor-managed.' }); continue; }
+      Promise.resolve().then(() => r.api.handle({ ...message, callerId: caller.id }, caller)).then(reply, (error) => reply({ done: true, error: error.message }));
+    }
+  }, 20);
+  return () => clearInterval(timer);
+}
+function boardCli(args, env) {
+  return new Promise((resolve) => {
+    const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AGENTDECK_')));
+    const child = spawn(process.execPath, [path.resolve(__dirname, '../board-cli.js'), ...args], { env: { ...clean, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('close', (code) => resolve({ code, out, err }));
+  });
+}
+
+test('discuss is the Captain\'s only: a sub-captain\'s token is refused', async (t) => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-discuss-test-sub-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(profile, 'test-profile.json'), '{}');
+  const controlDir = path.join(profile, 'board-control');
+  t.after(boardApp(controlDir, new Map([['captain-token', r.captain], ['sub-token', sub]]), r));
+  const env = (token) => ({ AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: token, AGENTDECK_DISCUSS_TEST_PROFILE: profile });
+  const captain = await boardCli(['discuss', 'status'], env('captain-token'));
+  assert.equal(captain.code, 0, captain.err);
+  const fromSub = await boardCli(['discuss', 'status'], env('sub-token'));
+  assert.notEqual(fromSub.code, 0, `discuss ran for the sub-captain: ${fromSub.out.trim()}`);
+  assert.match(fromSub.err, /只有队长能用/);
+});
+
+// A child the user filed into a folder (captainCrew false) is still its sub-captain's (subCaptainId).
+// Archived, the sub-captain's ledger offers it as 「tell 会先自动恢复」; tell must then find it.
+test('a sub-captain can tell its archived child that had been filed into a folder, as its ledger offers', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  const kid = await r.child(sub, '子会话A');
+  kid.captainCrew = false; kid.folderId = 'f1';
+  r.leave(kid, 'archive');
+  assert.match(await r.text('main-ledger', sub), new RegExp(`已归档的子会话（tell 会先自动恢复）：${kid.id}`), 'the ledger offers it');
+  assert.match(await r.text('main-tell', sub, { to: kid.id, message: '回来再做一点' }), /已恢复|已发给/);
+  // Someone else's archived session in a folder is still not the sub-captain's.
+  const other = { id: 'c-board-other', title: '别人的', subCaptainId: 'c-board-someone-else', archivedAt: Date.now() };
+  r.config.archived.unshift(other);
+  await assert.rejects(r.text('main-tell', sub, { to: other.id, message: 'x' }), /不是你开的子会话/);
 });

@@ -1350,14 +1350,19 @@
   const SUBMIT_LOOK = 2500, SUBMIT_QUIET = 1500, SUBMIT_GIVE_UP = 15_000;
   function watchSubmission(col, entry, text) {
     const enterAt = Date.now();
+    let seen = null, seenSince = 0;
     const look = () => {
       if (host.terms.get(col.id) !== entry || !entry.alive || entry.state === 'input' || entry.sendingPrompt) return;
-      if (!C.promptLeftInBox(host.dumpScreen(entry.term, 80), text)) return;
-      if (Date.now() - (entry.lastOutputAt || 0) < SUBMIT_QUIET) {
+      const screen = host.dumpScreen(entry.term, 80);
+      if (!C.promptLeftInBox(screen, text)) return;
+      // Quiet: no output, or a screen standing still. An idle Claude Code keeps writing a cursor-position
+      // query (ESC[?6n) about every 200 ms, which refreshes lastOutputAt; a working one changes its screen.
+      if (screen !== seen) { seen = screen; seenSince = Date.now(); }
+      if (Date.now() - (entry.lastOutputAt || 0) < SUBMIT_QUIET && (Date.now() - seenSince < SUBMIT_QUIET || entry.state === 'working')) {
         if (Date.now() - enterAt < SUBMIT_GIVE_UP) setTimeout(look, 500);
         return;
       }
-      if (host.userComposing(col.id)) return;
+      if (host.userComposing(col.id, text)) return;
       window.deck.ptyInput(col.id, '\r');
       window.deck.stateDebug({ id: col.id, prev: 'sent', st: 'enter-again', hasWorked: true, skip: 'instruction still in the input box', title: '' });
     };

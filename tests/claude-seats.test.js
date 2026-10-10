@@ -635,3 +635,22 @@ test('--seat resolves an account name to the directory that holds it now; a miss
   assert.match(S.resolveSeat('taylor0421', seats, []).error, /没有哪个目录登着这个账号.*cn → 未登录；us → 未登录；us2 → 未登录。$/);
   assert.equal(id('cn', []), 'cn');
 });
+
+test('--seat <account>: of two directories recording the account, the one signed in to it takes the work', () => {
+  const seats = S.normalize();
+  const signedIn = (id, email) => ({ id, loggedIn: true, loginEmail: email, accountEmail: email });
+  // US2 lost its login but its .claude.json still names the account; the account is signed in on US now.
+  const infos = [signedIn('cn', 'taylor0421@example.com'), signedIn('us', 'taylor.h.sub@example.com'),
+    { id: 'us2', loggedIn: false, loginEmail: '', accountEmail: 'taylor.h.sub@example.com' }];
+  const found = S.resolveSeat('taylor.h.sub', seats, infos);
+  assert.equal(found.error, undefined, found.error);
+  assert.equal(found.seat?.id, 'us');
+  assert.equal(S.resolveSeat('Taylor.H.Sub@example.com', seats, infos).seat?.id, 'us');
+  // Two directories signed in to it, or both only recording it: still never a guess.
+  assert.match(S.resolveSeat('taylor.h.sub', seats, [infos[0], infos[1], signedIn('us2', 'taylor.h.sub@example.com')]).error, /us、us2 这 2 个目录登的是同一个账号/);
+  const bothOut = [infos[0], { ...infos[2], id: 'us' }, infos[2]];
+  assert.match(S.resolveSeat('taylor.h.sub', seats, bothOut).error, /us、us2 这 2 个目录登的是同一个账号/);
+  // Two different accounts with that name, one signed in: the name is still ambiguous.
+  const namesake = [infos[0], infos[1], { id: 'us2', loggedIn: false, loginEmail: '', accountEmail: 'taylor.h.sub@example.org' }];
+  assert.match(S.resolveSeat('taylor.h.sub', seats, namesake).error, /有 2 个不同的账号都叫这个名字/);
+});

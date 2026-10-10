@@ -459,13 +459,18 @@ function visibleInputBox(entry) {
     return MainCore.inputBoxText(plain, masked);
   } catch (_) { return null; }
 }
-function userComposing(id) {
+// ownText: what AgentDeck itself just typed into this box (ChatUI's check that it was submitted).
+// That text still sitting in the box, or its collapsed paste, is not the user's; keys the user
+// pressed, a draft, or any other text there still are.
+const flatBox = (text) => String(text || '').replace(/[\s│┃]+/g, '');
+function userComposing(id, ownText) {
   if (ChatUI.hasDraft(id)) return true;
   const entry = terms.get(id);
   if (!entry || !entry.typing) return false;
   const t = entry.typing;
   if (Date.now() - t.lastKeyAt < INPUT_QUIET || t.draft) return true;
   const box = visibleInputBox(entry);
+  if (box && typeof ownText === 'string' && (flatBox(ownText).includes(flatBox(box)) || /^(?:\[Pastedtext#\d+(?:\+\d+lines?)?\])+$/i.test(flatBox(box)))) return t.unknown;
   if (box) return true;
   if (box === '') t.unknown = false;
   return t.unknown;
@@ -3051,6 +3056,8 @@ function respawnColumn(col, opts) {
   }
   const oldId = col.id;
   col.id = newId();
+  // A 小队长's children, records and untaken receipts point at its id.
+  if (col.subCaptain === true) MainSession.subCaptainIdChanged(oldId, col.id);
   delete col.modelSessionId;
   if (!(opts && opts.freshChat)) ChatUI.onColumnIdChanged(oldId, col.id);
   if (focusedId === oldId) focusedId = col.id;
@@ -3636,6 +3643,9 @@ function createManagedChild(message, caller) {
   return child;
 }
 
+// Phone messages queued for the Captain, by the key the phone server hands over (oldest first,
+// a day and at most 1000): a retry of one main gave up on is not queued again.
+const mobileSentKeys = new Map();
 window.deck.onMobileRequest(async ({ id, op, input }) => {
   try {
     let result;
@@ -3677,7 +3687,15 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
       result = { version: env.version, rows: QuotaCore.mobile(config.quotas, Date.now(), ClaudeSeats.described(config.claudeSeats), claudeCaptainSeatId(),
         columns.find((c) => c.id === config.mainSession?.colId)?.agentProvider) };
     } else if (op === 'captain') {
-      MainSession.sendMessage(input?.message, input?.images);
+      // A phone message main gave up on (5 s) may already be queued here: its retry carries the same key.
+      const key = typeof input?.deduplicationKey === 'string' && /^[0-9a-f]{64}$/.test(input.deduplicationKey) ? input.deduplicationKey : '';
+      if (!key || !mobileSentKeys.has(key)) {
+        MainSession.sendMessage(input?.message, input?.images);
+        if (key) {
+          mobileSentKeys.set(key, Date.now());
+          for (const [old, at] of mobileSentKeys) { if (mobileSentKeys.size <= 1000 && Date.now() - at <= 86_400_000) break; mobileSentKeys.delete(old); }
+        }
+      }
       result = { queued: true };
     } else if (op === 'attention') {
       result = AttentionUI.mobileView();

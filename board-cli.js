@@ -349,8 +349,9 @@ async function main() {
 
   if (action === 'discuss') {
     // The existing read-only action authenticates the Captain even when this
-    // source CLI is used alongside an older installed application.
-    await request({ action: 'main-ledger' }, false);
+    // source CLI is used alongside an older installed application. Not ledger:
+    // a 小队长 reads its own ledger, and discuss is the Captain's only.
+    await request({ action: 'main-quota' }, false);
     const auth = resolveBoardAuth({ env: process.env, tty: controllingTerminal(), filename: __filename, action: 'main-ledger' });
     const result = await require('./discussion-command').command(args, auth);
     process.stdout.write(typeof result === 'string' ? result + '\n' : JSON.stringify(result, null, 2) + '\n');

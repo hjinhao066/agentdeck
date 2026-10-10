@@ -644,3 +644,26 @@ test('a seat that answers without any quota number is proven signed in, so its �
   await stray.tick(); clock += CONFIRM_MS + C.INTERVAL_MS; await stray.tick(); clock += C.INTERVAL_MS; await stray.tick();
   assert.equal(other.samples()[0].authStatus, 'logged-out');
 });
+
+// An account the usage service answers for with no running window (just signed in, or unused for a
+// week) is signed in and fine, not a failed query: neither the sidebar detail and the 队长's quota
+// text (QuotaCore.summary) nor the phone row (QuotaCore.mobile) may say 查询失败 or count it up.
+test('an unused signed-in account reads 已登录…还没开始用 downstream too, never 查询失败 or 数据已旧', async (t) => {
+  const home = fixture(t), seat = S.normalize()[2], loc = M.credentialLocation(seat, home);
+  let now = Date.now();
+  const poller = C.createRefresh({ home, getSeats: () => [seat], now: () => now,
+    read: async () => ({ at: now, source: Q.CLAUDE_OAUTH_SOURCE, windows: [], authStatus: 'logged-in', accountKey: M.usageAccountKey(loc), configDir: loc.dir }) });
+  t.after(() => poller.dispose());
+  const store = {};
+  for (let i = 0; i < 3; i++) {
+    await poller.tick({ force: true });
+    for (const sample of poller.samples()) Q.observe(store, sample, now);
+    now += C.INTERVAL_MS;
+  }
+  const seats = [{ ...seat, info: { loggedIn: true, loginEmail: 'us2@example.com', accountEmail: 'us2@example.com', plan: 'Pro' } }];
+  const row = Q.summary(store, 'Claude', now, Q.claudeSeats(seats)[0]);
+  assert.match(row.detail, /已登录，这个账号暂时没有额度数字（还没开始用）/);
+  assert.doesNotMatch(row.detail, /查询失败|数据已旧/, row.detail);
+  assert.equal(row.failures, 0);
+  assert.equal(Q.mobile(store, now, seats).find((r) => r.key === Q.seatKey(seat.id)).failed, false);
+});

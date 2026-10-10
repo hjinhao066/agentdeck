@@ -1539,7 +1539,8 @@
   function maybeArchive(col, entry) {
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
-    if (isSubCaptain(col) && childrenOf(col).length) return;   // its children still report to it
+    // its children, live or still queued for a slot, report to it
+    if (isSubCaptain(col) && (childrenOf(col).length || s.waitlist.some((w) => w.metadata?.subCaptainId === col.id))) return;
     if (entry && entry.alive && (!['done', 'plain'].includes(entry.state) || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd) || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) return;
     // The status dot and lastScreen are a few seconds old: look at the terminal itself
     // once more before ending it.
@@ -1562,10 +1563,11 @@
     }
     host.archiveColumn(col, { quiet: true });
   }
-  // `tell` to a background session that was archived brings it back first.
-  function archivedCrew(ref) {
+  // `tell` to a background session that was archived brings it back first. A 小队长 (sub) also
+  // finds its own archived children filed into a folder: still its children, as its ledger lists them.
+  function archivedCrew(ref, sub = null) {
     const key = String(ref || '').trim();
-    const list = (host.config.archived || []).filter((a) => a.captainCrew);
+    const list = (host.config.archived || []).filter((a) => a.captainCrew || (sub && a.subCaptainId === sub.id));
     const byId = list.find((a) => a.id === key);
     if (byId) return byId;
     const byTitle = list.filter((a) => host.columnLabel(a) === key);
@@ -2673,7 +2675,7 @@
     let restored = false;
     let archived = null;
     if (!col) {
-      const old = archivedCrew(message.to);
+      const old = archivedCrew(message.to, isSubCaptain(caller) ? caller : null);
       if (old) {
         // Back on its own seat or not at all: a seat that is gone or signed out restores nothing.
         const blocked = window.ClaudeSeatsCore.launchBlock(old, host.config, await Promise.resolve(window.deck.claudeSeats?.()).catch(() => []));
@@ -2811,7 +2813,7 @@
   const SUB_ACTIONS = ['create-child', 'main-receipts', 'main-ledger', 'main-tell', 'main-peek', 'main-read', 'main-answer', 'main-stop', 'main-archive', 'main-receipt-listener-status'];
   function ownChild(sub, ref) {
     const key = String(ref || '').trim();
-    const target = findTarget(key) || archivedCrew(key);
+    const target = findTarget(key) || archivedCrew(key, sub);
     if (target && target.subCaptainId === sub.id) return target;
     // read --id <task id> fetches an undelivered instruction of one of its children
     const mine = (id) => [...host.columns(), ...(host.config.archived || [])].some((c) => c.id === id && c.subCaptainId === sub.id);
@@ -2869,6 +2871,20 @@
     save();
     host.flushConfig?.();
     return kids.length;
+  }
+  // The 编辑 dialog respawned a sub-captain's column with a new id (renderer respawnColumn): its
+  // children, live, archived or queued, their dispatch records and its untaken receipts follow it.
+  function subCaptainIdChanged(oldId, newId) {
+    const s = state();
+    if (!s || !oldId || !newId || oldId === newId) return;
+    [...host.columns(), ...(host.config.archived || [])].forEach((c) => { if (c.subCaptainId === oldId) c.subCaptainId = newId; });
+    s.waitlist.forEach((w) => { if (w.metadata?.subCaptainId === oldId) w.metadata.subCaptainId = newId; });
+    s.tasks.forEach((t) => { if (t.subCaptainId === oldId) t.subCaptainId = newId; });
+    if (s.subReceipts?.[oldId]) { subQueue(s, newId).push(...s.subReceipts[oldId]); delete s.subReceipts[oldId]; }
+    subListeners.delete(oldId);
+    subNudges.delete(oldId);
+    save();
+    host.flushConfig?.();
   }
   // Resolves to the response payload, or rejects with a message for the caller.
   function handle(message, caller) {
@@ -3151,7 +3167,7 @@
         const key = String(message.to || '').trim();
         const old = (host.config.captainHistory || []).find((h) => h.id === key) || window.ChatUI.captainArchives().find((chat) => chat.id === key);
         // An archived session keeps its saved chat (restoring it does not need the terminal).
-        const shelved = !old && archivedCrew(key);
+        const shelved = !old && archivedCrew(key, sub);
         if (shelved) return { done: true, result: M.readText(`${host.columnLabel(shelved)}（已归档，tell 可恢复）`, window.ChatUI.turnsOf(shelved.id), message.turns, find) };
         if (!old) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
         return { done: true, result: M.readText('清空前的队长对话', window.ChatUI.turnsOf(old.id), message.turns, find) };
@@ -3384,6 +3400,8 @@
     isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice, automation,
     // 小队长: the renderer calls releaseSubCrew(col, '归档'|'关掉') once a sub-captain's column left the deck
     releaseSubCrew,
+    // ... and subCaptainIdChanged(oldId, newId) once respawnColumn gave a sub-captain's column a new id
+    subCaptainIdChanged,
     batteryReadout, setBattery,
     // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click
     isPriority: sessionHigh, isHigh, setPriority: (id, level) => setPriority(id, level, true),

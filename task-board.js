@@ -216,8 +216,10 @@ class TaskStore {
   ownerAlive(owner) {
     // The lock lives in this computer's temp folder; a record naming another host is not ours to judge.
     if (owner.host !== undefined && owner.host !== os.hostname()) return true;
-    // Signal 0 only asks: ESRCH is gone (Windows too); EPERM is someone else's live process.
-    try { process.kill(owner.pid, 0); } catch (err) { return err.code !== 'ESRCH'; }
+    // Signal 0 only asks: ESRCH is gone (Windows too). EPERM is another user's or a protected live
+    // process, which this user's own temp-folder lock names only through a reused pid: its start
+    // time decides, as for any live pid (unknown: alive).
+    try { process.kill(owner.pid, 0); } catch (err) { if (err.code !== 'EPERM') return err.code !== 'ESRCH'; }
     // A recent lock is in use. An older one may name a reused pid: its owner was
     // already running when it wrote the record, a process started later is not it.
     const created = Date.parse(owner.created);
@@ -228,7 +230,9 @@ class TaskStore {
   processStart(pid) {
     try {
       if (process.platform === 'win32') {
-        const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`], { encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        // Win32_Process lists every process's creation time without opening it; Get-Process has to open the
+        // process, which a non-administrator may not do for another user's or a protected one.
+        const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${Number(pid)}').CreationDate.ToUniversalTime().ToString('o')`], { encoding: 'utf8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
         return Date.parse(out.trim());
       }
       // Elapsed time [[dd-]hh:]mm:ss works on macOS and Linux alike.

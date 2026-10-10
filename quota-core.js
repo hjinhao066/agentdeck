@@ -340,7 +340,7 @@
       return before !== JSON.stringify(out);
     }
     if (next.failureOnly) {
-      out.officialStatus = { failures: next.failures, checkedAt: next.checkedAt, failure: next.failure };
+      out.officialStatus = { failures: next.failures, checkedAt: next.checkedAt, failure: next.failure, ...(next.answered === true ? { answered: true } : {}) };
       store[key] = out;
       return before !== JSON.stringify(out);
     }
@@ -457,7 +457,9 @@
     if (blocked?.sourceColumnId) details.push(`报错会话：${blocked.sourceColumnId}`);
 
     if (!windows.length && !blocked) details.push(state === 'normal' ? '未观察到额度用尽；无法取得数字' : '无新鲜额度信息；等待会话/缓存更新');
-    if (entry.officialStatus?.failure) details.push(`查询失败：${entry.officialStatus.failure}；连续 ${entry.officialStatus.failures} 次${entry.officialStatus.failures >= 3 ? '，保留上次成功采样（数据已旧）' : '，保留上次数字'}`);
+    // Signed in, the service answered with nothing to show yet: said as it is, not as a failed query.
+    if (entry.officialStatus?.failure && entry.officialStatus.answered) details.push(entry.officialStatus.failure);
+    else if (entry.officialStatus?.failure) details.push(`查询失败：${entry.officialStatus.failure}；连续 ${entry.officialStatus.failures} 次${entry.officialStatus.failures >= 3 ? '，保留上次成功采样（数据已旧）' : '，保留上次数字'}`);
     if (retained && windows.some((w) => w.resetAt <= now)) details.push('窗口重置时间已过，等待新采样（显示上次数字）');
     const evidence = retained ? sample : blocked || sample;
     const confidence = evidence ? (blocked && !retained ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence) : '';
@@ -485,7 +487,7 @@
     const shortRemaining = fiveHour ?? weekly;
     const expired = sample && trusted && (!fresh || sample.windows?.some((w) => w.resetAt && w.resetAt <= now));
     const shortText = shortRemaining === null ? (out ? '已用尽' : expired ? '过期' : statusText) : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
-    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure ? entry.officialStatus.failures || 1 : 0, cells, ...who, source: evidence?.source || '', confidence: confidence || '', name: seat ? seatName + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${head}：${left(label)}\n${details.join('\n')}` };
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure && !entry.officialStatus.answered ? entry.officialStatus.failures || 1 : 0, cells, ...who, source: evidence?.source || '', confidence: confidence || '', name: seat ? seatName + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${head}：${left(label)}\n${details.join('\n')}` };
   }
   const LAUNCH_WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
   function commandIdentity(command) {

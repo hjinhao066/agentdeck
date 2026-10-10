@@ -89,7 +89,7 @@ test('sub-captain: receipts, ledger, sidebar, restart and hand-back through the 
     // The Captain opens a sub-captain. It finishes its first instruction at once (stand-in),
     // so the Captain gets the sub-captain's own receipt: that one is the Captain's.
     const opened = await ok(captain, ['new', '--title', '秋招小队长', '--task', '统筹秋招', '--project', '秋招', '--sub-captain']);
-    const subId = idIn(opened);
+    let subId = idIn(opened);
     expect(subId, opened).toBeTruthy();
     let sub = await controlOf(subId);
 
@@ -181,6 +181,17 @@ test('sub-captain: receipts, ledger, sidebar, restart and hand-back through the 
     expect(await ok(captain, ['receipts'])).not.toContain('重启后再做一轮');
     await page.evaluate(() => { config.crewOpen = true; Sidebar.render(); });
     await expect(page.locator(`#subCrew-${subId} .colnav-item`)).toHaveCount(2, { timeout: 15000 });
+
+    // Its 编辑 dialog with a new command respawns it with a new id: it still leads its child,
+    // and the child's receipts still come to it.
+    const respawnedId = await page.evaluate((id) => { const col = columns.find((c) => c.id === id); respawnColumn(col); return col.id; }, subId);
+    expect(respawnedId).not.toBe(subId);
+    subId = respawnedId;
+    sub = await controlOf(subId, 180000);
+    expect(await ok(sub, ['ledger'])).toContain(childId);
+    await ok(captain, ['tell', '--to', childId, '--message', '编辑后再做一轮']);
+    expect(await receiptsUntil(sub, 'stand-in finished 编辑后再做一轮')).toContain('stand-in finished 编辑后再做一轮');
+    expect(await ok(captain, ['receipts'])).not.toContain('编辑后再做一轮');
 
     // D: archiving the sub-captain keeps the child running and hands it to the Captain.
     expect(await ok(captain, ['archive', '--id', subId])).toContain('已结束终端并归档');

@@ -113,6 +113,49 @@ test('a pid owned by another user (no permission to signal it) counts as alive',
   assert.equal(ownerOf(store), raw);
 });
 
+// The lock lives in this user's own temp folder, so only this user's processes ever wrote it. An old
+// lock whose pid now answers EPERM names a reused pid (another user's process, a protected one): its
+// start time decides, like any other live pid's.
+function signalRefused(t, pid) {
+  const kill = process.kill;
+  process.kill = (p, signal) => { if (p === pid && signal === 0) { const err = new Error('EPERM'); err.code = 'EPERM'; throw err; } return kill.call(process, p, signal); };
+  t.after(() => { process.kill = kill; });
+}
+test('an old lock whose pid now belongs to another user\'s newer process is taken over', (t) => {
+  const store = board(t);
+  lockWith(store, { pid: 424243, host: os.hostname(), created: new Date(Date.now() - 30 * 24 * 3600_000).toISOString() });
+  signalRefused(t, 424243);
+  store.processStart = (pid) => (pid === 424243 ? Date.now() - 3600_000 : NaN);
+  add(store);
+  assert.equal(store.list().length, 1);
+});
+test('an old lock whose pid answers EPERM is kept when that process is older than the lock or its start time is unknown', (t) => {
+  const store = board(t);
+  const raw = lockWith(store, { pid: 424244, host: os.hostname(), created: new Date(Date.now() - 3600_000).toISOString() });
+  signalRefused(t, 424244);
+  for (const started of [Date.now() - 2 * 3600_000, NaN]) {
+    store.processStart = () => started;
+    assert.throws(() => add(store), /another local process/);
+    assert.equal(ownerOf(store), raw);
+  }
+});
+// The system's own answer: a protected process this user may not signal (macOS/Linux pid 1, Windows
+// wininit.exe), started at boot, named by a lock written long before.
+test('a real process this user may not signal, started after an old lock, does not hold it', (t) => {
+  const pid = process.platform === 'win32'
+    ? Number(spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_Process -Filter \"Name='wininit.exe'\").ProcessId"], { encoding: 'utf8', windowsHide: true }).stdout.trim())
+    : 1;
+  let refused = false;
+  try { process.kill(pid, 0); } catch (err) { refused = err.code === 'EPERM'; }
+  if (!pid || !refused) return t.skip(`pid ${pid} can be signalled here (running as an administrator or root)`);
+  const store = board(t);
+  const created = new Date(Date.now() - 365 * 24 * 3600_000).toISOString();
+  assert.ok(store.processStart(pid) > Date.parse(created), `the start time of pid ${pid} is read: ${store.processStart(pid)}`);
+  lockWith(store, { pid, host: os.hostname(), created });
+  add(store);
+  assert.equal(store.list().length, 1);
+});
+
 test('a second process that judged the same dead lock never removes the lock a new writer made meanwhile', (t) => {
   const store = board(t);
   const stale = lockWith(store, { pid: deadPid(), host: os.hostname(), created: new Date().toISOString() });

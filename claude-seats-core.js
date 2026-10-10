@@ -74,9 +74,12 @@
     const whole = lower.includes('@');
     const held = list.map((seat) => {
       const info = (Array.isArray(infos) ? infos : []).find((i) => i && i.id === seat.id);
-      return { seat, email: (cleanEmail(info?.loginEmail) || cleanEmail(info?.accountEmail)).toLowerCase() };
+      return { seat, email: (cleanEmail(info?.loginEmail) || cleanEmail(info?.accountEmail)).toLowerCase(), live: info?.loggedIn === true };
     }).filter((entry) => entry.email && (whole ? entry.email === lower : accountName(entry.email) === lower));
     if (held.length === 1) return { seat: held[0].seat };
+    // One account, signed in behind one directory: another that only still records it does not hold it.
+    const live = held.filter((entry) => entry.live);
+    if (live.length === 1 && new Set(held.map((entry) => entry.email)).size === 1) return { seat: live[0].seat };
     if (!held.length) return { error: `--seat ${wanted}：没有哪个目录登着这个账号，没有派。${now}` };
     const same = new Set(held.map((entry) => entry.email)).size === 1;
     return { error: `--seat ${wanted}：${same ? `${held.map((entry) => entry.seat.id).join('、')} 这 ${held.length} 个目录登的是同一个账号` : `有 ${held.length} 个不同的账号都叫这个名字（${held.map((entry) => `${entry.seat.id} 是 ${entry.email}`).join('，')}）`}，没有派。请改写${same ? '目录代号' : '完整邮箱或目录代号'}。${now}` };

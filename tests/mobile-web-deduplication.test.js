@@ -129,3 +129,48 @@ test('through the hub entry (public origin, machine prefix) a retry is not sent 
   for (let i = 0; i < 2; i++) assert.equal((await post(status, '/mac/api/captain', { message: '总台发来的', deduplicationKey: KEY }, auth)).status, 200);
   assert.deepEqual(messages, ['总台发来的']);
 });
+
+// main.js gives up on the renderer after 5 seconds (requestMobile), but the renderer, busy for longer,
+// still queues the message for the Captain when it gets to it. The phone was told it failed, and its
+// retry with the same key goes through again: only the renderer can tell it is the same message. So
+// the desktop is handed a key of its own per phone and key, never the phone's raw key.
+test('the desktop is handed a key per phone and send key, the same on a retry, none without a key', async (t) => {
+  const handed = [];
+  const { status, auth } = await start(t, {}, { sendCaptain: (message, files, key) => { handed.push(key); throw new Error('desktop slow'); } });
+  const login = await post(status, '/login', { token: status.token });
+  const cookie = login.headers['set-cookie'][0].split(';')[0];
+  const phone = { Cookie: cookie, 'X-CSRF-Token': JSON.parse((await request(status, '/api/auth', { headers: { Cookie: cookie } })).text).csrfToken };
+  await post(status, '/api/captain', { message: '一条', deduplicationKey: KEY }, auth);
+  await post(status, '/api/captain', { message: '一条', deduplicationKey: KEY }, auth);
+  await post(status, '/api/captain', { message: '一条', deduplicationKey: KEY }, phone);
+  await post(status, '/api/captain', { message: '一条' }, auth);
+  assert.match(handed[0] || '', /^[0-9a-f]{64}$/, 'the desktop gets no key');
+  assert.equal(handed[1], handed[0], 'a retry carries the same desktop key');
+  assert.notEqual(handed[2], handed[0], 'another phone\'s same key is another message');
+  assert.equal(handed[0].includes(KEY.slice(2)), false);
+  assert.equal(handed[3], undefined);
+});
+
+// The whole chain: main's timeout (5 s, here 150 ms) and a renderer that, as renderer.js does, queues a
+// message for the Captain once per desktop key it is handed. Busy past main's timeout on the first send.
+test('a send the desktop queued after main gave up is not queued again when the phone retries', async (t) => {
+  const typed = [], seen = new Set();
+  let busyUntil = Date.now() + 400;
+  const renderer = (input) => {
+    if (input.deduplicationKey && seen.has(input.deduplicationKey)) return;
+    typed.push(input.message);
+    if (input.deduplicationKey) seen.add(input.deduplicationKey);
+  };
+  const sendCaptain = (message, images, deduplicationKey) => new Promise((resolve, reject) => {
+    const input = { message, images, ...(deduplicationKey ? { deduplicationKey } : {}) };
+    let open = true;
+    const timer = setTimeout(() => { open = false; reject(new Error('AgentDeck 响应超时，请稍后重试。')); }, 150);
+    setTimeout(() => { renderer(input); if (open) { clearTimeout(timer); resolve({ queued: true }); } }, Math.max(0, busyUntil - Date.now()));
+  });
+  const { status, auth } = await start(t, {}, { sendCaptain });
+  assert.notEqual((await post(status, '/api/captain', { message: '把锁修好', deduplicationKey: KEY }, auth)).status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.deepEqual(typed, ['把锁修好']);
+  assert.equal((await post(status, '/api/captain', { message: '把锁修好', deduplicationKey: KEY }, auth)).status, 200);
+  assert.deepEqual(typed, ['把锁修好'], 'the Captain got the same phone message twice');
+});
