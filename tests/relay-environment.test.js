@@ -18,7 +18,7 @@ function harness(t) {
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   const body = source.slice(source.indexOf('function spawnPty('), source.indexOf('\nfunction send('));
   const context = vm.createContext({ fs, path, HOME: home, tudArg: false, app: { getPath: () => home },
-    quotaWarmup: null, validId: () => true, ptys, ptySeats, ptyLaunchDirs: new Map(), ENV: { CLAUDE_CONFIG_DIR: '/inherited', CLAUDE_CODE_OAUTH_TOKEN: 'override' },
+    quotaWarmup: null, validId: () => true, ptys, ptySeats, ptySeatDefs: new Map(), ptyLaunchDirs: new Map(), ENV: { CLAUDE_CONFIG_DIR: '/inherited', CLAUDE_CODE_OAUTH_TOKEN: 'override' },
     ClaudeSeatsCore: S, AgentSessions: require('../agent-sessions'), credentialLocation: M.credentialLocation, initializeOnboarding: M.initializeOnboarding, seatEnvironment: M.seatEnvironment,
     ttyFromPty, writeCredentials: (...args) => credentials.push(args), removeCredentials: () => {}, crypto: require('crypto'), managedSessions: new Map(), receiptSessions: new Map(), notifications: null,
     spoolPath: () => path.join(home, 'unused'), boardControlDir: home, boardCliPath: '/fake/board.js',
