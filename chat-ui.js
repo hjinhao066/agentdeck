@@ -1421,7 +1421,7 @@
         || (Date.now() - pastedAt < PASTE_READ_MAX && C.pasteBusy(host.dumpScreen(entry.term, 6)))));
       // A menu that came up after the readiness check (Claude's one-time startup questions) has
       // its default row selected: this Enter would answer it. Leave it for whoever handles menus.
-      if (host.menuOnScreen && host.menuOnScreen(entry.term)) {
+      if (host.menuOnScreen && host.menuOnScreen(entry.term, text)) {
         if (turn) {
           const open = pending.get(col.id);
           if (open && open.turn === turn) { try { open.marker?.dispose(); } catch (_) {} pending.delete(col.id); }

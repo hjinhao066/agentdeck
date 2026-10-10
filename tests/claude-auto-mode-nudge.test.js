@@ -131,7 +131,7 @@ test('Claude\'s auto mode nudge reads as a menu (with or without row numbers), s
 const chatUi = fs.readFileSync(path.join(__dirname, '../chat-ui.js'), 'utf8');
 const body = chatUi.slice(chatUi.indexOf('  const PASTE_READ_MAX = 30_000;'), chatUi.indexOf('  // Resolves to the turn (or true) once the file is written'));
 const lines = (rows) => ({ rows: rows.length, cols: 44, buffer: { active: { baseY: 0, getLine: (y) => rows[y] === undefined ? undefined : { isWrapped: false, translateToString: () => rows[y] } } } });
-function sender(menuAfterPaste) {
+function sender(menuAfterPaste, echoed) {
   const sent = [], toasts = [], pending = new Map();
   const prompt = ['────────', '❯ ', '────────', '  ⏵⏵ bypass permissions on'];
   const entry = { alive: true, state: 'plain', term: lines(prompt), lastOutputAt: 0 };
@@ -140,7 +140,7 @@ function sender(menuAfterPaste) {
     terms: new Map([['w', entry]]), platform: 'win32',
     dumpScreen: () => prompt.join('\n'), shellQuote: (p) => p, manualPromptSent() {}, userComposing: () => false, maybeAutoName() {},
     showToast: (t) => toasts.push(t), columnLabel: () => '会话',
-    menuOnScreen: (term) => vm.runInContext('NEEDS_INPUT_RE', rctx).test(rctx.statusScreen(term).split('\n').slice(-20).join('\n')),
+    menuOnScreen: (term, sent) => rctx.menuOnScreen(term, sent),
   };
   const turn = { id: 't', done: false };
   const context = vm.createContext({
@@ -148,7 +148,11 @@ function sender(menuAfterPaste) {
     window: { deck: { ptyInput: (id, data) => {
       sent.push(data);
       // Claude mounts its startup question after the prompt was drawn: the paste lands, then the menu replaces the box
-      if (data.startsWith('\x1b[200~')) { entry.lastOutputAt = Date.now(); if (menuAfterPaste) entry.term = Object.assign(lines(NUDGE), { modes: entry.term.modes }); }
+      if (data.startsWith('\x1b[200~')) {
+        entry.lastOutputAt = Date.now();
+        // Claude shows a short paste in its input box
+        if (echoed) entry.term = Object.assign(lines(['────────', ...echoed, '────────', '  ⏵⏵ bypass permissions on']), { modes: entry.term.modes });
+        if (menuAfterPaste) entry.term = Object.assign(lines(NUDGE), { modes: entry.term.modes }); }
     }, notifyCancel() {} }, MainSession: null, MainCore, BoardCore: { inferAgentType: () => 'Claude' } },
     beginTurn: () => { pending.set('w', { turn }); return turn; },
   });
@@ -167,5 +171,11 @@ test('the Enter is not pressed when Claude\'s auto mode menu came up after the r
 test('with no menu the prompt is submitted as before', async () => {
   const { context, sent } = sender(false);
   assert.ok(await context.sendPrompt({ id: 'w', cmd: 'claude' }, '任务正文', null, {}));
+  assert.equal(sent.filter((d) => d === '\r').length, 1);
+});
+test('a task whose own text looks like a menu (shown in the input box) is still submitted', async () => {
+  const task = ['照下面做：', '1. Yes, I accept 的框不要点', '2. 碰到 (y/n) 一律答 n'].join('\n');
+  const { context, sent } = sender(false, ['❯ 照下面做：', '  1. Yes, I accept 的框不要点', '  2. 碰到 (y/n) 一律答 n']);
+  assert.ok(await context.sendPrompt({ id: 'w', cmd: 'claude' }, task, null, {}));
   assert.equal(sent.filter((d) => d === '\r').length, 1);
 });

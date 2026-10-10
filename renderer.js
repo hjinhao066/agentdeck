@@ -4038,8 +4038,7 @@ const deckHost = {
   // 队长
   createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, ptyBackgroundWork,
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
-  // A menu or confirmation is on the terminal right now (its own reading, not the last status tick).
-  menuOnScreen: (term) => NEEDS_INPUT_RE.test(statusScreen(term).split('\n').slice(-20).join('\n')),
+  menuOnScreen,
   // How the terminal stands right now, read again instead of taken from the last status tick.
   liveState: (col) => { const e = terms.get(col.id); return e?.alive ? classify(liveStatusText(e.term), e, col.cmd, !!col.isMain) : 'exited'; },
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), ClaudeSeats.described(config.claudeSeats), claudeCaptainSeatId()),
@@ -4171,6 +4170,16 @@ function statusScreen(term) {
 function chromeRowBreak(above, row) {
   return /^\s*[─━═]{3,}\s*$/.test(above) || /^\s*[─━═]{3,}\s*$/.test(row) ||
     (/\s{2,}$/.test(above) && /^\s*(?:[✻✽✳✶✢✺∴·*]\s+\S|[❯›](?:\s|$)|⎿\s|⏺\s|⏵⏵)/.test(row));
+}
+// A menu or confirmation is on the terminal right now (its own reading, not the last status tick).
+// Rows that are the text just pasted (shown in the input box) are not the agent asking anything.
+function menuOnScreen(term, sent = '') {
+  const flat = String(sent).replace(/\s+/g, ' ');
+  const rows = statusScreen(term).split('\n').slice(-20).filter((row) => {
+    const t = row.replace(/^\s*[│┃]?\s*❯\s?/, '').replace(/\s*[│┃]\s*$/, '').trim().replace(/\s+/g, ' ');
+    return !(t.length >= 3 && flat.includes(t));
+  });
+  return NEEDS_INPUT_RE.test(rows.join('\n'));
 }
 // The screen the status light reads. On Windows nothing names the foreground process: a PowerShell
 // prompt at the bottom means the agent has exited, and a menu it was showing when it died still
