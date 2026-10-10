@@ -39,6 +39,12 @@ function taskDetail(item, id) {
     '回填后 AgentDeck 自动把结果登记到用户的「待我处理」（等你提供/没办成在「要你处理」，办完在「做完了你还没看」，附产物文件），不要再用 inbox 重复登记；用户在那里的回复会作为回执带着这张卡片 id 交给你。';
 }
 
+// What `todo list` gives 队长: only the 待办 handed to AI (an @ai mention) or that
+// already carry an AI state. The user's other to-dos stay theirs: 队长 never reads them.
+function forCaptain(items) {
+  return (Array.isArray(items) ? items : []).filter((t) => t && (isAi(t.text) || (t.ai && typeof t.ai === 'object')));
+}
+
 class TodoAI {
   constructor({ todos, tasks, deliver, notify, changed = () => {} }) {
     this.todos = todos; this.tasks = tasks; this.deliver = deliver; this.notify = notify; this.changed = changed;
@@ -115,4 +121,4 @@ class TodoAI {
     return next;
   }
 }
-module.exports = { TodoAI, isAi, revision, taskId, taskDetail, STATUSES, TRANSITIONS };
+module.exports = { TodoAI, isAi, forCaptain, revision, taskId, taskDetail, STATUSES, TRANSITIONS };

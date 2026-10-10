@@ -49,7 +49,7 @@
 ```
 
 - 个人待办 `ai: null`；AI 待办的 `ai` 数据字段见下文。`textUpdated`、`textDevice` 记录内容版本的时间和保存设备，勾选和状态回填不会改变它们；`doneUpdated`、`deletedUpdated` 同理只随勾选、删除改变。以后的版本加的未知字段仍原样保留。
-- 队长读取用 `todo list` 获取合并结果；直接读 `todos/*.json` 的工具需复用 `TodoStore` 合并规则，不自行按整条 `updated` 覆盖 `ai`，跳过 `deleted`。
+- 队长读取用 `todo list` 获取合并结果，只含带 `@ai` 的待办和已经有 AI 状态的待办，用户自己的其他待办原文不给队长；直接读 `todos/*.json` 的工具需复用 `TodoStore` 合并规则，不自行按整条 `updated` 覆盖 `ai`，跳过 `deleted`。
   不要直接改这些文件；队长读写状态使用下面的 `board-cli todo` 命令。
 
 ## 手机接口

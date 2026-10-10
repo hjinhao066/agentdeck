@@ -292,7 +292,7 @@ function usage() {
     'Captain only (队长, the main session):\n' +
     '  discuss start --topic "题目" [--gemini] [--participants-file path] [--summarizer id]\n' +
     '  discuss status [--id id] | wait --id id | resume --id id [--retry job-id] | cancel --id id\n' +
-    '  todo list                                personal Todo items and AI state\n' +
+    '  todo list                                Todo items handed to AI (@ai or with an AI state)\n' +
     '  todo status --id td-… --task-id todo-… --status working|needs_user|done|failed [--message "Reason"] [--files path1,path2]\n' +
     '  notify-user --message "User action needed" [--urgent]   local alert; urgent also sends Bark\n' +
     '  notify-user --test                        Bark 【测试】 notification, shared volume setting (default 4)\n' +

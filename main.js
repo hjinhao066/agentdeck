@@ -40,7 +40,7 @@ const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore, localSessions } = require('./task-board');
 const { TodoStore } = require('./todo-store');
-const { TodoAI } = require('./todo-ai');
+const { TodoAI, forCaptain } = require('./todo-ai');
 const { TodoBackendErrors } = require('./todo-backend-errors');
 const { TodoFailureNotifications, nextAllowedTime } = require('./todo-failure-notifications');
 const Worktree = require('./worktree-core');
@@ -652,7 +652,7 @@ function processBoardRequests() {
           const cfg = readLocalConfig();
           if (caller[0] !== cfg.mainSession?.colId || !cfg.columns?.some((c) => c.id === caller[0] && c.isMain)) throw new Error('只有队长可以用这个命令。');
           let result;
-          if (request.op === 'list') result = Promise.resolve({ items: todoStore.list() });
+          if (request.op === 'list') result = Promise.resolve({ items: forCaptain(todoStore.list()) });
           else if (request.op === 'status') result = todoAi.status(request.input || {});
           else throw new Error('Invalid Todo operation.');
           result.then((value) => { if (request.op === 'status') todoErrors?.recovered('status'); writeBoardResponse(request.id, { done: true, result: JSON.stringify(value) }); },
