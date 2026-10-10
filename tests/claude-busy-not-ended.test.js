@@ -72,7 +72,7 @@ test('sending a prompt restarts the done debounce, so the next tick cannot close
 });
 
 // ---- 3. one last look before the fallback ----
-function runtime(screenNow) {
+function runtime(screenNow, platform = 'darwin') {
   const captain = { id: 'captain', isMain: true, cmd: '' };
   const worker = { id: 'worker', cmd: CMD };
   const idleRows = ['⏺ Done.', ...FOOTER].join('\n');
@@ -89,7 +89,7 @@ function runtime(screenNow) {
   window.MainSession.init({
     config: { mainSession: { colId: captain.id, gen: 1, tasks: [task], pending: [], waitlist: [] }, folders: [] }, saveConfig() {},
     columns: () => [captain, worker], terms: entries, userComposing: () => false, columnLabel: (c) => c.id,
-    dumpScreen: () => screenNow, screenState: (text, e, cmd) => rctx.classify(text, e, cmd),
+    dumpScreen: () => screenNow, screenState: (text, e, cmd) => rctx.classify(text, e, cmd), platform,
   });
   return { api: window.MainSession, worker, entry, task };
 }
@@ -103,4 +103,19 @@ test('the no-receipt fallback looks at the rows once more: a spinner there keeps
   done.api.onTick(done.worker.id, done.entry);
   assert.equal(done.task.status, 'stopped');
   assert.equal(done.task.receipt.summary, '已结束，未提交回执');
+});
+
+// Review 2026-10-09: on Windows a Claude that crashed back to PowerShell leaves its last frame (with a
+// spinner) above the PS prompt. The last look read that old spinner and held the task open for ever.
+test('Windows: the last look ignores what a crashed Claude left above the PowerShell prompt', () => {
+  const crashed = [FULL, SCENES['long thinking'], ...FOOTER, 'PS C:\\Users\\me\\repo> '].join('\n');
+  const gone = runtime(crashed, 'win32');
+  gone.api.onTick(gone.worker.id, gone.entry);
+  assert.equal(gone.task.status, 'stopped');
+  assert.equal(gone.task.receipt.summary, '已结束，未提交回执');
+  // still running on Windows (no prompt at the bottom): held as before
+  const busy = runtime([FULL, SCENES['long command'], ...FOOTER].join('\n'), 'win32');
+  busy.api.onTick(busy.worker.id, busy.entry);
+  assert.equal(busy.task.status, 'working');
+  assert.equal(busy.task.endedAt, 0);
 });
