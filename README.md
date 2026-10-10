@@ -93,6 +93,7 @@ the middle:
   desktop or the phone hub, with the window focused (leaving it restarts the count). Board cards that stop for the user go to
   the Captain first, never straight onto this page. The phone hub shows both computers' items. See [待我处理](docs/attention.md).
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
+  已归档 keeps every archived session (no cap): it lists the newest 100 and 显示更早的 adds 100 more, down to the oldest.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
   sessions in exactly the sidebar order (队长 first, then folders, then loose
   sessions), so swiping walks the list; the 队长's background sessions are not

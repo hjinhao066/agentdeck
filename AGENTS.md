@@ -96,7 +96,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   (`captainCrew` while a 队长 exists) are `.backstage`: built and sized off-deck,
   skipped by navigation and popups, shown after 队长 only while opened (`peekId`). Reorder by moving live column nodes, never by
   rebuilding terminals. Archive kills the PTY with `keepReplay` so restore can
-  replay the saved output; the startup prune must keep archived ids.
+  replay the saved output; the startup prune must keep archived ids. The archive has no
+  cap (`SidebarCore.normalizeArchived` keeps every entry, the sidebar pages it): never
+  drop an entry to shorten the list, its chat and replay would be orphaned.
 - Archiving ends a terminal, so a session that is working, waiting on an answer or
   printing output is never archived, automatically or by click, and never asks first
   (`archiveColumn` shows a notice and stops). The automatic archive reads the terminal itself one more time

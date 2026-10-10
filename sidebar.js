@@ -16,6 +16,7 @@
   let captainHead = null;      // 队长's pinned row: { col, item, counts, sub }
   let todoCount = null;        // open to-dos, on the 待办 entry
   let todoOpen = 0;
+  let archivedShown = 0;       // archived rows on screen; grows a page per 显示更早的, for this run
 
   function el(tag, cls, text) {
     const n = document.createElement(tag);
@@ -188,8 +189,16 @@
         render();
       }, open));
       if (open) {
+        // A page at a time: the archive is never cut, and a thousand rows are not built at once.
+        const page = SC.archivedPage(archived, archivedShown);
         const box = el('div', 'nav-archived');
-        archived.forEach((a) => box.appendChild(archivedRow(a)));
+        page.rows.forEach((a) => box.appendChild(archivedRow(a)));
+        if (page.more) {
+          const more = el('button', 'nav-archived-more', `显示更早的 ${Math.min(SC.ARCHIVED_PAGE, page.more)} 个（还有 ${page.more} 个）`);
+          more.type = 'button';
+          more.addEventListener('click', () => { archivedShown = page.rows.length + SC.ARCHIVED_PAGE; render(); });
+          box.appendChild(more);
+        }
         listEl.appendChild(box);
       }
     } else {

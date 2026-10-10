@@ -10,7 +10,8 @@
   'use strict';
 
   const MAX_FOLDERS = 100;
-  const MAX_ARCHIVED = 500;
+  // The archive is never cut: the sidebar shows this many rows and one more page on request.
+  const ARCHIVED_PAGE = 100;
   const FONT_DEFAULT = 13;
   // Hermes web console (private, owner-only); opened in the system browser.
   const HERMES_HUB_URL = 'https://hub.18-139-28-180.sslip.io/';
@@ -217,12 +218,21 @@
       seen.add(a.id);
       out.push({ ...a, archivedAt: Number.isFinite(a.archivedAt) ? a.archivedAt : 0 });
     }
+    // Every archived session is kept: one dropped here is gone from the sidebar at the next
+    // launch, and the launch after that main.js deletes its saved output (AGENTS.md: ids
+    // survive relaunch). A long archive is shown a page at a time instead (archivedPage).
     out.sort((a, b) => b.archivedAt - a.archivedAt);
-    return out.slice(0, MAX_ARCHIVED);
+    return out;
+  }
+  // The newest `shown` archived sessions and how many older ones wait behind 显示更早的.
+  function archivedPage(list, shown) {
+    const all = Array.isArray(list) ? list : [];
+    const n = Math.max(ARCHIVED_PAGE, Math.floor(Number(shown)) || 0);
+    return { rows: all.slice(0, n), more: Math.max(0, all.length - n) };
   }
 
   return {
-    MAX_FOLDERS, FONT_DEFAULT, HERMES_HUB_URL, normalizeFontSize, validId, activityLine, newFolderId, normalizeFolders, folderOf, groupSessions,
-    orderedColumns, captainOf, moveColumn, nextFolderName, removeFolder, crewModelGroups, normalizeCollapsedModels, localDay, normalizeArchived,
+    MAX_FOLDERS, ARCHIVED_PAGE, FONT_DEFAULT, HERMES_HUB_URL, normalizeFontSize, validId, activityLine, newFolderId, normalizeFolders, folderOf, groupSessions,
+    orderedColumns, captainOf, moveColumn, nextFolderName, removeFolder, crewModelGroups, normalizeCollapsedModels, localDay, normalizeArchived, archivedPage,
   };
 });
