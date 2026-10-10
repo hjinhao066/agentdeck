@@ -213,6 +213,7 @@
       text.addEventListener('dblclick', () => startEdit(t.id));
       main.appendChild(text);
       if (t.ai) main.appendChild(aiLine(t));
+      else if (window.HubCore.todoAiBefore(t)) main.appendChild(el('div', 'todo-ai is-done', window.HubCore.todoAiBefore(t)));
     }
     const when = el('time', 'todo-when', t.done ? '完成于 ' + ago(t.doneAt || t.updated) : ago(t.created));
     when.dateTime = t.done ? (t.doneAt || t.updated) : t.created;

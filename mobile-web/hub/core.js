@@ -554,6 +554,8 @@
     }
     return '已交给 AI · 等队长接收';
   }
+  // A 待办 AI had finished and the user then edited: it is not handed over again, and the line says so.
+  const todoAiBefore = (item) => (item && !item.ai && item.aiBefore && item.aiBefore.status === 'done' ? 'AI 改字前已办完；改字后不会再交给 AI' : '');
   // The clocks of each part of a 待办 (see mergeTodos), kept when well-formed.
   const TODO_CLOCKS = ['textUpdated', 'doneUpdated', 'deletedUpdated'];
   const todoClocks = (item, keys = TODO_CLOCKS) => Object.fromEntries(keys.filter((key) => time(item[key])).map((key) => [key, item[key]]));
@@ -566,7 +568,8 @@
       if (typeof item.text !== 'string' || !item.text.trim()) continue;
       out.push({ id: item.id, text: item.text.slice(0, 500), done: item.done === true, doneAt: item.done === true && time(item.doneAt) ? item.doneAt : null,
         created: time(item.created) ? item.created : item.updated, updated: item.updated, ...todoClocks(item),
-        ...(cleanTodoAi(item.ai) ? { ai: cleanTodoAi(item.ai) } : {}) });
+        ...(cleanTodoAi(item.ai) ? { ai: cleanTodoAi(item.ai) } : {}),
+        ...(item.aiBefore && item.aiBefore.status === 'done' ? { aiBefore: { status: 'done' } } : {}) });
     }
     return out;
   }
@@ -608,9 +611,11 @@
       const version = shown.filter((c) => c.item.text === content.text && todoClock.text(c.item) === todoClock.text(content));
       const ai = latestTodo(version, todoClock.ai).item.ai;
       const check = latestTodo(shown, todoClock.done).item;
-      const { ai: _ai, ...rest } = whole.item;
+      // what AI had before an edit goes with the edited text, as on the desktop (todo-store combine)
+      const aiBefore = (version.find((c) => c.item.aiBefore) || {}).item?.aiBefore;
+      const { ai: _ai, aiBefore: _before, ...rest } = whole.item;
       live.push({ ...rest, text: content.text, textUpdated: todoClock.text(content), done: check.done, doneAt: check.doneAt, doneUpdated: todoClock.done(check),
-        ...(ai ? { ai } : {}), seenOn: whole.from });
+        ...(ai ? { ai } : {}), ...(aiBefore ? { aiBefore } : {}), seenOn: whole.from });
     }
     const open = live.filter((t) => !t.done).sort((a, b) => Date.parse(b.created) - Date.parse(a.created) || a.id.localeCompare(b.id));
     const done = live.filter((t) => t.done).sort((a, b) => Date.parse(b.doneAt || b.updated) - Date.parse(a.doneAt || a.updated) || a.id.localeCompare(b.id));
@@ -649,7 +654,7 @@
     return `${name} 没有记下这条（HTTP ${result.status}）。`;
   }
 
-  return { cleanTodos, todoAiChip, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt, cardQuestion,
+  return { cleanTodos, todoAiChip, todoAiBefore, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt, cardQuestion,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, rowHealth, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 

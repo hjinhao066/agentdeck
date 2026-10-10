@@ -1673,6 +1673,7 @@
     const when = t.done ? '完成于 ' + Core.ago(Date.parse(t.doneAt || t.updated), Date.now()) : Core.ago(Date.parse(t.created), Date.now());
     body.append(node('p', 'todo-text', t.text));
     if (t.ai) body.append(todoAi(t.ai));
+    else if (Core.todoAiBefore(t)) body.append(node('p', 'todo-ai is-done', Core.todoAiBefore(t)));
     body.append(node('p', 'todo-when', when));
     row.append(check, body);
     return row;

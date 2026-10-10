@@ -185,7 +185,7 @@ if (saved) {
   // 待我处理 (attention-ui.js normalizes and migrates it); without this every restart emptied the page.
   if (saved.attention && typeof saved.attention === 'object') config.attention = saved.attention;
   if (saved.todoDeliveries && typeof saved.todoDeliveries === 'object' && !Array.isArray(saved.todoDeliveries)) {
-    config.todoDeliveries = Object.fromEntries(Object.entries(saved.todoDeliveries).filter(([id, accepted]) => /^todo-(?:error-)?[a-f0-9]{64}$/.test(id) && accepted === true));
+    config.todoDeliveries = Object.fromEntries(Object.entries(saved.todoDeliveries).filter(([id, accepted]) => /^todo-(?:error-|change-)?[a-f0-9]{64}$/.test(id) && accepted === true));
   }
   if (saved.todoInbox && typeof saved.todoInbox === 'object' && !Array.isArray(saved.todoInbox)) config.todoInbox = saved.todoInbox;
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
@@ -3833,7 +3833,7 @@ window.deck.onBoardCommand(async (message) => {
       if (message.action === 'session-exit') { respondBoard(message.id, { done: true }); return; }
     } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
   }
-  if (message.action === 'main-todo-delivery' || message.action === 'main-todo-error') {
+  if (message.action === 'main-todo-delivery' || message.action === 'main-todo-error' || message.action === 'main-todo-change') {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => window.deck.boardRespond({ requestId: message.id, ...response }),
       (error) => window.deck.boardRespond({ requestId: message.id, done: true, error: error.message }));

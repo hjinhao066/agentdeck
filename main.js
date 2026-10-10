@@ -576,7 +576,7 @@ function dispatchPendingBoardCommands() {
     if (pending.command.action === 'main-todo-delivery' && !todoStore.list().some((t) => !t.done && t.ai?.taskId === pending.command.taskId)) {
       pendingBoardCommands.delete(id); continue;
     }
-    if (pending.command.nativeWeb && ['main-todo-delivery', 'main-todo-error', 'main-notify-user'].includes(pending.command.action)) {
+    if (pending.command.nativeWeb && ['main-todo-delivery', 'main-todo-error', 'main-todo-change', 'main-notify-user'].includes(pending.command.action)) {
       const cfg = readLocalConfig(), captain = cfg.columns?.find((c) => c.isMain && c.id === cfg.mainSession?.colId);
       if (!captain) continue;
       if (pending.command.callerId !== captain.id) { pending.command.callerId = captain.id; pending.delivered = false; }
@@ -1596,6 +1596,7 @@ app.whenReady().then(async () => {
     }
     if (action === 'main-todo-error' && done === true && !error) todoErrors?.acknowledge(requestId);
     if (action === 'main-todo-delivery' && error) todoErrors?.report('delivery', new Error('Todo receipt rejected.'));
+    if (action === 'main-todo-change' && error) todoAi?.forgetChange(pending.command.id);
     if (action === 'main-notify-user' && !error) {
       const notificationAt = todoNotificationNow();
       if (pending.todoNotifyResolve && nextAllowedTime(notificationAt) !== notificationAt) {
@@ -2065,6 +2066,14 @@ function startFleet(configPath) {
   todoFailures?.start();
   todoAi = new TodoAI({ todos: todoStore, tasks: taskStore, deliver: deliverTodo,
     hasCaptain: () => { const cfg = readLocalConfig(); return !!cfg.columns?.some((c) => c.isMain && c.id === cfg.mainSession?.colId); },
+    // a 待办 the user edited, ticked off or deleted: its 队长 is told (or takes back the unread 新任务)
+    report: ({ id, kind, taskId, result }) => {
+      if (!boardRendererReady) return false;
+      const cfg = readLocalConfig();
+      if (!cfg.columns?.some((c) => c.isMain && c.id === cfg.mainSession?.colId)) return false;
+      queueTodoReceipt({ id, action: 'main-todo-change', nativeWeb: true, kind, taskId, result });
+      return true;
+    },
     changed: () => { send('todos:changed', {}); send('task-board:changed', {}); },
     notify: (command) => {
       try {
