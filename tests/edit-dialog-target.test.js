@@ -13,7 +13,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'renderer.js'), 'utf8');
 const begin = source.indexOf('// ---- Add / edit dialog ----');
-const end = source.indexOf('// ---- User-created board relationships ----');
+const end = source.indexOf('// ---- Conductor Board control plane ----');
 assert.ok(begin >= 0 && end > begin, 'renderer.js still has the edit dialog section');
 const dialogSource = source.slice(begin, end);
 
