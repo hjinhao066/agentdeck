@@ -131,8 +131,27 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
 .rail-btn.on { background: var(--active-bg); color: var(--text); }
 .rail-btn svg { width: 17px; height: 17px; }
 
-/* Primary entries: New chat, Search, Schedule, Artifacts. */
-#navTop { flex: 0 0 auto; display: flex; flex-direction: column; gap: 1px; padding: 2px 8px 6px; }
+/* Primary entries: two columns of icon + name, 搜索 across both under them, so the
+   session list keeps the height. When a name would be cut (sidebar.js fitTop) only the
+   icons show, four to a row, the counts on their corners; the name is in the tooltip. */
+#navTop { flex: 0 0 auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; padding: 2px 8px 6px; }
+#navTop .nav-search-slot { grid-column: 1 / -1; }
+#navTop :is(.nav-row, .nav-search) { gap: 6px; padding: 0 6px; }
+#navTop .nav-row { position: relative; }
+#navTop .nav-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#navTop .nav-row .nav-row-hint { display: none; }
+/* Counts stay at the right end, a size smaller; 待我处理's unseen-report dot sits on the
+   icon's corner, so the name keeps the width. */
+#navTop :is(.nav-row-badge, .nav-row-count) { min-width: 16px; height: 16px; margin: 0 0 0 -3px; padding: 0 4px; font-size: 10px; line-height: 16px; }
+#navTop .nav-row-dot { position: absolute; left: 17px; top: 6px; width: 7px; height: 7px; margin: 0; box-shadow: 0 0 0 2px var(--rail-bg); }
+#navTop.nav-icons { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+#navTop.nav-icons .nav-row { justify-content: center; padding: 0; }
+#navTop.nav-icons .nav-row-label { display: none; }
+/* Icons only: the count on the icon's top-right corner (solid, the icon must not show through), the dot top-left. */
+#navTop.nav-icons :is(.nav-row-badge, .nav-row-count) { position: absolute; top: 2px; left: calc(50% + 1px); margin: 0; box-shadow: 0 0 0 2px var(--rail-bg); }
+#navTop.nav-icons .nav-row-count, #navTop.nav-icons .nav-row-badge:not(.need) { background: color-mix(in srgb, var(--text-2) 24%, var(--rail-bg)); color: var(--text); }
+#navTop.nav-icons .nav-row-dot { left: calc(50% - 14px); }
+#navTop.nav-icons .nav-row .cn-dot { position: absolute; left: calc(50% + 5px); bottom: 7px; box-shadow: 0 0 0 2px var(--rail-bg); }
 .nav-row, .nav-search {
   display: flex; align-items: center; gap: 10px;
   height: 32px; padding: 0 10px; width: 100%;
@@ -354,20 +373,45 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 #tbRight { display: flex; align-items: center; gap: 2px; }
 /* Quota rows: a compact block at the bottom of the sidebar (one row per
    provider / Claude seat). The same rows show in #quotaPop while collapsed. */
-#fleetStatus { flex: 0 0 auto; max-height: 168px; overflow: auto; padding: 6px 8px 4px; border-top: 1px solid var(--hairline); }
-.fleet-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
-.fleet-row { display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 6px; color: var(--text-2); font-size: 11.5px; }
+/* 两机: one line, a dot per computer and only what needs a look (同步失败, 冲突). The
+   computers, the whole message and 队长记录 open beside the sidebar (fleet-ui.js). */
+#fleetStatus { position: relative; flex: 0 0 auto; padding: 4px 8px; border-top: 1px solid var(--hairline); container-type: inline-size; }
+.fleet-line {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 6px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--text-2);
+  font-size: 11.5px; text-align: left; white-space: nowrap; cursor: pointer;
+}
+.fleet-line:hover, .fleet-line.open { background: var(--icon-hover-bg); }
+.fleet-line:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fleet-title { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.fleet-chips { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fleet-chip { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.fleet-chip.offline { color: var(--muted); }
+.fleet-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.fleet-line-state { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.fleet-line-state:is(.error, .warn) { font-weight: 600; }
+/* Too narrow for the names: the dots stay; the names are in the detail. */
+@container (max-width: 215px) { .fleet-chip-name { display: none; } }
+.fleet-detail {
+  display: none; position: absolute; left: calc(100% + 8px); bottom: 4px; z-index: 100;
+  flex-direction: column; gap: 2px; width: max-content; min-width: 220px; max-width: 320px; padding: 10px 12px;
+  background: var(--elev); color: var(--text); border: 1px solid var(--hairline); border-radius: 10px;
+  box-shadow: var(--shadow-pop); pointer-events: none;
+}
+.fleet-line:is(:hover:not(.shut), :focus-visible, .open) + .fleet-detail { display: flex; }
+.fleet-row { display: flex; align-items: center; gap: 6px; min-height: 22px; color: var(--text-2); font-size: 11.5px; }
 .fleet-dot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 auto; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
-.fleet-row.online .fleet-dot { background: #2f8a4a; box-shadow: none; }
+:is(.fleet-row, .fleet-chip).online .fleet-dot { background: #2f8a4a; box-shadow: none; }
 .fleet-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fleet-state { margin-left: auto; color: var(--muted); white-space: nowrap; }
+.fleet-state { margin-left: auto; padding-left: 12px; color: var(--muted); white-space: nowrap; }
 .fleet-row.online .fleet-state { color: var(--text); }
-.fleet-notice, .fleet-history { margin: 2px 6px 0; color: var(--muted); font-size: 11px; line-height: 1.35; }
-.fleet-notice.error { color: #c4473a; }
-.fleet-notice.warn { color: #9a6a00; }
-:root:not([data-theme="light"]) .fleet-notice.error { color: #f08a7e; }
-:root:not([data-theme="light"]) .fleet-notice.warn { color: #e8b44f; }
-.fleet-history { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fleet-notice { margin: 2px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.fleet-notice.error, .fleet-line-state.error { color: #c4473a; }
+.fleet-notice.warn, .fleet-line-state.warn { color: #9a6a00; }
+:root:not([data-theme="light"]) :is(.fleet-notice, .fleet-line-state).error { color: #f08a7e; }
+:root:not([data-theme="light"]) :is(.fleet-notice, .fleet-line-state).warn { color: #e8b44f; }
+.fleet-history-head { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 11px; font-weight: 600; }
+.fleet-history { color: var(--text-2); font-size: 11.5px; line-height: 1.45; }
 #navQuota { flex: 0 0 auto; padding: 6px 8px 6px; border-top: 1px solid var(--hairline); -webkit-app-region: no-drag; container-type: inline-size; }
 .quota-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 .nq-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }

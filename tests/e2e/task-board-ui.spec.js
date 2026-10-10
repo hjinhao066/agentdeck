@@ -219,7 +219,7 @@ test('grouped board: foldable project groups over shared status columns; counts,
   const entry = page.locator('#navTop .nav-row[data-nav="tasks"]');
   await resize(1440, 900);
   await expect(entry).toHaveText('任务看板');
-  expect((await page.locator('#navTop > *').evaluateAll((n) => n.map((x) => x.dataset.nav || x.id))).slice(0, 6)).toEqual(['new', 'captain', 'attention', 'tasks', 'navSearchSlot', 'todo']);
+  expect((await page.locator('#navTop > *').evaluateAll((n) => n.map((x) => x.dataset.nav || x.id))).slice(0, 5)).toEqual(['new', 'captain', 'attention', 'tasks', 'todo']);
   await entry.click();
   await expect(page.locator('#taskBoardView')).toBeVisible();
   await expect(page.locator('.tbv-head .tbv-head-label')).toHaveText(['待办', '进行中', '待验收', '需要你', '完成']);
