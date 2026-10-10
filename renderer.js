@@ -698,6 +698,8 @@ window.deck.onFontSize((delta) => {
 });
 
 // ---- Window chrome: sidebar head, top bar over the deck, sidebar footer ----
+// A shortcut as this platform writes it: ⌘N on a Mac, Ctrl+Shift+T on Windows.
+function keyLabel(action) { return AppShortcutsCore.label(action, env.platform === 'darwin'); }
 function railBtn(svg, tip, onClick, accent) {
   const b = document.createElement('button');
   b.type = 'button';
@@ -838,7 +840,7 @@ function buildChrome() {
   // Shown only while the sidebar is collapsed.
   const expandBtn = railBtn(ICONS.panelLeft, '展开侧边栏', () => setNavCollapsed(false));
   expandBtn.id = 'navExpandBtn';
-  const boardBtn = railBtn(ICONS.board, '终端架构图 (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
+  const boardBtn = railBtn(ICONS.board, `终端架构图 (${keyLabel('crewMap')})`, () => showView(activeView === 'board' ? 'terminals' : 'board'));
   boardBtn.id = 'boardViewBtn';
   expandBtn.setAttribute('aria-label', expandBtn.title);
   boardBtn.setAttribute('aria-label', boardBtn.title);
@@ -848,7 +850,7 @@ function buildChrome() {
   quotaBtn.setAttribute('aria-label', quotaBtn.title);
   quotaBtn.setAttribute('aria-haspopup', 'dialog');
   quotaBtn.setAttribute('aria-expanded', 'false');
-  const newChatBtn = railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn());
+  const newChatBtn = railBtn(ICONS.newChat, `新对话 (${keyLabel('newColumn')})`, () => addAndFocusColumn());
   newChatBtn.setAttribute('aria-label', newChatBtn.title);
   // Battery mode indicator for the collapsed sidebar; hidden unless battery mode is active.
   const batteryBtn = railBtn(ICONS.battery, '电池模式', () => openBatterySettings());
@@ -889,7 +891,7 @@ function buildChrome() {
   tbSplit.after(globalViewBtn);
   applyFit();
 
-  const sideBtn = railBtn(ICONS.panelRight, '右侧栏：预览 / 终端 / 浏览器 (Cmd+\\)', () => SidePane.toggle());
+  const sideBtn = railBtn(ICONS.panelRight, `右侧栏：预览 / 终端 / 浏览器 (${keyLabel('sidePane')})`, () => SidePane.toggle());
   sideBtn.id = 'sideToggleBtn';
   sideBtn.setAttribute('aria-label', sideBtn.title);
   tbRight.append(sideBtn);
@@ -914,12 +916,12 @@ function buildChrome() {
   themeBtn.id = 'themeBtn';
   const settingsBtn = railBtn(ICONS.gear, '设置', openNotificationSettings);
   settingsBtn.id = 'settingsBtn'; settingsBtn.setAttribute('aria-label', '设置');
-  const broadcastBtn = railBtn(ICONS.send, '广播：同一条输入发给所有对话 (Cmd+B)', () => toggleBroadcast());
+  const broadcastBtn = railBtn(ICONS.send, `广播：同一条输入发给所有对话 (${keyLabel('broadcast')})`, () => toggleBroadcast());
   broadcastBtn.id = 'broadcastBtn';
   const hermesBtn = railBtn(ICONS.globe, '打开 Hermes 网页总台（系统浏览器）', () => window.deck.openExternal(SidebarCore.HERMES_HUB_URL));
   hermesBtn.id = 'hermesHubBtn';
   bottom.append(brand, broadcastBtn, hermesBtn, settingsBtn, themeBtn,
-    railBtn(ICONS.help, '快捷键与使用提示 (Cmd+/)', () => toggleHelp()),
+    railBtn(ICONS.help, `快捷键与使用提示 (${keyLabel('help')})`, () => toggleHelp()),
     railBtn(ICONS.reset, '恢复默认布局', () => {
       if (!confirm('恢复默认布局？现有对话的终端会关闭，对话记录会删掉。已归档的不受影响。')) return;
       columns.forEach((c) => {
@@ -3196,6 +3198,13 @@ window.deck.onFocusColumn((id) => {
 
 // ---- Help dialog (shortcuts & tips) ----
 const helpDlg = document.getElementById('helpDialog');
+// The help page and a few tooltips are written for a Mac (⌘). Elsewhere each
+// shortcut is relabeled from AppShortcutsCore and the surrounding words from data-win.
+if (env.platform !== 'darwin') {
+  document.querySelectorAll('[data-shortcut]').forEach((n) => { n.textContent = keyLabel(n.dataset.shortcut); });
+  document.querySelectorAll('[data-win]').forEach((n) => { n.textContent = n.dataset.win; });
+  document.querySelectorAll('[data-win-title]').forEach((n) => { n.title = n.dataset.winTitle; n.setAttribute('aria-label', n.dataset.winTitle); });
+}
 function toggleHelp() {
   if (helpDlg.open) helpDlg.close();
   else helpDlg.showModal();
@@ -4569,28 +4578,30 @@ function focusColumnByIndex(idx) {
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
   focusColumnInput(col.id); focusedId = col.id; scrollColumnInDeck(t.wrap); syncNav();
 }
+// ⌘ keys on a Mac; Ctrl+Shift+letter and Alt+1…9 / Alt+←→ on Windows and Linux
+// (AppShortcutsCore says which and why). ⌘K and ⌘\ are ChatUI's.
 document.addEventListener('keydown', (e) => {
-  if (!e.metaKey || e.ctrlKey || e.altKey) return; // only plain Cmd combos
+  const hit = AppShortcutsCore.match(e, env.platform === 'darwin');
+  if (!hit || hit.action === 'searchAll' || hit.action === 'sidePane') return;
   if (e.target.closest && e.target.closest('.tbv-answer')) return; // 需要你 answer box: Cmd+Enter sends the answer
-  const k = e.key;
-  let handled = true;
-  if (k === 'n' || k === 'N') {
+  const a = hit.action;
+  if (a === 'newColumn') {
     addAndFocusColumn();
-  } else if (k === 'w' || k === 'W') {
+  } else if (a === 'closeColumn') {
     const idx = columns.findIndex((c) => c.id === focusedId);
     const deckIdx = deckColumns().findIndex((c) => c.id === focusedId);   // background sessions are not in the deck
     if (idx >= 0) { removeCol(columns[idx]); focusColumnByIndex(deckIdx >= 0 ? deckIdx : idx); }
-  } else if (k === 'f' || k === 'F') {
+  } else if (a === 'search') {
     if (ChatUI.isChatMode(focusedId)) ChatUI.focusSearch(); else openSearch();
-  } else if (e.shiftKey && (k === 'b' || k === 'B')) {
+  } else if (a === 'crewMap') {
     showView(activeView === 'board' ? 'terminals' : 'board');
-  } else if (k === 'b' || k === 'B') {
+  } else if (a === 'broadcast') {
     toggleBroadcast();
-  } else if (k === '/') {
+  } else if (a === 'help') {
     toggleHelp();
-  } else if (k === 'Enter') {
+  } else if (a === 'zoom') {
     toggleZoom(focusedId || (columns[0] && columns[0].id));
-  } else if (k === 'j' || k === 'J') {
+  } else if (a === 'jumpWaiting') {
     // Jump to the (next) column waiting on the user; cycle on repeat presses.
     const waiting = columns.filter((c) => { const t = terms.get(c.id); return t && t.state === 'input'; });
     if (!waiting.length) { showToast('没有等待回复的列'); }
@@ -4598,18 +4609,16 @@ document.addEventListener('keydown', (e) => {
       const cur = waiting.findIndex((c) => c.id === focusedId);
       jumpToColumn(waiting[(cur + 1) % waiting.length]);
     }
-  } else if (e.shiftKey && (k === 'r' || k === 'R')) {
+  } else if (a === 'reload') {
     // Hot reload: reload renderer only, pty processes stay alive.
     window.deck.reloadRenderer();
-  } else if (/^[1-9]$/.test(k)) {
-    focusColumnByIndex(Number(k) - 1);
-  } else if (k === 'ArrowLeft' || k === 'ArrowRight') {
+  } else if (a === 'column') {
+    focusColumnByIndex(hit.index);
+  } else if (a === 'prevColumn' || a === 'nextColumn') {
     const cur = deckColumns().findIndex((c) => c.id === focusedId);
-    focusColumnByIndex((cur < 0 ? 0 : cur) + (k === 'ArrowRight' ? 1 : -1));
-  } else {
-    handled = false;
+    focusColumnByIndex((cur < 0 ? 0 : cur) + (a === 'nextColumn' ? 1 : -1));
   }
-  if (handled) { e.preventDefault(); e.stopPropagation(); }
+  e.preventDefault(); e.stopPropagation();
 }, true);
 // Text size works everywhere, including inside a terminal: capture phase runs
 // before xterm's own handlers, so Ctrl+- never reaches the pty as ^_.
@@ -4769,6 +4778,7 @@ function openTaskSession(id) {
   whenMounted(col, () => setTimeout(() => jumpToColumn(col), 40));
 }
 TaskBoardUI.init({
+  platform: env.platform,
   showToast,
   session: (id) => {
     const col = columns.find((c) => c.id === id);

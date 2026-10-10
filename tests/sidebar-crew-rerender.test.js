@@ -87,6 +87,7 @@ const win = {
   },
   ClaudeSeats: { described: (list) => list.map((s) => ({ ...s, info: accounts[s.id] || { loggedIn: false } })), rotationButton: () => new Node('button') },
   SidebarCore: require('../sidebar-core.js'),
+  AppShortcutsCore: require('../app-shortcuts-core.js'),
   TodoUI: { shortcutLabel: () => '⌘⇧N' },
   addEventListener() {}, getSelection: () => ({ removeAllRanges() {}, addRange() {} }),
 };

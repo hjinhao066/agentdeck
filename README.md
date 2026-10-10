@@ -71,6 +71,37 @@ Missing login requires the user to log in manually; AgentDeck never logs in,
 reads cookies/storage, or records browser credentials. Webpage stdout/stderr and
 raw diagnostics are not copied into AgentDeck logs or conversations.
 
+## Keyboard shortcuts
+
+A Mac uses ⌘. On Windows and Linux the ⌘ key is the Windows key, which the
+system keeps for itself, and a plain Ctrl+letter belongs to the program in the
+terminal (Ctrl+C, Ctrl+R, Ctrl+W…), so AgentDeck takes Ctrl+Shift+letter there,
+and Alt for moving between columns (Ctrl+Shift+←/→ selects a word in
+PowerShell). The help page (? in the sidebar footer) and the tooltips show the
+keys of the platform you are on. The table lives in `app-shortcuts-core.js`.
+
+| Action | Mac | Windows / Linux |
+| --- | --- | --- |
+| New conversation (column) | ⌘N | Ctrl+Shift+T |
+| Close the column | ⌘W | Ctrl+Shift+W |
+| Search in the column | ⌘F | Ctrl+Shift+F |
+| Broadcast to every column | ⌘B | Ctrl+Shift+B |
+| Crew map (终端架构图) | ⌘⇧B | Ctrl+Shift+M |
+| Jump to a column waiting for you | ⌘J | Ctrl+Shift+J |
+| Zoom / restore the column | ⌘⏎ | Ctrl+Shift+Enter |
+| Search every conversation | ⌘K | Ctrl+Shift+K |
+| Right pane | ⌘\ | Ctrl+Shift+\ |
+| This help | ⌘/ | Ctrl+Shift+/ |
+| Reload the page (terminals keep running) | ⌘⇧R | Ctrl+Shift+R |
+| Go to column 1…9 | ⌘1…9 | Alt+1…9 |
+| Previous / next column | ⌘← / ⌘→ | Alt+← / Alt+→ |
+| Quick to-do (changeable) | ⌘⇧N | Ctrl+Shift+N |
+| Copy the terminal selection | ⌘C | Ctrl+Shift+C (or Ctrl+C with a selection) |
+
+Microsoft Pinyin's Simplified/Traditional switch also uses Ctrl+Shift+F; with it
+on, the input method takes the key first. Turn it off in the input method's
+settings (按键) to search with Ctrl+Shift+F.
+
 ## Layout
 
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
@@ -196,7 +227,7 @@ the middle:
   `barkKeyFile` setting and sends once until a newer sample recovers above the
   threshold or belongs to a reset window, including across app restarts.
   Unknown/stale quota and weekly-only exhaustion do not trigger it.
-- **Right pane** (collapsible, ⌘\\): 预览, 终端 and 浏览器 tabs.
+- **Right pane** (collapsible, ⌘\\ / Ctrl+Shift+\\): 预览, 终端 and 浏览器 tabs.
 - **Archive** stops the session's terminal but keeps its conversation and last
   output; restoring replays that output and relaunches the agent. New Claude and
   Grok columns resume their own saved model session by ID; older columns without
@@ -1020,7 +1051,7 @@ it over the chat on request, and Esc closes it. The phone hub does not have it.
   default 13). The native View menu uses the same control; it does not zoom the
   page, so the sidebar and column geometry stay stable.
 - The left sidebar searches every conversation, titles and full text of prompts and
-  replies only. Shortcuts: ⌘/Ctrl+K search, ⌘/Ctrl+\ toggle the side pane.
+  replies only. Shortcuts: ⌘K / Ctrl+Shift+K search, ⌘\ / Ctrl+Shift+\ toggle the side pane.
 - Conversations are saved locally in the app's userData folder under `chats`
   (one private JSON file per session, written atomically) and are not committed.
   Folders, archived sessions and schedules live in the

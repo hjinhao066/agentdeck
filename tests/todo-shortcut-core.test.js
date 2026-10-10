@@ -58,7 +58,9 @@ test('AgentDeck\'s own keys and the usual editing keys are refused with the reas
   assert.match(C.problem('Mod+N', false), /Shift 或 Alt/);
   assert.match(C.problem('Mod+Shift+C', false), /终端复制/);
   for (const ok of ['Mod+Shift+N', 'Mod+T', 'Mod+Alt+N', 'Mod+Shift+T', 'Mod+E']) assert.equal(C.problem(ok, true), '', ok);
-  for (const ok of ['Mod+Shift+N', 'Mod+Alt+T', 'Mod+Shift+T']) assert.equal(C.problem(ok, false), '', ok);
+  for (const ok of ['Mod+Shift+N', 'Mod+Alt+T', 'Mod+Shift+E']) assert.equal(C.problem(ok, false), '', ok);
+  // AgentDeck's own Ctrl+Shift letters on Windows (Ctrl+Shift+T is 新对话 there).
+  assert.equal(C.problem('Mod+Shift+T', false), 'Ctrl+Shift+T 已经是「新对话」，换一个。');
   assert.equal(C.problem(C.DEFAULT, true), '');
   assert.equal(C.problem(C.DEFAULT, false), '');
 });

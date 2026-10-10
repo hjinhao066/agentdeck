@@ -260,9 +260,9 @@
           <button type="button" data-cm="relayout" title="一键整理：框和卡片对齐排好（按你摆的先后，不动你的缩放）" aria-label="一键整理：框和卡片对齐排好（按你摆的先后，不动你的缩放）"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
           <button type="button" data-cm="undo" title="撤销：回到整理前的位置和缩放" aria-label="撤销：回到整理前的位置和缩放" hidden><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
           <span class="cm-sep"></span>
-          <button type="button" data-cm="out" title="缩小 (⌘/Ctrl+滚轮)" aria-label="缩小 (⌘/Ctrl+滚轮)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+          <button type="button" data-cm="out" data-win-title="缩小 (Ctrl+滚轮)" title="缩小 (⌘/Ctrl+滚轮)" aria-label="缩小 (⌘/Ctrl+滚轮)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
           <button type="button" data-cm="reset" class="cm-zoom" title="回到 100%" aria-label="回到 100%（当前缩放）">100%</button>
-          <button type="button" data-cm="in" title="放大 (⌘/Ctrl+滚轮)" aria-label="放大 (⌘/Ctrl+滚轮)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg></button>
+          <button type="button" data-cm="in" data-win-title="放大 (Ctrl+滚轮)" title="放大 (⌘/Ctrl+滚轮)" aria-label="放大 (⌘/Ctrl+滚轮)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg></button>
           <span class="cm-sep"></span>
           <button type="button" data-cm="fit" class="cm-fit" title="智能一页：项目从左往右排成一行，每个框排几列自动算好，整张图正好铺满一屏" aria-label="智能一页：项目从左往右排成一行，每个框排几列自动算好，整张图正好铺满一屏"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><path d="m12 8.2 1.1 2.7 2.7 1.1-2.7 1.1L12 15.8l-1.1-2.7L8.2 12l2.7-1.1z" fill="currentColor" stroke="none"/></svg></button>
         </div>
@@ -504,22 +504,22 @@
       <span>Artifacts</span><span>队员回执交付的文件按项目收在这里，agent 回复里提到的文件和网址也在；点一下在右侧预览</span>
       <span>输入框</span><span>粘贴截图、拖文件、点 + 选文件都会变成附件，发送时把路径一起发给 agent；鼠标移上去点 ✕ 删除</span>
       <span>输入框下方</span><span>agent 自己的状态行（Context、Session、Model、Reset、权限模式…），直接从终端读出来</span>
-      <span><kbd>⌘ K</kbd></span><span>搜索全部对话（含已归档），只搜你的提示词和 agent 的最终回复</span>
+      <span><kbd data-shortcut="searchAll">⌘ K</kbd></span><span>搜索全部对话（含已归档），只搜你的提示词和 agent 的最终回复</span>
       <span><kbd id="helpTodoKey">⌘⇧N</kbd></span><span>速记一条待办：在 AgentDeck 里任何地方都能按（终端里也行），打一句话回车就存；在设置里可以换键</span>
       <span>队长</span><span>左栏「队长」：常驻的总负责人。你说要做什么，它把活派给各个对话，回执以卡片出现，点卡片标题跳到那一列。只有队长能控制别的对话</span>
       <span>清空上下文</span><span>只在队长的列头：只清队长的模型上下文，它重新启动并重读默认说明。别的对话不重启，已派出的活、没处理的回执和提问都转给新的队长；之前的对话存在本机，队长按需读取</span>
     </div>
     <div class="help-section">列</div>
     <div class="help-grid">
-      <span><kbd>⌘ N</kbd></span><span>新对话（新建一列）</span>
-      <span><kbd>⌘ W</kbd></span><span>关闭当前列（有任务在跑会先确认）</span>
-      <span><kbd>⌘ 1…9</kbd></span><span>跳到第 N 列</span>
-      <span><kbd>⌘ ←</kbd> <kbd>⌘ →</kbd></span><span>左右切换聚焦列</span>
-      <span><kbd>⌘ J</kbd></span><span>跳到等你回复的列（红点），多列循环</span>
-      <span><kbd>⌘ ⏎</kbd></span><span>放大 / 还原当前列（双击列头空白处同效）</span>
-      <span><kbd>⌘ \</kbd></span><span>打开 / 关闭右侧栏（预览、终端、浏览器）</span>
+      <span><kbd data-shortcut="newColumn">⌘ N</kbd></span><span>新对话（新建一列）</span>
+      <span><kbd data-shortcut="closeColumn">⌘ W</kbd></span><span>关闭当前列（有任务在跑会先确认）</span>
+      <span><kbd data-shortcut="column">⌘ 1…9</kbd></span><span>跳到第 N 列</span>
+      <span><kbd data-shortcut="prevColumn">⌘ ←</kbd> <kbd data-shortcut="nextColumn">⌘ →</kbd></span><span>左右切换聚焦列</span>
+      <span><kbd data-shortcut="jumpWaiting">⌘ J</kbd></span><span>跳到等你回复的列（红点），多列循环</span>
+      <span><kbd data-shortcut="zoom">⌘ ⏎</kbd></span><span>放大 / 还原当前列（双击列头空白处同效）</span>
+      <span><kbd data-shortcut="sidePane">⌘ \</kbd></span><span>打开 / 关闭右侧栏（预览、终端、浏览器）</span>
       <span>列头「终端 / 对话」</span><span>切换这一列的显示：对话气泡，或原始终端。每次打开 AgentDeck 都从对话视图开始</span>
-      <span><kbd>⌘/Ctrl +</kbd> <kbd>−</kbd></span><span>终端字体加减，<kbd>0</kbd> 复位（全列生效，会记住）</span>
+      <span><kbd data-win="Ctrl +">⌘/Ctrl +</kbd> <kbd>−</kbd></span><span>终端字体加减，<kbd>0</kbd> 复位（全列生效，会记住）</span>
       <span>双击列名</span><span>重命名（Enter 确认，Esc 取消）</span>
       <span>自动命名</span><span>给 agent 发任务后，列名自动变成任务摘要；手动改过名的列不再自动变</span>
       <span>弹窗通知</span><span>agent 等你回复或安静下来后会弹窗（Mac 和 Windows 都有），点击直达那一列并聚焦输入框</span>
@@ -527,15 +527,15 @@
     </div>
     <div class="help-section">输入与搜索</div>
     <div class="help-grid">
-      <span><kbd>⌘ F</kbd></span><span>列内搜索（Enter 下一个，Shift+Enter 上一个）</span>
-      <span><kbd>⌘ B</kbd></span><span>广播：同一条输入发给所有列</span>
-      <span><kbd>⌘ V</kbd></span><span>粘贴截图 → 自动存成 PNG 并输入其路径</span>
+      <span><kbd data-shortcut="search">⌘ F</kbd></span><span data-win="列内搜索（Enter 下一个，Shift+Enter 上一个）。微软拼音的简繁切换也占 Ctrl+Shift+F，按了没反应就到输入法设置的「按键」里关掉它">列内搜索（Enter 下一个，Shift+Enter 上一个）</span>
+      <span><kbd data-shortcut="broadcast">⌘ B</kbd></span><span>广播：同一条输入发给所有列</span>
+      <span><kbd data-win="Ctrl+V">⌘ V</kbd></span><span>粘贴截图 → 自动存成 PNG 并输入其路径</span>
       <span>拖文件进列</span><span>自动输入该文件的路径</span>
-      <span><kbd>⌘ F</kbd> 在对话列</span><span>搜索所有对话（只搜你发的和 agent 的最终回复）</span>
-      <span><kbd>⌘ K</kbd></span><span>搜索所有对话</span>
+      <span><kbd data-shortcut="search">⌘ F</kbd> 在对话列</span><span>搜索所有对话（只搜你发的和 agent 的最终回复）</span>
+      <span><kbd data-shortcut="searchAll">⌘ K</kbd></span><span>搜索所有对话</span>
       <span>点击 URL / 路径</span><span>在右侧栏预览（网页、代码、Markdown、图片、PDF）</span>
-      <span><kbd>⌘ 点击</kbd></span><span>URL 用系统浏览器打开，路径在访达中显示</span>
-      <span><kbd>⌥ 点击</kbd> 路径</span><span>用编辑器打开并跳到 :行号</span>
+      <span><kbd data-win="Ctrl+点击">⌘ 点击</kbd></span><span data-win="URL 用系统浏览器打开，路径在资源管理器中显示">URL 用系统浏览器打开，路径在访达中显示</span>
+      <span><kbd data-win="Alt+点击">⌥ 点击</kbd> 路径</span><span>用编辑器打开并跳到 :行号</span>
     </div>
     <div class="help-section">状态灯</div>
     <div class="help-grid">
@@ -547,14 +547,14 @@
     </div>
     <div class="help-section">其他</div>
     <div class="help-grid">
-      <span><kbd>⌘ ⇧ B</kbd></span><span>打开 / 关闭终端架构图</span>
+      <span><kbd data-shortcut="crewMap">⌘ ⇧ B</kbd></span><span>打开 / 关闭终端架构图</span>
       <span>Assign conductor task</span><span>创建顶层任务和真实 conductor 终端；它可以生成 worker 与下游 worker</span>
       <span>Inspect here</span><span>在 Board 右侧直接操作同一个真实 xterm/node-pty 终端；图和终端同时可见</span>
       <span>Connect</span><span>显式创建 delegation / dependency / handoff 关系；点击连线标签可修改或删除</span>
       <span>双击节点标题 / F2</span><span>设置持久显示名；内部会话 ID 和自动标题不变</span>
-      <span>Manual terminal</span><span>用 + / ⌘ N 创建，始终独立，conductor 无法控制</span>
-      <span><kbd>⌘ /</kbd></span><span>打开本说明</span>
-      <span><kbd>⌘ ⇧ R</kbd></span><span>热重载界面（终端进程不断）</span>
+      <span>Manual terminal</span><span data-win="用 + / Ctrl+Shift+T 创建，始终独立，conductor 无法控制">用 + / ⌘ N 创建，始终独立，conductor 无法控制</span>
+      <span><kbd data-shortcut="help">⌘ /</kbd></span><span>打开本说明</span>
+      <span><kbd data-shortcut="reload">⌘ ⇧ R</kbd></span><span>热重载界面（终端进程不断）</span>
       <span>拖侧边栏右缘</span><span>调宽度；一直拖到最左 = 收起侧边栏（顶部左上角的按钮再展开）</span>
     </div>
     <div class="row"><button class="btn primary" id="helpClose">好</button></div>
@@ -592,6 +592,7 @@
   <script src="agent-info.js"></script>
   <script src="quota-core.js"></script>
   <script src="sidebar-core.js"></script>
+  <script src="app-shortcuts-core.js"></script>
   <script src="schedule-core.js"></script>
   <script src="schedule-feed-core.js"></script>
   <script src="side-pane.js"></script>

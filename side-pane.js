@@ -46,7 +46,7 @@
       t.prepend(ico);
     });
     $('sideClose').innerHTML = host.ICONS.panelRight;
-    $('sideClose').title = '收起右侧栏 (⌘\\)';
+    $('sideClose').title = `收起右侧栏 (${window.AppShortcutsCore.label('sidePane', host.platform === 'darwin')})`;
     $('sideClose').setAttribute('aria-label', $('sideClose').title);
     sbBack.innerHTML = host.ICONS.left;
     sbFwd.innerHTML = host.ICONS.right;
