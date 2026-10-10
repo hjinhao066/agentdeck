@@ -1928,7 +1928,8 @@ app.whenReady().then(async () => {
       for (const f of fs.readdirSync(PASTE_DIR)) {
         try {
           const p = path.join(PASTE_DIR, f);
-          if (Date.now() - fs.statSync(p).mtimeMs > 24 * 60 * 60 * 1000) fs.unlinkSync(p);
+          const stat = fs.lstatSync(p); // a link or a folder in there is never followed or removed
+          if (stat.isFile() && Date.now() - stat.mtimeMs > 24 * 60 * 60 * 1000) fs.unlinkSync(p);
         } catch (_) {} // one file that is gone or in use never stops the rest
       }
     } catch (_) {}

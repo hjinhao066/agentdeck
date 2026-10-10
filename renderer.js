@@ -2441,10 +2441,10 @@ function buildColumn(col, isFresh) {
       // else (another column, a chat box) is not pulled back here: nothing is asked of Chromium.
       request: () => (termEl.contains(document.activeElement) ? window.deck.clipboardNativePaste() : Promise.resolve(false)),
     });
-    // A paste chord in this column (Shift+Insert, Ctrl+Shift+V, Cmd+V, right button; a voice tool's
-    // simulated keys count) lets one paste through while a late Chromium paste is being dropped.
-    // A left click or an ordinary key does not: the late paste would then double a repeated Ctrl+V.
-    for (const type of ['keydown', 'mousedown']) termEl.addEventListener(type, nativePasteWhenFocused.userInput, true);
+    // A paste chord in this column (Shift+Insert, Ctrl+Shift+V, Cmd+V; a voice tool's simulated
+    // keys count) lets one paste through while a late Chromium paste is being dropped. A click or
+    // an ordinary key does not: the late paste would then double a repeated Ctrl+V.
+    termEl.addEventListener('keydown', nativePasteWhenFocused.userInput, true);
     const ctrlV = PasteRetryCore.create({
       readText: () => window.deck.clipboardReadText(),
       readImage: pasteImageAsPath,
@@ -4529,7 +4529,7 @@ function renderQuotaBar() {
               const active = document.activeElement;
               if (byMouse && active?.classList.contains('quota-login-copy') && item.contains(active)) active.blur();
             }, 1450);
-          } catch (_) { showToast('登录命令复制失败，请重试。'); }
+          } catch (_) { showToast('登录命令复制失败，请重试'); }
         });
         // Leaving the row on the way to the copy button keeps the detail for a moment (see .tip-hold).
         item.addEventListener('mouseleave', () => {

@@ -44,21 +44,18 @@
       (e.key === 'v' || e.key === 'V' || e.code === 'KeyV');
   }
 
-  // The ways a person (or a program simulating one, Type4Me's Shift+Insert) asks for a paste
-  // other than the plain Ctrl+V: Shift+Insert, Ctrl+Shift+V, Cmd+V, and a right-button press.
+  // The keys with which a person (or a program simulating one, Type4Me's Shift+Insert) asks for a
+  // paste other than the plain Ctrl+V: Shift+Insert, Ctrl+Shift+V, Cmd+V. A further modifier held
+  // by the user (Type4Me's own hotkey may still be down) does not stop them counting. There is no
+  // right-click paste in a terminal column, so the mouse is never a paste chord.
   // Only these let ONE paste through while the late-paste guard is up (see createNativePaste);
   // a left click or an ordinary key does not, because Chromium's late paste can still arrive
   // after one and pressing Ctrl+V again as the hint says would then paste twice.
   function isPasteChord(e) {
-    if (!e) return false;
-    if (e.type === 'mousedown' || e.type === 'pointerdown') return e.button === 2;
-    if (e.type !== 'keydown') return false;
-    const v = e.key === 'v' || e.key === 'V' || e.code === 'KeyV';
-    if (e.altKey) return false;
-    if (e.key === 'Insert' || e.code === 'Insert') return !!e.shiftKey && !e.ctrlKey && !e.metaKey; // Shift+Insert
-    if (!v) return false;
-    if (e.metaKey) return !e.ctrlKey && !e.shiftKey;                                                // Cmd+V
-    return !!e.ctrlKey && !!e.shiftKey;                                                             // Ctrl+Shift+V
+    if (!e || e.type !== 'keydown') return false;
+    if (e.key === 'Insert' || e.code === 'Insert') return !!e.shiftKey; // Shift+Insert
+    if (!(e.key === 'v' || e.key === 'V' || e.code === 'KeyV')) return false;
+    return !!e.metaKey || (!!e.ctrlKey && !!e.shiftKey);                // Cmd+V, Ctrl+Shift+V
   }
 
   // The hint under a failed Ctrl+V. `kind` is what the clipboard holds: 'other' (files or
@@ -83,12 +80,11 @@
   // text, fn(text) returns true when it took the event (the page then stops it, so xterm does
   // not paste it a second time); request() -> Promise<boolean> (true: Chromium ran);
   // setTimer / clearTimer. The result is the text it delivered, '' for none.
-  // The function it returns has .userInput(event): the page calls it for every key and mouse
-  // press in the column. A paste chord (isPasteChord) lets the next paste event through while the
-  // late-paste guard stays up: Shift+Insert, Ctrl+Shift+V and Cmd+V for ALLOW_MS, a right-button
-  // press until the guard ends; the guard goes on swallowing everything else, so Chromium's late
-  // paste is still dropped and a Ctrl+V pressed again as the hint says pastes once. A left click
-  // or an ordinary key changes nothing.
+  // The function it returns has .userInput(event): the page calls it for every key in the column.
+  // A paste chord (isPasteChord: Shift+Insert, Ctrl+Shift+V, Cmd+V) lets the next paste event
+  // through for ALLOW_MS while the late-paste guard stays up; the guard goes on swallowing
+  // everything else, so Chromium's late paste is still dropped and a Ctrl+V pressed again as the
+  // hint says pastes once. A mouse press or an ordinary key changes nothing.
   function createNativePaste(options) {
     const o = options || {};
     const setTimer = o.setTimer || ((fn, ms) => setTimeout(fn, ms));
@@ -137,7 +133,7 @@
     };
     nativePaste.userInput = (e) => {
       if (!guards.size || !isPasteChord(e)) return;
-      allowUntil = e.type === 'keydown' ? now() + ALLOW_MS : Infinity;
+      allowUntil = now() + ALLOW_MS;
     };
     return nativePaste;
   }

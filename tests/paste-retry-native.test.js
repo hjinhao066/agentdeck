@@ -238,23 +238,27 @@ const cmdV = () => key({ key: 'v', code: 'KeyV', metaKey: true });
 const leftClick = () => ({ type: 'mousedown', button: 0 });
 const rightClick = () => ({ type: 'mousedown', button: 2 });
 
-test('what is a paste chord: Shift+Insert, Ctrl+Shift+V, Cmd+V and a right-button press; nothing else', () => {
+test('what is a paste chord: Shift+Insert, Ctrl+Shift+V and Cmd+V, with or without another modifier held; no mouse button, nothing else', () => {
   const yes = (e) => assert.equal(PasteRetryCore.isPasteChord(e), true, JSON.stringify(e));
   const no = (e) => assert.equal(PasteRetryCore.isPasteChord(e), false, JSON.stringify(e));
   yes(shiftInsert());
+  yes(key({ key: 'Insert', code: 'Insert', shiftKey: true, ctrlKey: true })); // Type4Me's hotkey may still be down
+  yes(key({ key: 'Insert', code: 'Insert', shiftKey: true, altKey: true }));
   yes(ctrlShiftV());
   yes(key({ key: 'v', code: 'KeyV', ctrlKey: true, shiftKey: true }));
+  yes(key({ key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true, altKey: true }));
   yes(cmdV());
-  yes(rightClick());
+  yes(key({ key: 'v', code: 'KeyV', metaKey: true, shiftKey: true }));
+  no(rightClick()); // a terminal column has no right-click paste
   no(leftClick());
   no({ type: 'mousedown', button: 1 });
+  no({ type: 'pointerdown', button: 2 });
   no(key({ key: 'v', code: 'KeyV', ctrlKey: true })); // the plain Ctrl+V the hint asks for again
   no(key({ key: 'v', code: 'KeyV', ctrlKey: true, repeat: true }));
   no(key({ key: 'Insert', code: 'Insert' })); // Insert alone
   no(key({ key: 'Insert', code: 'Insert', ctrlKey: true })); // Ctrl+Insert is a copy
-  no(key({ key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true, altKey: true }));
-  no(key({ key: 'v', code: 'KeyV', metaKey: true, shiftKey: true }));
   no(key({ key: 'v', code: 'KeyV' }));
+  no(key({ key: 'v', code: 'KeyV', altKey: true }));
   for (const k of ['Control', 'Shift', 'Alt', 'Meta']) no(key({ key: k, ctrlKey: k === 'Control', shiftKey: k === 'Shift' }));
   no(key({ key: 'x' }));
   no(key({ key: 'Enter', code: 'Enter' }));
@@ -282,12 +286,23 @@ test('Ctrl+Shift+V and Cmd+V are pasted once each', async () => {
   }
 });
 
-test('a right-click paste is pasted once, however long the menu takes; the late paste is still dropped', async () => {
+test('a right-button press changes nothing: the late paste is dropped, and Ctrl+V pressed again pastes once', async () => {
   const n = await guarded();
   n.nativePaste.userInput(rightClick());
-  await n.advance(900);
-  assert.equal(n.pasteEvent('from the context menu'), false);
-  assert.equal(n.pasteEvent('late'), true);
+  assert.equal(n.listeners.size, 1);
+  assert.equal(n.pasteEvent('late text'), true, 'taken');
+  const second = n.nativePaste();
+  await n.advance(5);
+  assert.equal(n.pasteEvent('fresh'), true);
+  assert.equal(await second, 'fresh');
+  assert.deepEqual(n.log, [['taken', 'late text'], ['taken', 'fresh']]);
+});
+
+test('Shift+Insert from Type4Me with its own hotkey still down (Ctrl held) is pasted once', async () => {
+  const n = await guarded();
+  n.nativePaste.userInput(key({ key: 'Insert', code: 'Insert', shiftKey: true, ctrlKey: true }));
+  assert.equal(n.pasteEvent('spoken words'), false);
+  assert.equal(n.pasteEvent('late text'), true);
 });
 
 test('a chord whose paste never comes lets nothing else through after it expires', async () => {
@@ -298,7 +313,7 @@ test('a chord whose paste never comes lets nothing else through after it expires
 });
 
 test('a left click or an ordinary key does not lift the guard: the late paste is dropped, and Ctrl+V pressed again pastes once', async () => {
-  for (const input of [leftClick(), key({ key: 'x' }), key({ key: 'Enter', code: 'Enter' }), key({ key: 'Shift', code: 'ShiftLeft', shiftKey: true }), { type: 'mousemove' }, { type: 'keyup', key: 'v' }]) {
+  for (const input of [leftClick(), rightClick(), key({ key: 'x' }), key({ key: 'Enter', code: 'Enter' }), key({ key: 'Shift', code: 'ShiftLeft', shiftKey: true }), { type: 'mousemove' }, { type: 'keyup', key: 'v' }]) {
     const n = await guarded();
     n.nativePaste.userInput(input);
     assert.equal(n.listeners.size, 1, JSON.stringify(input));
@@ -339,18 +354,19 @@ test('a chord pressed before a new request does not carry over to it, and chords
   assert.equal(await next, 'fresh');
   const m = nativeHarness();
   m.nativePaste.userInput(shiftInsert()); // no guard at all
-  m.nativePaste.userInput(rightClick());
+  m.nativePaste.userInput(ctrlShiftV());
   const result = m.nativePaste();
   await m.advance(5);
   assert.equal(m.pasteEvent('hello'), true);
   assert.equal(await result, 'hello');
 });
 
-test('renderer.js hands every key and mouse press of the column to the guard, in the capture phase', () => {
+test('renderer.js hands every key of the column to the guard, in the capture phase, and no mouse press', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'renderer.js'), 'utf8');
-  assert.match(src, /for \(const type of \['keydown', 'mousedown'\]\) termEl\.addEventListener\(type, nativePasteWhenFocused\.userInput, true\)/);
+  assert.match(src, /termEl\.addEventListener\('keydown', nativePasteWhenFocused\.userInput, true\)/);
+  assert.doesNotMatch(src, /'mousedown'\], nativePasteWhenFocused|nativePasteWhenFocused\.userInput.*mousedown/);
 });
 
 test('a picture the main process cannot read: files get their own words, anything else keeps "paste again"', () => {

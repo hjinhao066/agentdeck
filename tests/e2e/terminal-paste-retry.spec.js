@@ -228,11 +228,12 @@ test('a paste that throws leaves no unhandled rejection and the typed key still 
 });
 
 // ---- the failure hint's 1.5 seconds: Chromium's late paste is swallowed, the user's own is not ----
-// A paste the user asks for (Shift+Insert, Ctrl+Shift+V, right click) goes through once and the guard
-// stays up, so Chromium's late paste after it is still dropped; a left click or an ordinary key does
-// not lift the guard, so pressing Ctrl+V again as the hint says never doubles.
+// A paste the user asks for (Shift+Insert, Ctrl+Shift+V) goes through once and the guard stays up, so
+// Chromium's late paste after it is still dropped; a mouse click (left or right: a terminal column has
+// no right-click paste) or an ordinary key does not lift the guard, so pressing Ctrl+V again as the
+// hint says never doubles.
 // Keys are dispatched as page events, never as real Shift+Insert: a real one would make Chromium
-// read the machine's clipboard, which a test never touches. The mouse press is a real one.
+// read the machine's clipboard, which a test never touches. Mouse presses are real ones.
 const USER = 'USER-OWN-PASTE-5531';
 const keyInPage = (init) => page.evaluate(([id, k]) => {
   terms.get(id).el.querySelector('textarea').dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...k }));
@@ -252,9 +253,8 @@ const failCtrlV = async () => {
 };
 
 for (const way of [
-  { name: 'a right-click paste', input: async () => {
-    const at = await page.evaluate((id) => { const r = terms.get(id).el.querySelector('.xterm-screen').getBoundingClientRect(); return { x: r.x + 20, y: r.y + 20 }; }, ID);
-    await page.mouse.click(at.x, at.y, { button: 'right' });
+  { name: 'Shift+Insert with a Ctrl still held (the voice tool hotkey)', input: async () => {
+    await keyInPage({ key: 'Insert', code: 'Insert', shiftKey: true, ctrlKey: true });
   } },
   { name: 'Shift+Insert (as a voice tool such as Type4Me simulates it)', input: async () => {
     await keyInPage({ key: 'Shift', code: 'ShiftLeft', shiftKey: true });
@@ -279,12 +279,14 @@ for (const way of [
   });
 }
 
-const leftClickTerminal = async () => {
+const clickTerminal = async (button) => {
   const at = await page.evaluate((id) => { const r = terms.get(id).el.querySelector('.xterm-screen').getBoundingClientRect(); return { x: r.x + 20, y: r.y + 20 }; }, ID);
-  await page.mouse.click(at.x, at.y);
+  await page.mouse.click(at.x, at.y, button ? { button } : undefined);
 };
+const leftClickTerminal = () => clickTerminal();
 for (const way of [
   { name: 'a left click', input: leftClickTerminal },
+  { name: 'a right click', input: () => clickTerminal('right') },
   { name: 'an ordinary key', input: () => keyInPage({ key: 'x', code: 'KeyX' }) },
   { name: 'a lone Shift', input: () => keyInPage({ key: 'Shift', code: 'ShiftLeft', shiftKey: true }) },
 ]) {

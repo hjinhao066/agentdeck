@@ -257,8 +257,15 @@ test('saving a picture removes pasted pictures older than 24 hours and keeps the
 });
 
 test('the launch sweep still runs, and a file that cannot be removed does not stop the rest', (t) => {
-  const d = driver(t, { seed: (dir) => { aged(dir, 'paste-old.png', 30); aged(dir, 'paste-new.png', 1); fs.mkdirSync(path.join(dir, 'locked')); } });
-  assert.deepEqual(d.saved().sort(), ['locked', 'paste-new.png'], 'a directory (unlink fails) is left, the old picture went');
+  const d = driver(t, { seed: (dir) => {
+    aged(dir, 'paste-old.png', 30); aged(dir, 'paste-new.png', 1);
+    const folder = path.join(dir, 'locked');
+    fs.mkdirSync(folder); aged(folder, 'inside.png', 40);
+    const when = new Date(Date.now() - 50 * 3_600_000);
+    fs.utimesSync(folder, when, when); // an old folder: only plain files are ever removed
+  } });
+  assert.deepEqual(d.saved().sort(), ['locked', 'paste-new.png'], 'an old folder is left alone, the old picture went');
+  assert.deepEqual(fs.readdirSync(path.join(d.pasteDir, 'locked')), ['inside.png'], 'and nothing inside it was touched');
 });
 
 test('a clipboard with no picture saves nothing and sweeps nothing', async (t) => {

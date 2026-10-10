@@ -115,10 +115,11 @@ Chromium's paste is asked only while the terminal still has the focus, and a pas
 its that arrives after the 300 ms wait is dropped for 1.5 s, so pressing again as the hint says
 pastes once. The drop goes on whatever else is pressed (a left click, an ordinary key), but a paste
 chord lets exactly one paste through without ending it: Shift+Insert (also a voice tool's simulated
-one, such as Type4Me's), Ctrl+Shift+V and Cmd+V for half a second, a right-button press until the
-drop ends. The late paste that comes after is still dropped.
+one, such as Type4Me's; a further modifier held down does not matter), Ctrl+Shift+V and Cmd+V, for half
+a second. The late paste that comes after is still dropped. A mouse click does not count (a terminal
+column has no right-click paste).
 A second Ctrl+V meanwhile adds nothing, and keys typed meanwhile follow the paste in order.
-Ctrl+Shift+V, right-click paste, dropped files and bracketed paste are unchanged.
+Ctrl+Shift+V, dropped files and bracketed paste are unchanged.
 
 Electron 44's clipboard is asynchronous (`writeText`, `readText` and `read` return Promises, and
 `readImage` is gone). Every copy button waits for `deck.clipboardWrite(text)`, which resolves only
