@@ -1310,6 +1310,7 @@ body.linking-board .board-port.out::before {
 .reply.md tbody tr:last-child td { border-bottom: none; }
 .reply.md hr { border: none; border-top: 1px solid var(--hairline); margin: 1.2em 0; }
 .reply.quiet { color: var(--muted); font-size: 12.5px; }
+.turn-broken { color: var(--muted); font-size: 12.5px; }
 .reply.pending { display: flex; align-items: center; gap: 9px; color: var(--muted); }
 .live-line { min-width: 0; font-size: 12px; line-height: 1.5; }
 .typing { flex: 0 0 auto; width: 26px; height: 8px; display: inline-block; background:

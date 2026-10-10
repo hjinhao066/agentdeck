@@ -607,7 +607,17 @@
 
   // readOnly: a turn from a retired 队长 conversation; it is not tracked in
   // v.rows, so live updates of the current chat never touch it.
+  // A turn that cannot be drawn shows a short line instead (its saved text is untouched):
+  // it never stops the turns and columns after it.
   function turnRows(v, turn, readOnly, turns) {
+    try { return buildTurnRows(v, turn, readOnly, turns); } catch (error) {
+      console.error('对话回合显示失败：', error);
+      const row = el('div', 'turn turn-broken', '这一轮显示不出来，内容仍在对话记录里。');
+      row.dataset.turn = turn.id;
+      return row;
+    }
+  }
+  function buildTurnRows(v, turn, readOnly, turns) {
     if (turn.kind === 'notice') {
       const notice = el('div', 'captain-relay-notice', turn.reply);
       notice.dataset.turn = turn.id; notice.setAttribute('role', 'status');
@@ -989,7 +999,12 @@
     const v = views.get(id);
     const row = v && v.rows.get(turn.id);
     if (!row) return;
-    const fresh = assistantRow(v, turn);
+    let fresh;
+    try { fresh = assistantRow(v, turn); } catch (error) {
+      console.error('对话回合显示失败：', error);
+      fresh = el('div', 'msg assistant turn-broken', '这一轮显示不出来，内容仍在对话记录里。');
+      fresh.dataset.turn = turn.id;
+    }
     row.asst.replaceWith(fresh);
     row.asst = fresh;
     if (row.wrap) row.wrap.hidden = isSilent(turn, shownReply(v, turn));
@@ -1862,7 +1877,8 @@
     loaded = true;
     unsaved.forEach((id) => scheduleSave(id));
     unsaved.clear();
-    views.forEach((v, id) => renderChat(id));
+    // one column that cannot be drawn leaves the others, the sidebar and Artifacts alone
+    views.forEach((v, id) => { try { renderChat(id); } catch (error) { console.error('对话显示失败：', error); } });
     if (nav.input.value.trim()) runSearch();
     if (window.Sidebar) window.Sidebar.render();
     if (window.ChatDeliverables) window.ChatDeliverables.refresh();
