@@ -21,7 +21,7 @@ const savedCap = M.MAX_ACTIVE;
 function world(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-autoverify-session-'));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); M.MAX_ACTIVE = savedCap; });
-  const w = { root, dir: path.join(root, 'tasks'), out: new Set(), stale: new Set(), seatOut: new Set(), seats: null, pressure: null, failOps: new Map() };
+  const w = { root, dir: path.join(root, 'tasks'), out: new Set(), heldOnly: new Set(), stale: new Set(), seatOut: new Set(), seats: null, pressure: null, failOps: new Map() };
   w.config = { folders: [], archived: [], mainSession: { colId: 'captain', tasks: [], pending: [], inflight: [], waitlist: [], gen: 1, cmd: '' }, concurrencyCap: 5, activeClaudeSeatId: 'default' };
   w.columns = [{ id: 'captain', isMain: true, cmd: '' }];
   w.boot = () => boot(w);
@@ -58,10 +58,11 @@ function boot(w, persisted) {
         if ([...w.out].some((p) => String(cmd).startsWith(p))) return 'out';
         return [...w.stale].some((p) => String(cmd).startsWith(p)) ? 'unknown' : 'ok';
       },
-      commandQuota: (_store, cmd) => ({ out: [...w.out].some((p) => String(cmd).startsWith(p)) }),
+      // heldOnly: the ordinary open/queue decision says out while the passive reading the choosers use still said room (it changed in between)
+      commandQuota: (_store, cmd) => ({ out: [...w.out, ...w.heldOnly].some((p) => String(cmd).startsWith(p)) }),
       // Same out-set as commandQuota. This harness does not model same-tier switches.
       quotaFallback: (_store, cmd) => {
-        const out = [...w.out].some((p) => String(cmd).startsWith(p));
+        const out = [...w.out, ...w.heldOnly].some((p) => String(cmd).startsWith(p));
         return out
           ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' }
           : { action: 'open', cmd, note: '' };
@@ -72,7 +73,7 @@ function boot(w, persisted) {
   const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] }, console });
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
   const host = {
-    config: w.config, platform: 'darwin', terms: entries, userComposing: () => false, columnLabel: (c) => c.displayTitle || c.title || c.id,
+    config: w.config, platform: 'darwin', testInstance: !!w.testInstance, terms: entries, userComposing: () => false, columnLabel: (c) => c.displayTitle || c.title || c.id,
     saveConfig() {}, flushConfig() { w.flushes = (w.flushes || 0) + 1; }, showToast: (m) => toasts.push(m),
     columns: () => w.columns,
     createSession(meta) { const col = { ...meta, createdByRequestId: null };   // a Captain-made session is a 'manual' column: board-core drops this field
@@ -280,7 +281,7 @@ test('a verify card is reviewed automatically: right provider, full task, one se
   const card = await newCard(app);
   const exec = await app.execute(card);
   assert.ok(exec); assert.equal(app.card(card.id).status, 'doing');
-  await app.finish(exec, '修好了。 第二句：登录页已改，测试 a.test.js 通过。', { files: ['/repo/login.js', '/repo/shot.png'] });
+  await app.finish(exec, '修好了。 第二句：登录校验已改，测试 a.test.js 通过。', { files: ['/repo/login.js', '/repo/notes.txt'] });
   assert.equal(app.card(card.id).status, 'review');
   await app.scan();
   const [reviewer, ...extra] = app.reviewers(card);
@@ -289,7 +290,7 @@ test('a verify card is reviewed automatically: right provider, full task, one se
   assert.equal(reviewer.boardAttempt, AV.reviewAttemptId(card.id, 1)); assert.deepEqual([...reviewer.reviews], [exec.id]);
   assert.equal(reviewer.title, '审查：修登录（Claude Sonnet 5.5）', 'the title says what really runs');
   const [prompt] = app.texts(reviewer);
-  for (const part of ['修登录', '把登录修好', '第二句：登录页已改，测试 a.test.js 通过。', '/repo/login.js', '/repo/shot.png', exec.id, '只审不改', '不跑全量 E2E']) assert.ok(prompt.includes(part), part);
+  for (const part of ['修登录', '把登录修好', '第二句：登录校验已改，测试 a.test.js 通过。', '/repo/login.js', '/repo/notes.txt', exec.id, '只审不改', '不跑全量 E2E']) assert.ok(prompt.includes(part), part);
   const bound = app.card(card.id);
   assert.equal(bound.session_id, reviewer.id); assert.equal(bound.review_session, true); assert.equal(bound.review_claim.delivered, true);
   assert.deepEqual(bound.assignee.agent, 'Claude'); assert.equal(bound.assignee.model, 'claude-sonnet-5-5'); assert.equal(bound.exec_receipt.assignee.model, 'claude-sonnet-5-5');
@@ -477,16 +478,64 @@ test('every Claude seat out: the card stays in review with the reason and the Ca
   assert.match(app.card(card.id).review_block.reason, /额度用尽/);
   assert.equal(app.notices().filter((n) => n.includes('不能自动开审查会话')).length, 1);
 });
+// The command the Captain is given to put another reviewer in: the model is in --command, and nothing `new` does not know.
+function assertManualReviewCommand(notice, cardId, executorId, model) {
+  const m = /(node "\$AGENTDECK_BOARD_CLI" new .*)$/m.exec(notice);
+  assert.ok(m, 'the notice carries a full new command: ' + notice);
+  const command = m[1];
+  assert.ok(command.includes('--task-id ' + cardId)); assert.ok(command.includes('--reviews ' + executorId));
+  assert.ok(command.includes(`--command "claude --dangerously-skip-permissions --model ${model} --effort high"`), command);
+  const outside = command.replace(/--command "[^"]*"/, '').replace(/--(?:title|task) "[^"]*"/g, '');
+  assert.doesNotMatch(outside, /--model|--effort|--verify/, 'new has no --model / --effort / --verify; they would be refused or lost');
+  for (const flag of command.replace(/"[^"]*"/g, '""').match(/ --[a-z-]+/g)) assert.ok(['--task-id', '--project', '--title', '--task', '--reviews', '--command', '--seat'].includes(flag.trim()), flag);
+}
+test('interface work is always reviewed by Opus 5.5, even a small change a Sonnet made', async (t) => {
+  const cases = [
+    ['a screen file', { files: ['/repo/task-board-ui.js'], text: '改了一行' }, '修登录校验'],
+    ['a style file', { files: ['/repo/style.css'], text: '改了颜色值' }, '小修'],
+    ['a screenshot', { files: ['/repo/notes.md', '/tmp/shot.png'], text: '改完' }, '小修'],
+    ['an interface word in the receipt', { files: ['/repo/a.js'], text: '侧栏的按钮对齐了' }, '小修'],
+    ['an interface word in the title', { files: ['/repo/a.js'], text: '改完' }, '手机端布局小改'],
+  ];
+  for (const [name, receipt, title] of cases) {
+    const w = world(t); const app = w.boot();
+    const card = await newCard(app, { title, detail: '把它改好' });
+    const exec = await app.execute(card); await app.finish(exec, receipt.text, { files: receipt.files });
+    await app.scan();
+    const [reviewer] = app.reviewers(card);
+    assert.ok(reviewer, name);
+    assert.match(reviewer.cmd, /--model claude-opus-5-5 /, name + ': Opus');
+    assert.match(reviewer.title, /（Claude Opus 5\.5）$/, name);
+  }
+  // the same card with nothing interface-like stays simple
+  const w = world(t); const app = w.boot();
+  const card = await newCard(app, { title: '修登录校验', detail: '把校验改好' });
+  const exec = await app.execute(card); await app.finish(exec, '改完', { files: ['/repo/a.js'] });
+  await app.scan();
+  assert.match(app.reviewers(card)[0].cmd, /--model claude-sonnet-5-5 /);
+});
+test('a reviewer held back by quota after the pick (the reading changed) tells the Captain with the full command, model in --command', async (t) => {
+  const w = world(t); const app = w.boot();
+  const card = await newCard(app, { important: true });
+  const exec = await app.execute(card); await app.finish(exec, '做完');
+  w.heldOnly.add('claude');   // the chooser saw room; the queue decision a moment later does not
+  await app.scan();
+  assert.equal(app.reviewers(card).length, 0); assert.equal(w.config.mainSession.waitlist.length, 1);
+  const told = app.notices().filter((n) => n.includes('没能马上开'));
+  assert.equal(told.length, 1);
+  assertManualReviewCommand(told[0], card.id, exec.id, 'claude-opus-5-5');
+});
 test('a reviewer that cannot start after all (quota, crash) tells the Captain at once how to put another in; its own written verdict is not that case', async (t) => {
   const w = world(t); const app = w.boot();
   const card = await newCard(app);
   const exec = await app.execute(card); await app.finish(exec, '做完');
   await app.scan();
   const [review] = app.reviewers(card);
-  await app.api.submit({ action: 'session-exit', code: 7 }, review);
+  await app.api.submit({ action: 'session-exit', code: 7 }, review); await tick();
   const told = app.notices().filter((n) => n.includes('自动审查会话') && n.includes('没能跑起来'));
   assert.equal(told.length, 1);
-  assert.ok(told[0].includes(card.id)); assert.match(told[0], /new --task-id .* --reviews <执行会话> --command "claude .*claude-opus-5-5/); assert.match(told[0], /不用等它/);
+  assert.ok(told[0].includes(card.id)); assert.match(told[0], /不用等它/);
+  assertManualReviewCommand(told[0], card.id, exec.id, 'claude-sonnet-5-5');
   // a reviewer's own "不通过" is a finding, not a failure to start
   const w2 = world(t); const app2 = w2.boot();
   const card2 = await newCard(app2);
@@ -725,4 +774,33 @@ test('after a supplement the two-failure hold still applies: the third round\'s 
   for (let i = 0; i < 3; i++) await app.scan();
   assert.equal(app.reviewers(card).length, count, 'held: no further automatic review');
   assert.equal(app.card(card.id).flag, 'held');
+});
+
+// ---- a test instance (--test-user-data) never lets the auto reviewer start a real model ----
+test('in a test instance the auto reviewer refuses a real claude and says why; a stand-in command runs as usual', async (t) => {
+  const w = world(t); w.testInstance = true;
+  const app = w.boot();
+  const card = await newCard(app);
+  const exec = await app.execute(card, 'node fake-agent.js --screen-only'); await app.finish(exec, '做完');
+  await app.scan();
+  assert.equal(app.reviewers(card).length, 0, 'the real claude candidate is not opened');
+  assert.match(app.card(card.id).review_block.reason, /测试实例里自动审查只许开替身命令，不开真的 claude/);
+  assert.equal(w.config.mainSession.waitlist.length, 0);
+  assert.equal(app.notices().filter((n) => n.includes('不能自动开审查会话')).length, 1);
+  // a stand-in candidate table (what the E2E specs swap in) opens
+  const saved = AV.CANDIDATES.slice();
+  try {
+    AV.CANDIDATES.splice(0, AV.CANDIDATES.length, { id: 'stand-in', label: '替身审查员', family: 'x', command: 'node fake-agent.js --reviewer' });
+    const w2 = world(t); w2.testInstance = true; const app2 = w2.boot();
+    const card2 = await newCard(app2);
+    const exec2 = await app2.execute(card2, 'node fake-agent.js --screen-only'); await app2.finish(exec2, '做完');
+    await app2.scan();
+    const [reviewer] = app2.reviewers(card2);
+    assert.ok(reviewer); assert.equal(reviewer.cmd, 'node fake-agent.js --reviewer'); assert.equal(reviewer.title, '审查：修登录（替身审查员）');
+  } finally { AV.CANDIDATES.splice(0, AV.CANDIDATES.length, ...saved); }
+  // outside a test instance the same real command is fine
+  const w3 = world(t); const app3 = w3.boot();
+  const card3 = await newCard(app3);
+  const exec3 = await app3.execute(card3); await app3.finish(exec3, '做完'); await app3.scan();
+  assert.match(app3.reviewers(card3)[0].cmd, /^claude /);
 });

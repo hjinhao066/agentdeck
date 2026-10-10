@@ -327,6 +327,8 @@
   // The same passive reading as the `quota` command (QuotaCore.commandStance): out, error and
   // unknown (old or missing) are never taken for "has quota".
   const commandStance = (cmd, seatId) => window.QuotaCore.commandStance(host.config.quotas, cmd, host.config.claudeSeats, seatId || host.config.activeClaudeSeatId);
+  // A test instance never lets an automatic opener (the board's dispatcher, the auto reviewer) start a real model.
+  const testRefusal = (cmd, what) => (host.testInstance ? window.AutoVerifyCore.testInstanceRefusal(cmd, what) : '');
   // A seat other than the one a new session defaults to travels with the session, as `new --seat` does.
   const seatMeta = (seat) => seat && seat.id !== host.config.activeClaudeSeatId ? { claudeSeatId: seat.id, claudeConfigDir: seat.configDir } : {};
   function notedTitle(title, note) { return window.QuotaCore.quotaFallbackTitle(title, note); }
@@ -404,6 +406,9 @@
       if (!waiting.ignored) quotaStarts.set(id, { id, key });
       return { card: waiting.card, queued: true };
     }
+    // what would really launch (a same-tier switch may have changed the command) must be a stand-in in a test instance
+    const refused = testRefusal(plan.cmd, '调度员');
+    if (refused) { boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度会话没有开：${refused}。`); await boardRequest('dispatched', { id, key }); quotaStarts.delete(id); return { card, dispatcher: 'captain', refused }; }
     quotaStarts.delete(id);
     const sessionId = 'c-dispatch-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const reserved = await boardRequest('dispatch', { id, key, session_id: sessionId });
@@ -518,6 +523,11 @@
       await boardRequest('reviewBlocked', { id, key: input.key, reason: picked.reason || checked.error });
       return { card, blocked: true };
     }
+    const refused = testRefusal(checked.cmd, '自动审查');
+    if (refused) {
+      await boardRequest('reviewBlocked', { id, key: input.key, reason: refused });
+      return { card, blocked: true, refused };
+    }
     const executor = sessionById(card.exec_receipt?.session_id);
     // the title says what really runs, not what the executor's card title was labelled
     const title = AV.reviewTitle(window.BoardCore.cleanText(card.title, 200), picked.candidate.label).replace(/\s+/g, ' ');
@@ -536,7 +546,7 @@
     });
     host.flushConfig?.();   // the queue entry is on disk before the claim is marked delivered
     await boardRequest('reviewDispatched', { id, key: input.key });
-    if (held) boardNotice(`卡片 ${id}「${card.title}」的自动审查会话（${picked.candidate.label}）没能马上开：${held} 额度恢复前这一轮没有审查结论；不想等就 new --task-id ${id} --reviews ${executor?.id || '<执行会话>'} 另派一个 Claude 审查会话。`);
+    if (held) boardNotice(`卡片 ${id}「${card.title}」的自动审查会话（${picked.candidate.label}）没能马上开：${held} 额度恢复前这一轮没有审查结论；不想等就另派一个 Claude 审查会话（模型写在 --command 里）：${AV.manualReviewCommand({ card, receipt: card.exec_receipt, cli: M.boardCli(host.platform), executorId: executor?.id })}`);
     return placed ? { card, reviewer: picked.candidate.id, ...(picked.unverified ? { unverified: true } : {}) } : { card, ignored: true };
   }
   async function startReview(id, input) {
@@ -1672,7 +1682,13 @@
     // the way out, rather than finding the card with no review.
     const reviewCol = receipt.failed && receipt.source !== 'command' && task.boardId ? host.columns().find((c) => c.id === task.colId) : null;
     if (reviewCol && window.AutoVerifyCore?.isReviewAttempt(reviewCol.boardAttempt)) {
-      boardNotice(`卡片 ${task.boardId} 的自动审查会话「${reviewCol.displayTitle || reviewCol.title || reviewCol.id}」没能跑起来（${receipt.source === 'quota' ? '额度用尽' : '会话出错或退出'}）：${String(receipt.failed).split('\n')[0].slice(0, 160)}。这一轮审查没有结论。不用等它：new --task-id ${task.boardId} --reviews <执行会话> --command "claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high"（简单的卡用 claude-sonnet-5-5；可加 --seat 换有额度的席位）另派一个，旧会话可归档。`);
+      const AVC = window.AutoVerifyCore, why = String(receipt.failed).split('\n')[0].slice(0, 160), kind = receipt.source === 'quota' ? '额度用尽' : '会话出错或退出';
+      // the card is read for the command (its model follows the same rule as the automatic pick); a board that cannot be read still gets the notice
+      findCard(task.boardId).catch(() => null).then((found) => {
+        const card = found || { id: task.boardId, project: reviewCol.project || '', title: reviewCol.displayTitle || reviewCol.title || '' };
+        const command = AVC.manualReviewCommand({ card, receipt: card.exec_receipt, cli: M.boardCli(host.platform), executorId: card.exec_receipt?.session_id || reviewCol.reviews?.[0] });
+        boardNotice(`卡片 ${task.boardId} 的自动审查会话「${reviewCol.displayTitle || reviewCol.title || reviewCol.id}」没能跑起来（${kind}）：${why}。这一轮审查没有结论。不用等它，另派一个 Claude 审查，旧会话可归档（模型和档位写在 --command 里，new 不认 --model / --effort / --verify；可加 --seat 换有额度的席位）：${command}`);
+      });
     }
     const dispatcher = host.columns().find((c) => c.id === task.colId && c.dispatcherCardId);
     const delegatedQueue = dispatcher && state()?.waitlist.some((w) => w.metadata?.boardId === dispatcher.dispatcherCardId);

@@ -10,7 +10,7 @@ const B = require('../board-core');
 const M = require('../main-core');
 const AV = require('../auto-verify-core');
 
-function runtime(t, dispatcher = 'gemini') {
+function runtime(t, dispatcher = 'gemini', testInstance = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-drag-start-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const captain = { id: 'captain', isMain: true, cmd: '' };
@@ -48,7 +48,7 @@ function runtime(t, dispatcher = 'gemini') {
   window.MainSession.init({
     config: { mainSession: state, folders: [], taskBoard: { dispatcher }, activeClaudeSeatId: 'default' },
     saveConfig() {}, columns: () => columns, terms: new Map(), columnLabel: (c) => c.id,
-    platform: 'darwin', userComposing: () => false,
+    platform: 'darwin', testInstance, userComposing: () => false,
     createSession: (col) => { created.push(col); columns.push(col); return col; },
     sendWhenReady: (col, prompt) => sent.push({ id: col.id, text: typeof prompt === 'function' ? prompt() : prompt }),
     showToast: (message) => { throw new Error(message); },
@@ -217,4 +217,33 @@ test('a start held back by quota retries as soon as the Claude fallback has room
   r.setStance((cmd) => (/^agy/.test(cmd) ? 'out' : 'ok')); r.setOut((cmd) => /^agy/.test(cmd));
   r.tick(); await new Promise(setImmediate); await new Promise(setImmediate);
   assert.equal(r.created.length, 1); assert.match(r.created[0].cmd, /^claude .*claude-haiku-5-5/);
+});
+
+test('in a test instance the dispatcher refuses a real claude, agy, gemini or codex and tells the Captain; a stand-in command opens', async (t) => {
+  const real = ['agy --dangerously-skip-permissions --model gemini-3.8-flash-high', 'claude --dangerously-skip-permissions --model claude-haiku-5-5 --effort medium', 'gemini', 'codex --no-daemon'];
+  for (const command of real) {
+    const r = runtime(t, 'gemini', true), card = r.add();
+    const original = B.commandForAgent;
+    B.commandForAgent = (agent, ...args) => (agent === 'agy' ? command : original(agent, ...args));
+    try {
+      r.setStance((cmd) => (cmd === command ? 'ok' : 'out'));   // the chooser would take it
+      const result = await r.board.requestStart(card.id);
+      assert.equal(result.dispatcher, 'captain', command); assert.match(result.refused, /测试实例里调度员只许开替身命令，不开真的 /, command);
+      assert.equal(r.created.length, 0, command); assert.equal(r.sent.length, 0);
+      assert.match(r.state.pending.at(-1).summary, /调度会话没有开：测试实例里调度员只许开替身命令/);
+      assert.equal(r.store.list().find((c) => c.id === card.id).dispatch_claim.delivered, true, 'the start is closed, not retried');
+    } finally { B.commandForAgent = original; }
+  }
+  // a stand-in (what the E2E specs use) opens, in a test instance too
+  const r = runtime(t, 'gemini', true), card = r.add();
+  const original = B.commandForAgent;
+  B.commandForAgent = (agent, ...args) => (agent === 'agy' ? 'node fake-agent.js --screen-only' : original(agent, ...args));
+  try {
+    r.setStance((cmd) => (cmd.startsWith('node ') ? 'ok' : 'out'));
+    assert.equal((await r.board.requestStart(card.id)).dispatcher, 'gemini');
+    assert.equal(r.created.length, 1); assert.equal(r.created[0].cmd, 'node fake-agent.js --screen-only');
+  } finally { B.commandForAgent = original; }
+  // outside a test instance nothing is refused
+  const open = runtime(t, 'gemini', false), card2 = open.add();
+  assert.equal((await open.board.requestStart(card2.id)).dispatcher, 'gemini'); assert.equal(open.created.length, 1);
 });

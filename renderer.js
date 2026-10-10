@@ -4127,6 +4127,7 @@ const deckHost = {
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
   createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen, ptyBackgroundWork,
+  testInstance: !!env.testInstance,   // test profiles only (main.js): the dispatcher and the auto reviewer refuse real agents
   restartWatchMs: env.testRestartWatchMs || 0,   // test profiles only (main.js): shorter restart watch limits
   screenState: (text, entry, cmd) => classify(text, entry, cmd),
   menuOnScreen,

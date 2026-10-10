@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const FAKE = `node "${path.join(__dirname, 'fixtures/fake-agent.js')}" --screen-only`;
-let app, page, profile, envDir, captainEnv;
+let app, page, profile, envDir, captainEnv, trapDir, trapFile;
 test.describe.configure({ mode: 'serial' });
 function cli(args, env = captainEnv) {
   return new Promise((resolve) => {
@@ -36,6 +36,15 @@ test.beforeAll(async () => {
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, columns: [{ id: 'task-idle-shell', title: 'Shell', cmd: '', cwd: profile, role: 'manual' }] }));
   const env = { ...process.env, AGENTDECK_TEST_RECEIPT_ENV_DIR: envDir }; delete env.ELECTRON_RUN_AS_NODE;
   if (process.platform !== 'win32') env.ZDOTDIR = profile;
+  // A trap in front of PATH for every real agent a test instance must never start on its own: if a real name were
+  // ever launched in this profile it would only write a line to trapFile, never reach a model.
+  trapDir = path.join(profile, 'trapbin'); trapFile = path.join(profile, 'trap.log'); fs.mkdirSync(trapDir);
+  for (const name of ['claude', 'agy', 'antigravity', 'gemini', 'codex', 'cursor-agent', 'grok']) {
+    if (process.platform === 'win32') fs.writeFileSync(path.join(trapDir, name + '.cmd'), `@echo off\r\necho TRAP ${name}>> "${trapFile}"\r\n`);
+    else { fs.writeFileSync(path.join(trapDir, name), `#!/bin/sh\necho TRAP ${name} >> "${trapFile}"\n`); fs.chmodSync(path.join(trapDir, name), 0o755); }
+  }
+  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+  env[pathKey] = trapDir + path.delimiter + (env[pathKey] || '');
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
@@ -641,4 +650,62 @@ test('Gemini out or unread: the board dispatcher is a Haiku session, titled with
       // the stand-in dispatcher is left to the profile's teardown: it takes no part in what is checked here
     }
   } finally { await page.evaluate(() => { window.testStance = (cmd) => (cmd.includes('fake-agent.js') ? 'ok' : undefined); TaskBoard.settings('captain'); }); }
+});
+
+// The hard guard: a test instance (--test-user-data) never lets the dispatcher or the auto reviewer start a real agent.
+// Here the stand-ins are taken away on purpose, so the real candidates are what get picked; they must be refused,
+// and the trap in front of PATH proves that nothing real was launched. Stand-ins keep working (every other test here).
+test('a test instance refuses a real claude/agy for the dispatcher and the auto reviewer, with the reason, and launches nothing', async () => {
+  const real = await page.evaluate(() => ({
+    haiku: AutoVerifyCore.DISPATCHERS.find((c) => c.id === 'claude-haiku').command,
+    flag: window.testStance ? 'stance' : '',
+  }));
+  expect(real.haiku).toContain('--haiku-stand-in');   // the stand-in is in place (beforeAll)
+  await page.evaluate(() => {
+    window.guardBackup = { dispatchers: AutoVerifyCore.DISPATCHERS.map((c) => ({ ...c })), candidates: AutoVerifyCore.CANDIDATES.map((c) => ({ ...c })), stance: window.testStance, settings: TaskBoard.settings().dispatcher };
+    // the real commands back, the way the app ships them
+    AutoVerifyCore.DISPATCHERS.find((c) => c.id === 'claude-haiku').command = 'claude --dangerously-skip-permissions --model claude-haiku-5-5 --effort medium';
+    window.testStance = (cmd) => (/^agy/.test(cmd) ? 'out' : /^claude/.test(cmd) ? 'ok' : undefined);
+    TaskBoard.settings('gemini');
+  });
+  try {
+    // the dispatcher: Gemini out, the real Haiku candidate would be picked
+    const before = await page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length);
+    const c = await add('Guarded dispatch');
+    const started = await page.evaluate((id) => TaskBoard.startCard(id), c.id);
+    expect(started.dispatcher).toBe('captain'); expect(started.refused).toMatch(/测试实例里调度员只许开替身命令，不开真的 claude/);
+    expect(await page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length)).toBe(before);
+    expect(await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板').map((p) => p.summary).join('\n'))).toContain('调度会话没有开：测试实例里调度员只许开替身命令');
+    // Gemini itself (agy) with a reading that says room is refused too
+    await page.evaluate(() => { window.testStance = (cmd) => (/^agy/.test(cmd) ? 'ok' : undefined); });
+    const c2 = await add('Guarded dispatch agy');
+    expect((await page.evaluate((id) => TaskBoard.startCard(id), c2.id)).refused).toMatch(/不开真的 agy/);
+    // the auto reviewer: the shipped candidates are real Claude sessions
+    await page.evaluate(() => { window.testStance = (cmd) => (/^claude/.test(cmd) ? 'ok' : undefined); TaskBoard.autoVerify(true); });
+    const v = await add('Guarded review', true);
+    const execution = await worker(v.id, 'Executor');
+    await command(['complete', '--result', 'Implemented'], execution.env);
+    await expect.poll(async () => (await card(v.id)).review_block?.round, { timeout: 40000 }).toBe(1);
+    expect((await card(v.id)).review_block.reason).toMatch(/测试实例里自动审查只许开替身命令，不开真的 claude/);
+    expect(await autoReviewers(v.id)).toEqual([]);
+    // nothing real was ever launched
+    expect(fs.existsSync(trapFile) ? fs.readFileSync(trapFile, 'utf8') : '').toBe('');
+  } finally {
+    await page.evaluate(() => {
+      const b = window.guardBackup; TaskBoard.autoVerify(false);
+      b.dispatchers.forEach((d) => { Object.assign(AutoVerifyCore.DISPATCHERS.find((x) => x.id === d.id), d); });
+      window.testStance = b.stance; TaskBoard.settings(b.settings);
+    });
+  }
+  // and a stand-in candidate, in the same instance, opens as usual
+  await autoVerifyOn();
+  try {
+    const v = await add('Stand-in review', true);
+    const execution = await worker(v.id, 'Executor');
+    await command(['complete', '--result', 'Implemented'], execution.env);
+    await expect.poll(async () => (await autoReviewers(v.id)).length, { timeout: 40000 }).toBe(1);
+    await command(['complete', '--result', '通过：替身'], await sessionEnv((await autoReviewers(v.id))[0].id));
+    expect((await card(v.id)).status).toBe('done');
+  } finally { await autoVerifyOff(); }
+  expect(fs.existsSync(trapFile) ? fs.readFileSync(trapFile, 'utf8') : '').toBe('');
 });

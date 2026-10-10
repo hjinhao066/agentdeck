@@ -194,7 +194,10 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   erroring and stale/unread are never taken for "has quota" (Gemini is the dispatcher only
   with a fresh reading that shows room, else Claude Haiku 5.5), and a session's title
   names the provider and model that really run. A reviewer that cannot start tells the
-  Captain at once; nothing waits unseen. Tests must
+  Captain at once; nothing waits unseen. Interface work is always reviewed by Opus 5.5 (`AutoVerifyCore.isUiWork`),
+  whoever made it. The command the Captain is given to put another reviewer in carries the model in `--command`
+  (`new` has no `--model`/`--effort`/`--verify`). A test instance (`--test-user-data`, `host.testInstance`) lets the
+  dispatcher and the auto reviewer start stand-ins only, never a real `claude`/`agy`/`gemini`/`codex`. Tests must
   use the isolated profile task store and stand-in agents, never real shared data.
 - Clearing the 队长's context keeps the old chat as a `captainArchive` file under
   the old id. The 队长 column shows those read-only from the chats already loaded

@@ -47,17 +47,57 @@
     { id: 'claude-opus', label: 'Claude Opus 5.5', family: 'anthropic', model: 'opus', command: 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high' },
     { id: 'claude-sonnet', label: 'Claude Sonnet 5.5', family: 'anthropic', model: 'sonnet', command: 'claude --dangerously-skip-permissions --model claude-sonnet-5-5 --effort high' },
   ];
-  // A card is simple when nothing about it asks for the best reviewer: not marked 高优先级, a
-  // short receipt with few files, and an executor that was not on Opus (whoever put Opus on it
-  // judged it important). Everything else is reviewed by Opus.
+  // Interface work is always reviewed by Opus 5.5, whatever else is true of the card (the user's standing
+  // rule: UI gets an Opus final review; a small interface change made by Sonnet is not "simple").
+  // It is recognised from what was handed in and what the card says:
+  //  - a file that is a page, a style, an image or a UI script (*.css/.html/.svg/.png/.jpg/…, *-ui.js,
+  //    *-ui-core.js, renderer.js, sidebar*.js, side-pane.js, style/theme files, mobile-web/, .jsx/.tsx/.vue);
+  //  - a screenshot or interface word in the title, the card's text or the receipt (界面, 页面, 样式, 布局,
+  //    视觉, 配色, 主题, 深色/浅色, 按钮, 图标, 弹窗, 侧栏, 手机端, 截图, UI, CSS, layout, theme, sidebar, button, icon).
+  // A false hit costs an Opus review; a miss would put a Sonnet on a screen.
+  const UI_FILE = /\.(?:css|scss|less|html?|svg|png|jpe?g|gif|webp|bmp|jsx|tsx|vue)$|(?:^|[\\/])(?:[^\\/]*-ui(?:-core)?\.js|renderer\.js|sidebar[^\\/]*\.js|side-pane\.js|chat-ui\.js|[^\\/]*(?:style|theme)[^\\/]*\.(?:js|css)|mobile-web[\\/].+)$/i;
+  const UI_WORDS = /界面|页面|样式|布局|视觉|配色|主题|深色|浅色|按钮|图标|弹窗|侧栏|手机端|网页端|截图|动效|动画|\bUI\b|\bUX\b|\bCSS\b|\blayout\b|\btheme\b|\bsidebar\b|\bbutton\b|\bicon\b|\bscreenshot/i;
+  function isUiWork({ card, receipt } = {}) {
+    const exec = receipt || (card && card.exec_receipt) || {};
+    if ((Array.isArray(exec.files) ? exec.files : []).some((f) => typeof f === 'string' && UI_FILE.test(f))) return true;
+    return UI_WORDS.test([card && card.title, card && card.detail, exec.text].filter(Boolean).join('\n'));
+  }
+  // A card is simple when nothing about it asks for the best reviewer: not interface work, not marked
+  // 高优先级, a short receipt with few files, and an executor that was not on Opus (whoever put Opus on
+  // it judged it important). Everything else is reviewed by Opus.
   const SIMPLE_FILES = 3;
   const SIMPLE_RECEIPT = 800;
   function reviewIsSimple({ card, receipt } = {}) {
-    if (!card || card.important === true) return false;
+    if (!card || card.important === true || isUiWork({ card, receipt })) return false;
     const exec = receipt || card.exec_receipt || {};
     if (/opus/i.test((exec.assignee && exec.assignee.model) || '')) return false;
     const files = Array.isArray(exec.files) ? exec.files.length : 0;
     return files <= SIMPLE_FILES && String(exec.text || card.latest_receipt || '').length <= SIMPLE_RECEIPT;
+  }
+
+  // A test instance (--test-user-data) must never start a real model on its own. Which program a launch
+  // line runs, by name (a path, quotes, `command`, env assignments and .exe/.cmd/.bat/.ps1 are looked through).
+  // A stand-in is anything else: `node fake-agent.js`.
+  const REAL_AGENTS = new Set(['claude', 'claude-ds', 'agy', 'antigravity', 'gemini', 'codex', 'cursor-agent', 'cursor', 'grok']);
+  function realAgentProgram(command) {
+    const words = String(command || '').match(/(?:[^\s"']|"[^"]*"|'[^']*')+/g) || [];
+    let i = words[0] === 'command' || words[0] === '&' ? 1 : 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+    const name = String(words[i] || '').replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd|bat|ps1)$/i, '').toLowerCase();
+    return REAL_AGENTS.has(name) ? name : '';
+  }
+  // The reason a test instance refuses an automatic opener (dispatcher, auto review) its command; '' when it may run.
+  function testInstanceRefusal(command, what) {
+    const name = realAgentProgram(command);
+    return name ? `测试实例里${what}只许开替身命令，不开真的 ${name}（它会真的调用模型、可能乱派活、花额度）。命令：${String(command).slice(0, 80)}` : '';
+  }
+  // The `new` command the Captain puts in another Claude reviewer by hand. The model and the effort go in
+  // --command (new has no --model / --effort / --verify of its own and refuses them).
+  function manualReviewCommand({ card, receipt, cli = 'node "$AGENTDECK_BOARD_CLI"', executorId = '<执行会话>' }) {
+    const opus = !reviewIsSimple({ card, receipt });
+    const model = opus ? 'claude-opus-5-5' : 'claude-sonnet-5-5';
+    const title = String(card.title || '').replace(/["`$\\]/g, '').slice(0, 60);
+    return `${cli} new --task-id ${card.id} --project ${JSON.stringify(String(card.project || ''))} --title "审查：${title}" --task "独立审查卡片 ${card.id}，按验收要求逐条核对后给出通过或不通过" --reviews ${executorId} --command "claude --dangerously-skip-permissions --model ${model} --effort high"`;
   }
 
   // stanceOf(command, seatId) is the passive-quota judgment `quota` shows (QuotaCore.commandStance):
@@ -85,7 +125,8 @@
     return { best, weak };
   }
   function pickReviewer({ card, receipt, simple, candidates = CANDIDATES, seats, stanceOf = () => 'unmetered' }) {
-    const wantSimple = simple !== undefined ? !!simple : reviewIsSimple({ card, receipt });
+    let wantSimple = simple !== undefined ? !!simple : reviewIsSimple({ card, receipt });
+    if (wantSimple && (card || receipt) && isUiWork({ card, receipt })) wantSimple = false;   // interface work: Opus, whatever else says
     // the model that suits the card leads; table order decides the rest
     const lead = candidates.filter((c) => c.model === (wantSimple ? 'sonnet' : 'opus'));
     const ordered = [...lead, ...candidates.filter((c) => !lead.includes(c))];
@@ -202,5 +243,5 @@
     ].join('\n');
   }
 
-  return { REVIEW_PREFIX, REWORK_PREFIX, reviewAttemptId, reworkAttemptId, isReviewAttempt, reviewAttemptRound, FAMILY_RULES, FAMILY_NAMES, familyOf, CANDIDATES, DISPATCHERS, reviewIsSimple, pickReviewer, pickDispatcher, stripModelMarks, reviewTitle, verdict, reviewPrompt, reworkMessage };
+  return { REVIEW_PREFIX, REWORK_PREFIX, reviewAttemptId, reworkAttemptId, isReviewAttempt, reviewAttemptRound, FAMILY_RULES, FAMILY_NAMES, familyOf, CANDIDATES, DISPATCHERS, reviewIsSimple, isUiWork, realAgentProgram, testInstanceRefusal, manualReviewCommand, pickReviewer, pickDispatcher, stripModelMarks, reviewTitle, verdict, reviewPrompt, reworkMessage };
 });

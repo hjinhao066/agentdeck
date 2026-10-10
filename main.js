@@ -1556,6 +1556,7 @@ app.whenReady().then(async () => {
   onMain('clipboard:read-sync', (e) => { e.returnValue = tudArg ? testClipboard : clipboard.readText(); });
   onMain('env-info-sync', (e) => { e.returnValue = {
     platform: process.platform, home: HOME, version: app.getVersion(),
+    testInstance: !!tudArg,   // --test-user-data: automatic openers (dispatcher, auto review) may only start stand-ins
     // test profiles only: the restart watch's limits, shortened
     testRestartWatchMs: tudArg && Number(process.env.AGENTDECK_TEST_RESTART_WATCH_MS) > 0 ? Number(process.env.AGENTDECK_TEST_RESTART_WATCH_MS) : 0,
     build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),

@@ -237,9 +237,12 @@ CLI 没有 task update、settings 或 start 子命令；这些操作使用界面
    尚未送达的认领在重启后原样再送一次，不会重新认领。没带 `--verify` 的卡、手动移进 review 的卡、升级前就停在
    review 的旧卡（没有 `exec_receipt`）都不会被自动认领。
 2. **选审查者**（用户 2026-10-09 的规矩）：直接另起一个**新的 Claude 会话**，和执行会话分开就行，不要求换提供方，
-   不再为了「换提供方」去用 Gemini、agy、Codex。模型：重要的卡 Opus 5.5，简单的卡 Sonnet 5.5。「简单」由
-   `AutoVerifyCore.reviewIsSimple` 判：卡片没标高优先级、回执不超过 800 字、列出的文件不超过 3 个，且执行会话不是
-   Opus；其余都按重要处理。席位：按 `new` 不带 `--seat` 时的顺序，当前默认席位排第一，其余已登录席位依次排后，
+   不再为了「换提供方」去用 Gemini、agy、Codex。模型：重要的卡 Opus 5.5，简单的卡 Sonnet 5.5。**界面活一律 Opus 5.5**（用户的长期规矩：界面必须 Opus 终审），不管卡片多小、谁做的：
+   `AutoVerifyCore.isUiWork` 看回执列的文件（`*.css/.html/.svg`、图片截图、`*-ui.js`、`renderer.js`、`sidebar*.js`、`side-pane.js`、
+   `mobile-web/` 下的文件、`.jsx/.tsx/.vue`、名字带 style/theme 的脚本）和卡片标题、说明、回执里的界面词（界面、页面、样式、布局、
+   配色、主题、深色浅色、按钮、图标、弹窗、侧栏、手机端、截图、UI、CSS、sidebar、button、icon……）；宁可多派一次 Opus，也不让 Sonnet
+   审界面。其余的卡「简单」由 `AutoVerifyCore.reviewIsSimple` 判：不是界面活、没标高优先级、回执不超过 800 字、列出的文件不超过 3 个，
+   且执行会话不是 Opus；都不满足就按重要处理。席位：按 `new` 不带 `--seat` 时的顺序，当前默认席位排第一，其余已登录席位依次排后，
    取第一个有额度的；不是默认席位时会话带上那个席位（和 `new --seat` 一样）。「有额度」用的读数和 `quota` 命令是同一个来源
    （`QuotaCore.commandStance`，即 `commandQuota`/`summary`）：已用尽、席位未登录、登录或凭据损坏的跳过；数据过期、
    没有读数、只有「没看到报错」、额度查询连续失败的，**不当作有额度**。没有任何席位读得出有额度、又没有一个确认用尽时，才退回读数不明的
@@ -249,7 +252,7 @@ CLI 没有 task update、settings 或 start 子命令；这些操作使用界面
 3. **开会话**：走和 `new` 同一个入口（`placeSession`）：并发上限、内存吃紧暂停、额度用尽都进同一个排队，
    不绕过。会话标题「审查：卡片标题（实际跑的提供方和模型）」，例如「审查：修登录（Claude Opus 5.5）」；卡片标题里执行者自己写的括号标记（「（Opus 5.5 high·066us）」这类）先去掉，免得标题写一个、跑另一个。`--reviews` 指向被审查会话，工作目录沿用执行会话。尝试 id 固定为
    `auto-review-<卡片id>-r<轮次>`，所以重启、额度恢复、心跳重跑只会落到同一个尝试上。排队中的审查会话在真正开之前
-   会再确认这一轮仍是待验收，否则放弃。连续三次开不出来也转 `review_block` 交队长。会话开出来后才起不来（额度用尽、进程退出、启动失败）也不会悄悄停着：队长立刻收到一条通知，写明卡片、原因和另派的命令（`new --task-id <卡片> --reviews <执行会话>`，Opus 5.5，简单的用 Sonnet 5.5，可加 `--seat`），不用等旧会话。审查员自己写的「不通过」不算这种情况，仍按第 5 条返工。
+   会再确认这一轮仍是待验收，否则放弃。连续三次开不出来也转 `review_block` 交队长。会话开出来后才起不来（额度用尽、进程退出、启动失败），或排队时被额度挡住，也不会悄悄停着：队长立刻收到一条通知，写明卡片、原因和一条可以直接执行的完整命令（`AutoVerifyCore.manualReviewCommand`：`new --task-id <卡片> --project … --title … --task … --reviews <执行会话> --command "claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high"`，模型按上面的规则选，简单的卡 `claude-sonnet-5-5`，可加 `--seat`）。**模型和档位只写在 `--command` 里**：`new` 没有 `--model` / `--effort` / `--verify`，写了会被拒绝或丢掉，通知里的命令也不会带它们。不用等旧会话。审查员自己写的「不通过」不算这种情况，仍按第 5 条返工。
 4. **审查任务**包含：卡片标题和说明、执行会话回执全文和它列的文件、被审查的会话 id 和执行者，以及固定验收要求：
    亲自核对文件存在、提交已推送、只跑相关测试（不跑全量 E2E）、截图落盘、有没有删用例或放宽断言；只审不改；
    结论的第一个词必须是「通过」或「不通过」，不通过要列具体问题。
@@ -385,6 +388,6 @@ npm audit
 task-board spec 覆盖依赖解锁、回执原文、两轮验收挂起、异常退出/额度失败、
 旧会话回执、Gemini 单卡权限和排队、外部原子写入、认领去重、设置持久化、
 同步冲突后流转重试；自动验收两条用例（用替身审查员，页面里临时替换候选表）：一轮不通过返工、
-二轮通过，以及选不出审查者后手动接手。该 spec 开头把 `autoVerify` 关掉，因为其余用例自己手动开审查会话。其 Gemini 可执行文件替换为 stand-in，Haiku 候选也换成 stand-in（`window.testStance` 给 stand-in 命令一个额度读数），不会开真模型；它验证调度入口与
+二轮通过，以及选不出审查者后手动接手。该 spec 开头把 `autoVerify` 关掉，因为其余用例自己手动开审查会话。其 Gemini 可执行文件替换为 stand-in，Haiku 候选也换成 stand-in；测试实例（`--test-user-data`）里调度员和自动审查还有一道硬保护：只许开替身命令，要开真的 `claude`、`agy`、`antigravity`、`gemini`、`codex`、`cursor-agent`、`grok`（按程序名认，路径、引号、`.exe/.cmd` 都认）一律拒绝并写明原因（调度员：通知队长、这次开始收口；自动审查：`review_block`）。该 spec 把这些真命令的位置放进 PATH 最前面的陷阱脚本，证明没有真的被启动；（`window.testStance` 给 stand-in 命令一个额度读数），不会开真模型；它验证调度入口与
 权限，不代表已实测真实 Gemini 模型或两台机器同时同步。全量 E2E 留给合并
 main 时运行；本分支验证不包含打包运行、安装或物理 Windows 设备。

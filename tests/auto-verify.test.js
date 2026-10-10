@@ -424,6 +424,59 @@ test('the Captain briefing describes the automatic loop, stays static, and leave
   assert.equal(M.instructions('darwin'), M.instructions('darwin'));
   assert.match(text, /程序自动另起一个新的 Claude 审查会话（重要的用 Opus 5.5，简单的用 Sonnet 5.5/); assert.doesNotMatch(text, /不同提供方的审查会话/); assert.match(text, /审查员的原话自动发回原执行会话返工/);
   assert.match(text, /连续失败两次 held，先由队长决定，不再自动重试/); assert.match(text, /选不出审查者（Claude 各席位额度都用尽或出错）时卡片停在 review 并写明原因/);
-  assert.match(text, /16\. 重要的活完成后，派 Gemini 3\.8 Flash/);
+  assert.match(text, /16\. 重要的活完成后，派 Opus 5\.5 新开会话验收（简单的核对派 Sonnet 5\.5；界面活一律 Opus 5\.5），不派 Gemini 等别家模型：/);
+  assert.doesNotMatch(text, /派 Gemini 3\.8 Flash 验收/);
+  assert.match(text, /验收通过再汇报。/);
   assert.doesNotMatch(text, /auto-review-|review_round/);
+});
+
+// ---- interface work is always Opus ----
+test('interface work is recognised from the files, the card and the receipt, and is never a simple card', () => {
+  const card = (extra = {}) => ({ id: 't', title: '修校验', detail: '改后端', ...extra });
+  const receipt = (files = ['/repo/a.js'], text = '改完', model = 'claude-sonnet-5-5') => ({ text, files, assignee: { agent: 'Claude', model } });
+  const ui = (c, r) => AV.isUiWork({ card: c, receipt: r });
+  for (const file of ['/r/task-board-ui.js', 'C:\\r\\sidebar-core.js', '/r/style.css', '/r/index.html', '/r/shot.png', '/r/a.SVG', '/r/chat-ui.js', '/r/renderer.js', '/r/mobile-web/hub/core.js', '/r/preview-themes.css', '/r/App.vue', '/r/shot.jpeg']) {
+    assert.equal(ui(card(), receipt([file])), true, file);
+  }
+  for (const file of ['/r/main.js', '/r/task-board.js', '/r/tests/a.test.js', '/r/README.md', '/r/auto-verify-core.js']) assert.equal(ui(card(), receipt([file])), false, file);
+  for (const [title, detail, text] of [['手机端布局小改', '', ''], ['x', '加一个按钮', ''], ['x', '', '侧栏对齐了'], ['x', '', '深色主题下的对比度'], ['Fix the sidebar', '', ''], ['x', '', 'added a CSS rule'], ['x', '', '截图在 /tmp'], ['x', '', '弹窗不再抢焦点']]) {
+    assert.equal(ui(card({ title, detail }), receipt(['/repo/a.js'], text)), true, title + detail + text);
+  }
+  for (const [title, detail, text] of [['修校验', '改后端', '改完，测试过'], ['quota reading', 'the passive source', 'tests pass'], ['同步冲突', '', '合并规则']]) {
+    assert.equal(ui(card({ title, detail }), receipt(['/repo/a.js'], text)), false, title);
+  }
+  // a small change made by Sonnet that touches a screen is not simple; the same size without one is
+  assert.equal(AV.reviewIsSimple({ card: card(), receipt: receipt() }), true);
+  assert.equal(AV.reviewIsSimple({ card: card(), receipt: receipt(['/repo/side-pane.js']) }), false);
+  assert.equal(AV.reviewIsSimple({ card: card(), receipt: receipt(['/repo/a.js', '/tmp/shot.png']) }), false);
+  const pick = (c, r, extra = {}) => AV.pickReviewer({ card: c, receipt: r, seats: [{ id: 'cn' }], stanceOf: () => 'ok', ...extra });
+  assert.equal(pick(card(), receipt()).candidate.label, 'Claude Sonnet 5.5');
+  assert.equal(pick(card(), receipt(['/repo/style.css'])).candidate.label, 'Claude Opus 5.5');
+  assert.equal(pick(card({ title: '界面小改' }), receipt()).candidate.label, 'Claude Opus 5.5');
+  assert.equal(pick(card(), receipt(['/repo/style.css']), { simple: true }).candidate.label, 'Claude Opus 5.5', 'even when told the card is simple');
+  // with Opus out the interface review still never falls to Sonnet by itself: the pick keeps its order and says what it took
+  assert.equal(pick(card(), receipt(['/repo/style.css'])).simple, false);
+});
+
+// ---- a test instance only opens stand-ins ----
+test('the program a launch line runs is told by name; a stand-in is anything else, and a test instance refuses the real ones', () => {
+  for (const [command, name] of [['claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high', 'claude'], ['command claude', 'claude'], ['FOO=1 agy --model gemini-3.8-flash-high', 'agy'],
+    ['antigravity --x', 'antigravity'], ['codex --no-daemon', 'codex'], ['gemini', 'gemini'], ['cursor-agent --force', 'cursor-agent'], ['"C:\\Users\\x\\AppData\\claude.cmd" --x', 'claude'],
+    ['"D:\\npm\\codex.exe" a', 'codex'], ['/usr/local/bin/claude --x', 'claude'], ['& "C:\\a\\agy.ps1" --x', 'agy'], ['claude-ds --x', 'claude-ds']]) {
+    assert.equal(AV.realAgentProgram(command), name, command);
+    assert.match(AV.testInstanceRefusal(command, '自动审查'), /测试实例里自动审查只许开替身命令，不开真的 /, command);
+  }
+  for (const command of ['node "C:/r/tests/e2e/fixtures/fake-agent.js" --screen-only', '"C:\\Program Files\\nodejs\\node.exe" fake-agent.js', 'node fake-claude.js --provider=codex', 'python stand-in.py', '', 'bash -c "echo claude"', 'claude-like.sh']) {
+    assert.equal(AV.realAgentProgram(command), '', command); assert.equal(AV.testInstanceRefusal(command, '调度员'), '', command);
+  }
+});
+test('the command put in the Captain\'s hands carries the model in --command and nothing new does not know', () => {
+  const card = { id: 't-1', project: '项目 A', title: '修"登录"（Opus 5.5）$x' };
+  for (const [receipt, model] of [[{ text: '短', files: ['/a.js'], assignee: { model: 'claude-sonnet-5-5' } }, 'claude-sonnet-5-5'], [{ text: '短', files: ['/style.css'], assignee: { model: 'claude-sonnet-5-5' } }, 'claude-opus-5-5'], [undefined, 'claude-sonnet-5-5']]) {
+    const command = AV.manualReviewCommand({ card, receipt, executorId: 'c-board-x' });
+    assert.ok(command.startsWith('node "$AGENTDECK_BOARD_CLI" new --task-id t-1 --project "项目 A" '), command);
+    assert.ok(command.includes('--reviews c-board-x --command "claude --dangerously-skip-permissions --model ' + model + ' --effort high"'), command);
+    assert.doesNotMatch(command.replace(/--command "[^"]*"/, ''), /--model|--effort|--verify/);
+    assert.ok(!/["`$]/.test(/--title "([^"]*)"/.exec(command)[1]), 'the title cannot break out of its quotes');
+  }
 });
