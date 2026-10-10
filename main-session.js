@@ -1874,6 +1874,7 @@
   let resumeTimer = null;
   const RESUME_START_TIMEOUT = 30000;
   const RESUME_SEND_TIMEOUT = 45000;
+  const INSTALL_OUTCOME_MS = 6 * 60 * 60 * 1000;
   function loadResumeManifest() {
     const R = window.RestartResume;
     if (!R) return;
@@ -1883,7 +1884,7 @@
     coldTasks.clear();
     const coldCrew = new Set(host.columns().filter((col) => col.captainCrew && !col.isMain && !col.archived).map((col) => col.id));
     for (const task of R.latestTasks(state()?.tasks).values()) {
-      if (!task.pendingInstall && coldCrew.has(task.colId) && R.shouldResume(task)) coldTasks.set(task.colId, task.id);
+      if (coldCrew.has(task.colId) && R.shouldResume(task)) coldTasks.set(task.colId, task.id);
       delete task.resumeSubmission;
       delete task.resumeFallback;
       delete task.resumeFailed;
@@ -2022,6 +2023,9 @@
       // its own progress is its last word; 已结束，未提交回执 is the app's, not a receipt
       receipt: stored.receipt || task.progress || '', pendingText: pendingInstruction(col.id) || stored.pendingText || '',
     };
+    // It started an installation that ended the app: tell it so, and what it came to once that is known.
+    if (task.pendingInstall) entry.install = { targetVersion: task.pendingInstall.targetVersion };
+    else if (task.installOutcome && Date.now() - (task.installOutcome.at || 0) < INSTALL_OUTCOME_MS) entry.install = { targetVersion: task.installOutcome.targetVersion, summary: task.installOutcome.summary };
     const boardId = task.boardId || col.boardId;
     if (boardId) {
       try {
@@ -2147,6 +2151,7 @@
               update(t);
             }
             if (entry.pendingText) task.instruction = entry.pendingText;
+            if (entry.install?.summary) delete task.installOutcome;   // said once
             task.instructionSent = true;
             task.status = 'working';
             task.turnId = turn?.id || '';
@@ -3170,12 +3175,20 @@
         if (!task) throw new Error('安装任务不存在，结果保留待核对。');
         if (task.installResultId === r.id) { persistInstallation(); return { done: true, result: 'Installation result already recorded.' }; }
         if (task.pendingInstall?.id !== r.id || task.pendingInstall.targetVersion !== r.targetVersion) throw new Error('安装结果与待核对任务不匹配。');
-        const receipt = { summary: message.result, failed: r.status === 'failed' ? r.reason || '安装失败' : '', files: [], explicit: true, source: 'command' };
-        await recordReceiptForBoard(task, receipt);
+        // Not this session's final receipt (10-10: that read as a finished card, so the restart did not
+        // continue the installer and its post-install check had no one). The Captain gets it as a notice
+        // and the card as a progress note; the session stays at work and can finish its own job.
         delete task.pendingInstall; delete task.progress;
-        task.status = 'working';
         task.installResultId = r.id;
-        settle(task, receipt, true);
+        task.installOutcome = { targetVersion: r.targetVersion, status: r.status, summary: message.result, at: Date.now() };
+        boardNotice(message.result);
+        const boardId = task.boardId || host.columns().find((c) => c.id === task.colId)?.boardId;
+        if (boardId) {
+          boardWrites = boardWrites.catch(() => {}).then(() => window.deck.taskBoard('resumeNote', {
+            id: boardId, session_id: task.colId, attempt_id: task.boardAttempt || '', note: message.result,
+          })).catch(() => {});
+        }
+        update(task);
         persistInstallation();
         return { done: true, result: 'Installation result recorded.' };
       }

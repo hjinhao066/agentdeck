@@ -52,12 +52,13 @@ test('installation waits across restart, rejects early complete, and records suc
         }, MainSession.mainCol());
       }, status);
       const final = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).mainSession.tasks.find((t) => t.id === status + '-task');
-      expect(final.status).toBe(status === 'success' ? 'done' : 'failed');
+      // the result is a note for the Captain, not this session's final receipt: its task stays open
+      expect(final.status).toBe('working');
       expect(final.pendingInstall).toBeUndefined();
       expect(final.installResultId).toBe(status + '-install');
     }
-    const delivered = fs.existsSync(prompts) ? fs.readFileSync(prompts, 'utf8') : '';
-    expect(delivered).not.toContain('不要重复派发的安装指令');
+    // the restart continues the installers (they are not left out), and each is told not to install again
+    await expect.poll(() => fs.existsSync(prompts) ? fs.readFileSync(prompts, 'utf8') : '', { timeout: 30000 }).toContain('不要重新安装');
   } finally {
     if (app) {
       const proc = app.process();

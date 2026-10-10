@@ -514,3 +514,68 @@ test('a continue message does not relabel an older task of the same column that 
   assert.equal(old.receipt.source, 'fallback');
   assert.equal(app.task().status, 'working');
 });
+
+// 10-10 00:51 (2.0.6 install): the session that ran the install was closed with the app. Its install result was filed
+// as its final receipt, so the restart saw a finished card and left it out of the continue list; the post-install
+// check had no one until the Captain woke it by hand.
+const captain = { id: 'captain', isMain: true, cmd: '' };
+const installMessage = (extra = {}) => ({ action: 'main-install-result', result: 'AgentDeck 安装 2.0.6 成功；现在运行 2.0.6。',
+  installResult: { id: 'install-206', taskId: 'task', columnId: 'worker', targetVersion: '2.0.6', status: 'success', ...extra } });
+async function installer(t) {
+  const w = world(t); let app = w.boot();
+  await app.api.submit({ action: 'progress', message: '安装已启动，等核对', installId: 'install-206', targetVersion: '2.0.6' }, app.col());
+  assert.equal(app.task().pendingInstall.id, 'install-206');
+  return { w, app: app.persist() };   // the install ends the app: a new run, the same config
+}
+
+test('an installer session closed by its own install is continued after the restart, and the result does not close its card', async (t) => {
+  const { w, app } = await installer(t);
+  await app.resume();
+  const text = await app.deliver();
+  assert.match(text, /AgentDeck 刚重启/);
+  assert.match(text, /2\.0\.6/);
+  assert.match(text, /不要重新安装/);
+  assert.equal(w.manifest.claims.worker.phase, 'sent');
+  assert.equal(app.task().status, 'working');
+  await app.api.handle(installMessage(), captain);
+  await tick();
+  assert.equal(app.task().status, 'working', 'the install result is not this session\'s final receipt');
+  assert.equal(app.task().pendingInstall, undefined);
+  assert.equal(app.task().installResultId, 'install-206');
+  assert.notEqual(app.card().status, 'done');
+  assert.notEqual(app.card().status, 'review');
+  assert.equal(app.card().attempt_closed, false);
+  assert.equal(w.config.mainSession.pending.filter((p) => p.taskId === 'task').length, 0);
+  const seen = w.config.mainSession.pending.filter((p) => /安装 2\.0\.6 成功/.test(p.summary || ''));
+  assert.equal(seen.length, 1, 'the Captain still sees the result, once');
+  assert.equal(w.manifest.claims.worker.phase, 'sent');
+});
+
+test('an install result that lands before the continue message still reaches the session in it', async (t) => {
+  const { w, app } = await installer(t);
+  await app.api.handle(installMessage(), captain);
+  await tick();
+  await app.resume();
+  const text = await app.deliver();
+  assert.match(text, /安装 2\.0\.6 成功；现在运行 2\.0\.6/);
+  assert.match(text, /不要重新安装/);
+  assert.equal(app.task().status, 'working');
+  assert.equal(app.task().installOutcome, undefined, 'said once, not repeated at a later restart');
+  assert.equal(w.manifest.claims.worker.phase, 'sent');
+});
+
+test('a failed install leaves its session open too, with the failure in front of the Captain', async (t) => {
+  const { w, app } = await installer(t);
+  await app.resume(); await app.deliver();
+  await app.api.handle({ ...installMessage({ status: 'failed', reason: '复制失败' }), result: 'AgentDeck 安装 2.0.6 失败；复制失败。' }, captain);
+  await tick();
+  assert.equal(app.task().status, 'working');
+  assert.equal(w.config.mainSession.pending.filter((p) => /安装 2\.0\.6 失败/.test(p.summary || '')).length, 1);
+});
+
+test('a session with no install pending is continued exactly as before', async (t) => {
+  const w = world(t); const app = w.boot();
+  await app.resume();
+  const text = await app.deliver();
+  assert.doesNotMatch(text, /安装/);
+});
