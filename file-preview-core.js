@@ -11,6 +11,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const HubCore = require('./mobile-web/hub/core.js');
+const ChatCore = require('./chat-core');
 
 const LIMITS = { text: 1024 * 1024, image: 12 * 1024 * 1024, pdf: 32 * 1024 * 1024, chunk: 768 * 1024, path: 1024, entries: 300 };
 // Folders that hold reports and boards: readable without being named first.
@@ -166,10 +167,10 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], texts
   try {
     const buffer = Buffer.alloc(Math.min(stat.size, LIMITS.text));
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const bytes = buffer.subarray(0, bytesRead);
-    // Bytes that are not text (a NUL near the top) are not shown as text.
-    if (bytes.subarray(0, 8000).includes(0)) return { ...base, kind: 'other' };
-    return { ...base, kind, lang: HubCore.languageFor(name), truncated: stat.size > LIMITS.text, text: bytes.toString('utf8') };
+    // Bytes that are not text (a NUL near the top, without a UTF-16 byte order mark) are not shown as text.
+    const text = ChatCore.decodeText(buffer.subarray(0, bytesRead));
+    if (text === null) return { ...base, kind: 'other' };
+    return { ...base, kind, lang: HubCore.languageFor(name), truncated: stat.size > LIMITS.text, text };
   } finally { await handle.close(); }
 }
 

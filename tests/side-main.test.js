@@ -27,6 +27,23 @@ test('previews text, markdown, images, pdf, directories and binaries', () => {
   assert.equal(dir.entries[0].name, 'sub');
 });
 
+// Windows PowerShell 5.1 writes UTF-16 with a byte order mark (`>`, Out-File) and
+// Notepad may add a UTF-8 one: the text is shown, not called binary.
+test('text with a byte order mark is shown as text: UTF-16 from Windows PowerShell, UTF-8 from Notepad', () => {
+  const text = '# 验收报告\r\n第一行 ok\r\n';
+  fs.writeFileSync(path.join(tmp, 'ps-le.md'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]));
+  const be = Buffer.from(text, 'utf16le');
+  for (let i = 0; i < be.length; i += 2) [be[i], be[i + 1]] = [be[i + 1], be[i]];
+  fs.writeFileSync(path.join(tmp, 'be.txt'), Buffer.concat([Buffer.from([0xfe, 0xff]), be]));
+  fs.writeFileSync(path.join(tmp, 'notepad.md'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')]));
+  for (const [name, kind] of [['ps-le.md', 'markdown'], ['be.txt', 'text'], ['notepad.md', 'markdown']]) {
+    const r = readPreview(path.join(tmp, name), name);
+    assert.deepEqual([r.kind, r.text], [kind, text], name);
+  }
+  // a NUL without a byte order mark is still a binary file
+  assert.equal(readPreview(path.join(tmp, 'blob.dat'), 'blob.dat').kind, 'binary');
+});
+
 test('large text files are cut at the cap and flagged', () => {
   const file = path.join(tmp, 'big.txt');
   fs.writeFileSync(file, 'a'.repeat(MAX_TEXT_BYTES + 10));

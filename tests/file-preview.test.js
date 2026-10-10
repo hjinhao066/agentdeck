@@ -37,6 +37,16 @@ function home(t) {
   return { root, put, options, read: (file, extra = {}) => readPreview(file, { ...options, ...extra }) };
 }
 
+test('a report Windows PowerShell wrote as UTF-16 is read as text, not refused as binary', async (t) => {
+  const h = home(t);
+  const text = '# 周报\r\n结果：通过\r\n';
+  const file = h.put('reports/review/ps-report.md', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]));
+  const r = await h.read(file);
+  assert.deepEqual([r.ok, r.kind, r.text], [true, 'markdown', text]);
+  const bom8 = h.put('reports/review/notepad.md', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')]));
+  assert.equal((await h.read(bom8)).text, text);
+});
+
 test('a file inside the report folders is read, with its kind and size', async (t) => {
   const h = home(t);
   const md = await h.read(path.join(h.root, 'reports/review/review-20261008.md'));

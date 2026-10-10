@@ -618,3 +618,18 @@ test('a pasted image path: Claude Code says "Pasting…" in its footer while it 
   assert.equal(C.pasteBusy('❯ Pasting… is slow\n────'), false);
   assert.equal(C.pasteBusy(['Pasting…', '[Image #1] attached'].join('\n')), false);
 });
+
+// A dropped file, a pasted screenshot or an attachment is typed into the terminal
+// as a quoted path. Windows columns run PowerShell, where a quote inside single
+// quotes is doubled; the POSIX '\'' form left the string open (PowerShell: "The
+// string is missing the terminator") and the shell then waited for more lines.
+test('shellQuote quotes a path for the shell the column runs', () => {
+  assert.equal(C.shellQuote('/Users/me/a.png', 'darwin'), '/Users/me/a.png');
+  assert.equal(C.shellQuote('/Users/me/My Shots/a b.png', 'darwin'), "'/Users/me/My Shots/a b.png'");
+  assert.equal(C.shellQuote("/Users/me/Jinhao's.png", 'darwin'), "'/Users/me/Jinhao'\\''s.png'");
+  assert.equal(C.shellQuote('C:\\Users\\me\\a.png', 'win32'), "'C:\\Users\\me\\a.png'");
+  assert.equal(C.shellQuote("C:\\Users\\me\\Jinhao's shot.png", 'win32'), "'C:\\Users\\me\\Jinhao''s shot.png'");
+  // PowerShell also ends a single-quoted string at the typographic quotes
+  assert.equal(C.shellQuote('D:\\notes\\it\u2019s.md', 'win32'), "'D:\\notes\\it\u2019\u2019s.md'");
+  assert.equal(C.shellQuote('D:\\plain.md', 'win32'), "'D:\\plain.md'");
+});

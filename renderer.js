@@ -213,7 +213,7 @@ if (saved) {
   config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
   config.crewMap = CrewMapCore.normalizeSaved(saved.crewMap);
   if (saved.boardResponses && typeof saved.boardResponses === 'object' && !Array.isArray(saved.boardResponses)) {
-    config.boardResponses = Object.fromEntries(Object.entries(saved.boardResponses).slice(-200));
+    config.boardResponses = Object.fromEntries(Object.entries(saved.boardResponses).filter(([, r]) => savedBoardResponse(r)).slice(-200));
   }
   if (Array.isArray(saved.links)) {
     config.links = saved.links.map(BoardCore.normalizeLink).filter((link) => link.id && link.fromTaskId && link.toTaskId);
@@ -2152,9 +2152,13 @@ function buildColumn(col, isFresh) {
       if (term.buffer.active.viewportY < term.buffer.active.baseY) newOutput.hidden = false;
     });
 
-    // Cmd+C copies the selection (paste is handled natively by xterm).
+    // Copy the selection: Cmd+C on a Mac; Ctrl+Shift+C on Windows, and Ctrl+C there
+    // while text is selected (as in Windows Terminal). Without a selection Ctrl+C
+    // stays the terminal's interrupt. Paste is handled natively by xterm.
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type === 'keydown' && e.metaKey && (e.key === 'c' || e.key === 'C') && term.hasSelection()) {
+      const keyC = e.key === 'c' || e.key === 'C' || e.code === 'KeyC';
+      const copyChord = env.platform === 'darwin' ? e.metaKey : (e.ctrlKey && !e.metaKey && !e.altKey);
+      if (e.type === 'keydown' && keyC && copyChord && term.hasSelection()) {
         let text = term.getSelection();
         try {
           const bytes = new Uint8Array(text.length);
@@ -2170,6 +2174,8 @@ function buildColumn(col, isFresh) {
           }
         } catch (_) {}
         window.deck.clipboardWrite(text);
+        // the next Ctrl+C is an interrupt again
+        if (env.platform !== 'darwin') { term.clearSelection(); e.preventDefault(); }
         return false;
       }
       // Ctrl+V pastes the clipboard (macOS Cmd+V already pastes natively).
@@ -2664,12 +2670,8 @@ function openLink(m, event, colId, cont) {
   SidePane.openLink(m, event, colId, cont);
 }
 
-// Quote a path for the shell: leave simple paths bare, single-quote anything
-// with spaces or special characters (escaping embedded single quotes).
-function shellQuote(p) {
-  if (/^[A-Za-z0-9_./:@%+,=-]+$/.test(p)) return p;
-  return "'" + p.replace(/'/g, "'\\''") + "'";
-}
+// Quote a path for the column's shell (PowerShell on Windows): ChatCore.shellQuote.
+function shellQuote(p) { return ChatCore.shellQuote(p, env.platform); }
 
 // ---- Resize handle ----
 function attachResize(handle, wrap, col) {
@@ -3600,6 +3602,15 @@ boardInspectorSendTaskEl.onclick = () => {
 const MAX_MANAGED_TASKS = 48;
 const MAX_TASK_DEPTH = 8;
 
+// A kept answer replays a request the CLI sends again (after a page reload or a
+// restart). Verbatim answers can be long (a task list, a session's text: up to a
+// megabyte each); written into config.json, 200 of them made it tens of megabytes,
+// rewritten on every save. An answer longer than the usual 12000-character cap is
+// kept for this page's life only; asked again after a restart, it is read afresh.
+const liveBoardResponses = new Map();
+function savedBoardResponse(r) {
+  return !!r && typeof r === 'object' && !(typeof r.result === 'string' && r.result.length > 12000);
+}
 function respondBoard(requestId, payload, verbatim = false) {
   const id = BoardCore.cleanText(requestId, 200);
   if (!id) return;
@@ -3613,7 +3624,14 @@ function respondBoard(requestId, payload, verbatim = false) {
     snapshot: payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : undefined,
     updatedAt: Date.now(),
   };
-  config.boardResponses[id] = response;
+  if (savedBoardResponse(response)) {
+    config.boardResponses[id] = response;
+    liveBoardResponses.delete(id);
+  } else {
+    delete config.boardResponses[id];
+    liveBoardResponses.set(id, response);
+    if (liveBoardResponses.size > 20) liveBoardResponses.delete(liveBoardResponses.keys().next().value);
+  }
   const ids = Object.keys(config.boardResponses);
   if (ids.length > 200) {
     ids.sort((a, b) => (config.boardResponses[a].updatedAt || 0) - (config.boardResponses[b].updatedAt || 0))
@@ -3796,7 +3814,7 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
 });
 
 window.deck.onBoardCommand(async (message) => {
-  const cached = config.boardResponses[message.id];
+  const cached = config.boardResponses[message.id] || liveBoardResponses.get(message.id);
   if (cached) {
     window.deck.boardRespond({ requestId: message.id, ...cached });
     return;

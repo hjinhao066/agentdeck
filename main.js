@@ -885,7 +885,10 @@ function resolveClick(msg, allowAncestor) {
   const raw = (msg && msg.raw) || '';
   const isAbs = /^(file:\/\/|\/|~|[A-Za-z]:[\\/])/.test(raw);
   if (!isAbs && !(msg && msg.id)) return null;
-  const anchor = (r) => (isAbs ? r : path.join(ptyCwd(msg.id) || HOME, r));
+  // The shell's live folder where it can be read (lsof, not on Windows), else the
+  // folder the column started in: a relative path is never looked up in the home folder.
+  const base = isAbs ? '' : ptyCwd(msg.id) || ptyLaunchDirs.get(msg.id) || HOME;
+  const anchor = (r) => (isAbs ? r : path.join(base, r));
   const cont = (Array.isArray(msg && msg.cont) ? msg.cont : [])
     .slice(0, 2)
     .map((c) => String(c).replace(/^[\s│⎿>]+/u, '').slice(0, 300))
