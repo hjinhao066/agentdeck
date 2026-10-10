@@ -2558,7 +2558,9 @@
           continue;
         }
       }
-      settle(task, { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' });
+      // A progress is not a receipt, but the last one says why the worker stopped: it goes with the notice.
+      const said = window.BoardCore.cleanText(task.progress, 300).replace(/\s+/g, ' ').trim();
+      settle(task, { summary: '已结束，未提交回执' + (said ? `（最后进度：${said}）` : ''), files: [], images: [], failed: '', explicit: false, source: 'fallback' });
     }
   }
   function onTurnStarted(colId, turn) {

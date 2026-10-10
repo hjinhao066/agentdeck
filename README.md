@@ -699,9 +699,11 @@ again with the current provider, model and effort instructions.
   to the 队长 with only the prompt's last lines; it answers with `answer` when sure
   and asks you otherwise. A pause between tool calls, between two instructions or a silent
   start (Cursor can print nothing for a minute or two) is not a stop: a turn that
-  ended without a command receipt gets a three-minute grace period. Only a
-  finished, uninterrupted turn can trigger the
-  fallback: “已结束，未提交回执”, with no screen content or inferred files.
+  ended without a complete or ask receipt gets a three-minute grace period (a
+  progress is not a receipt). Only a finished, uninterrupted turn can trigger the
+  fallback: “已结束，未提交回执”, with no screen content or inferred files; when the
+  worker sent a progress for that task, its last one is attached:
+  “已结束，未提交回执（最后进度：…）”.
   Claude workers whose live footer still reports background shells/monitors/tasks
   running remain busy even after the model's reply. They produce no missing-command
   receipt and cannot auto-archive; the three-minute grace starts after their

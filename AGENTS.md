@@ -194,8 +194,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   already exports and a launch line that already passes `--settings` are left alone.
 - Receipts come from authenticated worker complete/ask/progress commands and
   retain their original text and paths. Never parse screen receipt/question
-  blocks. After a finished turn has waited three minutes without a command,
-  report only 已结束，未提交回执. Agent crashes and quota exhaustion create failure
+  blocks. After a finished turn has waited three minutes without a complete or
+  ask receipt, report only 已结束，未提交回执 (a progress is not a receipt; the task's
+  last progress is attached to that notice). Agent crashes and quota exhaustion create failure
   receipts. A quota receipt is provisional: Claude and Codex continue by themselves
   when the limit resets, and once the terminal has visibly worked again (15 s, no
   quota wait on screen) the receipt is void: the task is working, the ledger line,
