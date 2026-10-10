@@ -45,11 +45,14 @@ test.afterAll(async () => {
 test('a conversation that fell out of the archive is back, the archive pages, and restoring it shows the conversation', async () => {
   test.setTimeout(90000);
   await expect(page.locator('#toast')).toHaveText(/找回了 1 段掉出归档的对话/);
-  // on disk: listed again, the config as it was kept aside, its replay kept, a dead replay pruned
-  const saved = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'));
-  expect(saved.archived.find((a) => a.id === 'ar-lost')).toMatchObject({ title: 'find the lost drill', archivedAt: 1_700_000_060_000, recovered: true });
-  expect(saved.archived.some((a) => a.id === 'ar-silent')).toBe(false);
-  expect(fs.readdirSync(profile).filter((f) => f.startsWith('config.json.before-archive-recovery-'))).toHaveLength(1);
+  // on disk: listed again in archived.json (the archive left config.json at this launch, the config
+  // as it was kept aside), the archive as it was kept aside, its replay kept, a dead replay pruned
+  const saved = JSON.parse(fs.readFileSync(path.join(profile, 'archived.json'), 'utf8')).archived;
+  expect(saved.find((a) => a.id === 'ar-lost')).toMatchObject({ title: 'find the lost drill', archivedAt: 1_700_000_060_000, recovered: true });
+  expect(saved.some((a) => a.id === 'ar-silent')).toBe(false);
+  expect(JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).archived).toBeUndefined();
+  expect(fs.readdirSync(profile).filter((f) => f.startsWith('config.json.before-archive-split-'))).toHaveLength(1);
+  expect(fs.readdirSync(profile).filter((f) => f.startsWith('archived.json.before-archive-recovery-'))).toHaveLength(1);
   expect(fs.readdirSync(path.join(profile, 'sessions')).sort()).toEqual(expect.arrayContaining(['ar-lost.txt']));
   expect(fs.existsSync(path.join(profile, 'sessions', 'ar-gone.txt'))).toBe(false);
 

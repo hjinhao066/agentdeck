@@ -1085,13 +1085,20 @@ an index from before this counts nothing as new). The phone hub does not have it
   replies only. Shortcuts: ⌘K / Ctrl+Shift+K search, ⌘\ / Ctrl+Shift+\ toggle the side pane.
 - Conversations are saved locally in the app's userData folder under `chats`
   (one private JSON file per session, written atomically) and are not committed.
-  Folders, archived sessions and schedules live in the
-  local `config.json` in the same folder. A saved conversation that nothing lists any more (before 2.0.4
+  Folders and schedules live in the
+  local `config.json` in the same folder; archived sessions in `archived.json` beside it, written only when
+  the archive changes (it was most of `config.json`, which is rewritten several times a minute). The first
+  launch of a version with `archived.json` moves the archive there: `config.json` is first copied to
+  `config.json.before-archive-split-<time>`, and the archive leaves `config.json` only once `archived.json`
+  is written and reads back whole. Rolling back to an older version: it starts normally but shows an empty
+  已归档 (its own recovery below brings back the conversations the user spoke in, from that copy), and its
+  launch deletes the saved terminal output of the other archived sessions; installing this version again
+  merges both lists. A saved conversation that nothing lists any more (before 2.0.4
   the archive kept only its newest 500 sessions and dropped the rest at launch) is put back into 已归档 at
   the next launch, if the user spoke in it: with the command, folder and card it had when an older copy of
   `config.json` (beside it, or in an install backup) still lists it, otherwise named after its first prompt,
-  and restoring that one opens a plain shell. `config.json` is first copied to
-  `config.json.before-archive-recovery-<time>`; no chat file is changed and nothing is deleted. Terminal output
+  and restoring that one opens a plain shell. `archived.json` is first copied to
+  `archived.json.before-archive-recovery-<time>`; no chat file is changed and nothing is deleted. Terminal output
   already pruned does not come back. `node scripts/archive-recovery.js [--list]` shows what the next launch
   would bring back without writing anything (`--user-data COPY --apply` tries it on a copy). Turning a reply into a bubble is heuristic, so a TUI
   that redraws unusually may produce an imperfect bubble; the terminal view

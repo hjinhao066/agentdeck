@@ -83,7 +83,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   of the chat list; a turn with nothing to read is hidden, never deleted.
 - Saved conversations live in `userData/chats` (private, never committed, never
   pushed to this public repo). Any cloud sync must target a separate private repo.
-  Folders, archived sessions and schedules are in the local `config.json` too.
+  Folders and schedules are in the local `config.json` too; archived sessions are in
+  `archived.json` beside it (`archive-recovery.js`), written only when the archive changes, never
+  as part of every config save. A main-process reader of the archive uses `ArchiveRecovery.withArchive`.
 - History is durable: every turn is kept (no turn-count eviction; the chat view
   renders a window and loads older turns on request). Prompts submitted in the raw
   terminal are recorded in either view, except lines typed at a password prompt.
@@ -100,8 +102,10 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   cap (`SidebarCore.normalizeArchived` keeps every entry, the sidebar pages it): never
   drop an entry to shorten the list, its chat and replay would be orphaned. At launch
   `archive-recovery.js` runs before that prune and puts a chat file nothing lists back into
-  the archive (only one the user spoke in; never a 队长 chat; `config.json` copied aside
-  first; never deletes or rewrites a chat). A test profile reads no backup outside itself.
+  the archive (only one the user spoke in; never a 队长 chat; the archive file copied aside
+  first; never deletes or rewrites a chat). Before it, an archive still in `config.json` moves to
+  `archived.json` (`migrate`: `config.json` copied aside, the file written and read back before the
+  archive leaves `config.json`; a failure leaves it where it was). A test profile reads no backup outside itself.
 - Open columns are rebuilt at launch through a field whitelist (`renderer.js`,
   `config.columns = saved.columns.map(...)`). A field the app must still find on a column
   after a restart (`worktree`, `executor`/`webMode`, ...) has to be added there with its

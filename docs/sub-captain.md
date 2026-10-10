@@ -76,7 +76,7 @@ c-board-aaa  「秋招小队长」  已完成  小队长·子会话 2 个·子�
 
 ## 数据字段（给架构图等分层显示用）
 
-都在渲染进程的列对象上（`columns` / `host.columns()`，已归档的在 `config.archived`），随 `config.json` 保存：
+都在渲染进程的列对象上（`columns` / `host.columns()`，已归档的在 `config.archived`），开着的随 `config.json` 保存，已归档的存在旁边的 `archived.json`：
 
 | 字段 | 在哪 | 含义 |
 |---|---|---|

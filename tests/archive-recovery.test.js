@@ -23,7 +23,9 @@ function profile(config, chats) {
   for (const [name, chat] of Object.entries(chats)) {
     fs.writeFileSync(path.join(chatDir, name.includes('.') ? name : name + '.json'), typeof chat === 'string' ? chat : JSON.stringify({ v: 1, id: name, ...chat }));
   }
-  return { dir, configPath, chatDir, read: () => JSON.parse(fs.readFileSync(configPath, 'utf8')), done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return { dir, configPath, chatDir, read: () => JSON.parse(fs.readFileSync(configPath, 'utf8')),
+    // since the archive left config.json, the launch keeps it in archived.json beside it
+    archive: () => JSON.parse(fs.readFileSync(path.join(dir, 'archived.json'), 'utf8')).archived, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 const base = () => ({
   columns: [{ id: 'main', isMain: true, title: '队长' }, { id: 'c-live', title: 'open' }],
@@ -170,7 +172,8 @@ test('at launch a lost conversation is listed again before the prune, so a repla
 
     const result = launchStep()(fs, path, p.configPath, SESS_DIR, p.chatDir, ArchiveRecovery, '--test-user-data=' + p.dir, home);
     assert.equal(result.added, 1);
-    assert.equal(p.read().archived.find((a) => a.id === 'c-board-lost1').title, '第一条');
+    assert.equal(p.archive().find((a) => a.id === 'c-board-lost1').title, '第一条');
+    assert.equal(p.read().archived, undefined, 'the launch moved the archive out of config.json');
     assert.deepEqual(fs.readdirSync(SESS_DIR).sort(), ['c-board-lost1.txt', 'c-kept.txt'], 'its replay stays; a session that is really gone still loses its replay');
   } finally { p.done(); }
 });
@@ -185,6 +188,6 @@ test('outside a test profile the install backups under the home folder are read'
     fs.mkdirSync(outside, { recursive: true });
     fs.writeFileSync(path.join(outside, 'config.json'), JSON.stringify({ archived: [{ id: 'c-board-lost1', title: '原来的名字', cmd: 'claude', archivedAt: 7 }] }));
     launchStep()(fs, path, p.configPath, SESS_DIR, p.chatDir, ArchiveRecovery, undefined, home);
-    assert.deepEqual(p.read().archived.find((a) => a.id === 'c-board-lost1'), { id: 'c-board-lost1', title: '原来的名字', cmd: 'claude', archivedAt: 7, recovered: true });
+    assert.deepEqual(p.archive().find((a) => a.id === 'c-board-lost1'), { id: 'c-board-lost1', title: '原来的名字', cmd: 'claude', archivedAt: 7, recovered: true });
   } finally { p.done(); }
 });

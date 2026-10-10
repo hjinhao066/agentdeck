@@ -7,10 +7,13 @@
 //   node scripts/archive-recovery.js --list                  # also one line per conversation
 //   node scripts/archive-recovery.js --user-data DIR [--backups DIR]
 //   node scripts/archive-recovery.js --user-data COPY --apply
-// --apply does what the app does at launch (archive-recovery.js): config.json is copied to
-// config.json.before-archive-recovery-<time>, then rewritten with the entries added. It needs
+// --apply does what the app does at launch (archive-recovery.js): an archive still in config.json
+// moves to archived.json (config.json copied to config.json.before-archive-split-<time>), then
+// archived.json is copied to archived.json.before-archive-recovery-<time> and rewritten with the
+// entries added. It needs
 // an explicit --user-data and is meant for a copy: the running app rewrites config.json from
 // memory, so never apply to the folder of an AgentDeck that is open. The app does it itself.
+// The archive is read from archived.json (and from config.json while one is still there).
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -45,7 +48,8 @@ function main() {
   const backups = args.backups !== undefined ? [args.backups] : (args.userData ? [] : [d.backups].filter(Boolean));
   const configPath = path.join(userData, 'config.json');
   const chatDir = path.join(userData, 'chats');
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const archivePath = ArchiveRecovery.archivePathFor(configPath);
+  const config = ArchiveRecovery.withArchive(JSON.parse(fs.readFileSync(configPath, 'utf8')), archivePath);
   const sources = ArchiveRecovery.oldConfigs(configPath, backups);
   const found = ArchiveRecovery.scan({ config, chatDir, sources });
   const count = (v) => (Array.isArray(v) ? v.length : 0);
@@ -62,8 +66,10 @@ function main() {
     }
   }
   if (!args.apply) { console.log('Read-only: nothing was written.'); return; }
-  const result = ArchiveRecovery.recover({ configPath, chatDir, backups });
-  console.log(`applied: ${result.added} added to config.archived${result.backup ? `; config as it was: ${result.backup}` : ''}`);
+  const moved = ArchiveRecovery.migrate({ configPath, archivePath });
+  if (moved.backup) console.log(`moved the archive out of config.json into archived.json; config as it was: ${moved.backup}`);
+  const result = ArchiveRecovery.recover({ configPath, archivePath, chatDir, backups });
+  console.log(`applied: ${result.added} added to the archive${result.backup ? `; archive as it was: ${result.backup}` : ''}`);
 }
 
 try { main(); } catch (error) { console.error(error.message); process.exit(1); }

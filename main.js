@@ -86,10 +86,19 @@ function requestMobile(op, input) {
 // end-to-end test deck can run alongside the real one without touching it.
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
+// The archive is userData/archived.json, beside config.json (archive-recovery.js). Readers here get
+// config.json with it, as the page does; the file is parsed again only when it changed.
+const archiveFile = () => ArchiveRecovery.archivePathFor(path.join(app.getPath('userData'), 'config.json'));
+let archiveCache = null;
+function storedArchive() {
+  archiveCache ||= createJsonFileCache(archiveFile());
+  const data = archiveCache();
+  return Array.isArray(data.archived) ? data.archived : null;
+}
 // Test profiles must never write the user's shared board.
 function readLocalConfig() {
   const file = path.join(app.getPath('userData'), 'config.json');
-  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+  return fs.existsSync(file) ? ArchiveRecovery.withArchive(JSON.parse(fs.readFileSync(file, 'utf8')), archiveFile(), storedArchive) : {};
 }
 const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => localSessions(readLocalConfig()) });
 // 随手记待办: ~/.agents/boards/todos (each computer writes only its own file);
@@ -1490,9 +1499,11 @@ app.whenReady().then(async () => {
   });
 
   onMain('load-config-sync', (e) => {
-    try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
+    try { e.returnValue = fs.existsSync(configPath) ? ArchiveRecovery.withArchive(JSON.parse(fs.readFileSync(configPath, 'utf-8')), archiveFile()) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
   });
+  // config.json without the archive; archived.json only when the archive changed (archive-recovery.js).
+  const archiveWriter = ArchiveRecovery.createArchiveWriter({ configPath, archivePath: archiveFile() });
   const writeConfig = (cfg) => {
     const previousCaptain = notificationConfig.mainSession?.colId;
     cfg.mobileWeb = persistable(mobileSettings);
@@ -1502,11 +1513,9 @@ app.whenReady().then(async () => {
     power.set({ mode: cfg?.batteryMode });
     if (cfg.quotaWarmup?.enabled === false) for (const seat of ClaudeSeatsCore.normalize(cfg.claudeSeats)) quotaWarmup.cancel(seat.id);
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
-    // Atomic write: a crash mid-write must not corrupt config.json (which would
+    // Atomic writes: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
-    fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
-    fs.chmodSync(configPath + '.tmp', 0o600);
-    fs.renameSync(configPath + '.tmp', configPath);
+    archiveWriter.save(cfg);
     if (cfg.mainSession?.colId !== previousCaptain) scanTodoAi();
     checkQuotaBark();
     queueAuthReceipts();
@@ -1721,13 +1730,17 @@ app.whenReady().then(async () => {
   // Conversations that fell out of the archive (it kept only 500 before 2.0.4) go back into
   // it, before the page reads config.json and before the prune below reads the layout, so a
   // replay still on disk is kept. A test profile reads nothing outside itself.
+  // The archive is archived.json beside config.json: one still in config.json moves there first
+  // (config.json copied aside), so the recovery and the prune read the one list.
+  const archivePath = ArchiveRecovery.archivePathFor(configPath);
+  ArchiveRecovery.migrate({ configPath, archivePath });
   const archiveRecovery = ArchiveRecovery.recover({
-    configPath, chatDir: CHAT_DIR,
+    configPath, archivePath, chatDir: CHAT_DIR,
     backups: tudArg ? [] : [path.join(HOME, 'Library/Caches/AgentDeck-install-backups')],
   });
   // Prune replays for columns that no longer exist in the saved layout.
   try {
-    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    const cfg = ArchiveRecovery.withArchive(JSON.parse(fs.readFileSync(configPath, 'utf-8')), archivePath);
     const ids = new Set([...((cfg && cfg.columns) || []), ...((cfg && cfg.archived) || [])].map((c) => c && c.id));
     for (const f of fs.readdirSync(SESS_DIR)) {
       if (!ids.has(f.replace(/\.txt$/, ''))) fs.unlinkSync(path.join(SESS_DIR, f));
@@ -2059,7 +2072,7 @@ app.whenReady().then(async () => {
 
 function fleetSessions(file) {
   try {
-    const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const cfg = ArchiveRecovery.withArchive(JSON.parse(fs.readFileSync(file, 'utf8')), archiveFile(), storedArchive);
     const captain = cfg.mainSession && cfg.mainSession.colId;
     return [...(cfg.columns || []), ...(cfg.archived || [])].filter((col) => col && typeof col.id === 'string').map((col) => ({
       id: col.id, role: col.id === captain || col.isMain ? 'captain' : 'session',
