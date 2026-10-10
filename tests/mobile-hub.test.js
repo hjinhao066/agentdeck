@@ -84,6 +84,9 @@ test('boards merge by card, newest update wins, and claims show the machine name
   assert.equal(Core.ownerLabel({ dispatch_claim: { owner: 'jinhao-macbook' } }, machines), 'Mac');
   assert.equal(Core.ownerLabel({ dispatch_claim: { owner: 'other-host' } }, machines), 'other-host');
   assert.equal(Core.ownerLabel({ dispatch_claim: null }, machines), '');
+  // The claiming computer is where a card's files are.
+  assert.equal(Core.ownerMachine({ dispatch_claim: { owner: 'OWENJH' } }, machines), machines[1]);
+  assert.equal(Core.ownerMachine({ dispatch_claim: { owner: 'other-host' } }, machines), null);
 });
 
 test('machines.json lists Mac first as the default and only accepts id-matching prefixes', () => {

@@ -392,7 +392,12 @@
   function detailBlock(item, now) {
     const box = el('div', 'at-detail');
     box.id = 'at-detail-' + item.id;
-    if (item.detail) box.appendChild(el('div', 'at-text', item.detail));
+    if (item.detail) {
+      // the one Markdown renderer the phone uses too (escaped, whitelisted tags only), styled like a chat reply
+      const text = el('div', 'at-text reply md');
+      text.innerHTML = window.HubCore.renderMarkdown(window.HubCore.tidyReply(item.detail), { breaks: true });
+      box.appendChild(text);
+    }
     if (item.files.length) {
       const list = el('ul', 'at-files');
       list.setAttribute('aria-label', '证据和文件');

@@ -2771,6 +2771,9 @@ function removeCol(col) {
   ChatUI.onColumnRemoved(col.id);
   if (col.isMain) config.mainSession = null;
   detachColumn(col, false);
+  // Without 队长 its background sessions are loose sessions again, listed after the folders:
+  // the deck follows the sidebar order.
+  if (col.isMain) { columns = SidebarCore.orderedColumns(columns, config.folders); reflowDeck(); }
   // A 小队长's children keep running and go back to the 队长.
   if (col.subCaptain) window.MainSession?.releaseSubCrew?.(col, '关掉');
   saveConfig();
@@ -3718,10 +3721,11 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
         const entry = terms.get(col.id), info = AgentInfo.resolveAgentInfo(col, entry);
         const task = [...(MainSession.state()?.tasks || [])].reverse().find((t) => t.colId === col.id);
         const active = entry?.alive && (entry.state === 'working' || entry.sendingPrompt || task?.status === 'working');
-        const failed = !active && (task?.status === 'failed' || col.lastReceipt?.failed || entry && !entry.alive);
-        const status = entry?.alive && ['input', 'quota'].includes(entry.state) ? entry.state
+        const failed = !active && (task?.status === 'failed' || col.lastReceipt?.failed);
+        // The desktop sidebar's words: a process that ended is 已退出, a finished terminal 已完成.
+        const status = entry && !entry.alive ? 'exited' : entry?.alive && ['input', 'quota'].includes(entry.state) ? entry.state
           : active ? 'working' : failed ? 'failed'
-          : ['queued', 'waiting', 'asking', 'done'].includes(task?.status) ? task.status : 'idle';
+          : ['queued', 'waiting', 'asking', 'done'].includes(task?.status) ? task.status : entry?.state === 'done' ? 'done' : 'idle';
         return { id: col.id, title: columnLabel(col), model: info.model || info.provider || '未知模型',
           status, isMain: !!col.isMain, project: String(col.project || '').slice(0, 120),
           receipt: String(col.lastReceipt?.summary || col.lastReceipt?.failed || '').slice(0, 1000) };
@@ -4044,8 +4048,15 @@ const deckHost = {
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
 };
-SidePane.init(deckHost);
-Sidebar.init(deckHost);
+// One module failing to start (a throw, or a rejected async init) is logged and the script
+// goes on: 任务看板, its tabs and the saved view are set up at its end (2.0.2: a throw here
+// left the board unopenable).
+function startPart(name, start) {
+  const failed = (error) => console.error(`${name} 启动失败：`, error);
+  try { Promise.resolve(start()).catch(failed); } catch (error) { failed(error); }
+}
+startPart('SidePane', () => SidePane.init(deckHost));
+startPart('Sidebar', () => Sidebar.init(deckHost));
 // The Captain's crew list opens fully at launch and again the first time the window is
 // used on a new day; a fold made in between holds until then.
 let crewFoldDay = SidebarCore.localDay(Date.now());
@@ -4060,20 +4071,20 @@ function openCrewOnNewDay() {
 }
 window.addEventListener('focus', openCrewOnNewDay);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) openCrewOnNewDay(); });
-AttentionUI.init(deckHost);
-MainSession.init(deckHost);
+startPart('AttentionUI', () => AttentionUI.init(deckHost));
+startPart('MainSession', () => MainSession.init(deckHost));
 window.deck.onParkForRestart(async (sessions) => {
   try { await MainSession.parkForRestart(sessions); }
   finally { window.deck.parkForRestartDone(); }
 });
-ClaudeSeats.init(deckHost);
-ChatUI.init(deckHost);
-Pages.init(deckHost);
-ChatDeliverables.init(deckHost);
-ReleaseNotesUI.init(deckHost);
-TodoUI.init(deckHost);
-render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
-renderQuotaBar();
+startPart('ClaudeSeats', () => ClaudeSeats.init(deckHost));
+startPart('ChatUI', () => ChatUI.init(deckHost));
+startPart('Pages', () => Pages.init(deckHost));
+startPart('ChatDeliverables', () => ChatDeliverables.init(deckHost));
+startPart('ReleaseNotesUI', () => ReleaseNotesUI.init(deckHost));
+startPart('TodoUI', () => TodoUI.init(deckHost));
+startPart('render', () => render(!(Array.isArray(saved && saved.columns) && saved.columns.length)));
+startPart('renderQuotaBar', () => renderQuotaBar());
 function applyQuotaSamples(samples) {
   let changed = false;
   for (const sample of samples) changed = QuotaCore.observe(config.quotas, sample) || changed;

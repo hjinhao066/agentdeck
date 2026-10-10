@@ -79,6 +79,8 @@
     if (machine.state !== 'online') return `${name} 还没连上，现在发不出去，${stay}`;
     const captain = machine.snap && machine.snap.captain;
     if (!captain || !captain.id || captain.status === 'unavailable') return `${name} 的队长还没启动，先在那台电脑上创建队长，${stay}`;
+    // Its terminal process ended (the desktop shows 已退出): nothing goes in until it is started again.
+    if (captain.status === 'exited') return `${name} 的队长终端已经退出，现在发不出去。先在那台电脑上重新启动队长，${stay}`;
     if (!machine.csrf) return `${name} 的安全校验还没就绪，刷新后再试。`;
     return '';
   }
@@ -91,6 +93,8 @@
     if (result.status === 502) return `${name} 离线，消息没有发出，也没有转给另一台电脑。`;
     if (result.status === 401) return `${name} 的登录已失效，消息没有发出。`;
     if (result.status === 403) return `${name} 的安全校验已过期，消息没有发出。刷新后再试。`;
+    // The computer's own reason (no 队长 running there), when it is written for people.
+    if (result.status === 409 && result.body && typeof result.body.error === 'string' && /[\u4e00-\u9fff]/.test(result.body.error)) return `${name} 没有接收这条消息：${result.body.error.slice(0, 160)}`;
     return `${name} 没有接收这条消息（HTTP ${result.status}）。`;
   }
 
@@ -178,12 +182,43 @@
   }
 
   const host = (name) => String(name || '').trim().toLowerCase().replace(/\.(local|lan)$/, '');
-  // dispatch_claim.owner is os.hostname() of the machine that claimed the card.
+  // dispatch_claim.owner is os.hostname() of the machine that claimed the card: the card ran there, and its files are there.
+  function ownerMachine(card, machines) {
+    const owner = card && card.dispatch_claim && card.dispatch_claim.owner;
+    return owner && machines.find((m) => m.hostname && host(m.hostname) === host(owner)) || null;
+  }
   function ownerLabel(card, machines) {
     const owner = card && card.dispatch_claim && card.dispatch_claim.owner;
     if (!owner) return '';
-    const match = machines.find((m) => m.hostname && host(m.hostname) === host(owner));
+    const match = ownerMachine(card, machines);
     return match ? match.label : String(owner).slice(0, 40);
+  }
+  // A card's tag and latest line in one set of words for both boards (the desktop 任务看板
+  // reads them from here too): a 'quota' card names its failure, and a 需要你 the app filled
+  // in itself is said plainly, never in its internal wording.
+  const FLAG_NAMES = { failed: '失败', blocked: '前置未完成', held: '挂起' };
+  function cardFlag(card) {
+    if (!card || !card.flag) return '';
+    if (card.flag === 'quota') return { auth: '登录', rate_limit: '限流' }[card.resource_failure] || '额度';
+    return FLAG_NAMES[card.flag] || String(card.flag);
+  }
+  // What a 需要你 card asks the user, whole (both boards show the same words), or '' when it
+  // sits there without a real question: a session that ended without a receipt, a dispatcher
+  // that gave up, a card moved there by hand with only an old result on it.
+  const NOT_A_QUESTION = [/^已结束，未提交回执/, /^调度已结束/];
+  function cardQuestion(card) {
+    if (!card || card.status !== 'needs_user') return '';
+    if (typeof card.user_question === 'string' && card.user_question.trim()) return card.user_question.trim();
+    const text = String(card.latest_receipt || '').trim();
+    if (!text || NOT_A_QUESTION.some((re) => re.test(text))) return '';
+    if (/:(?:complete|failed|fallback):/.test(card.last_event || '')) return '';
+    return text;
+  }
+  function cardReceipt(card) {
+    const text = String((card && card.latest_receipt) || '').trim();
+    if (/^已结束，未提交回执/.test(text)) return '队员停下了，但没有交结果。';
+    if (/^调度已结束/.test(text)) return '这件事还没有派给队员。';
+    return text;
   }
 
   // ---- conversation --------------------------------------------------------
@@ -234,7 +269,12 @@
   // recognised by its lines being part of it.
   function cleanReply(text, said = '', prompt = '') {
     const known = squash(said);
-    const rows = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n');
+    let whole = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+    // A reply is saved trimmed, which takes the indent off the first row of a file
+    // diff left at its top: that row gets its indent back so it goes with the diff.
+    const head = whole.split(/\n[ \t]*\n/)[0].split('\n');
+    if (head.length > 1 && /^\S/.test(head[0]) && head.slice(1).some((l) => DIFF_ROW.test(l))) whole = '    ' + whole;
+    const rows = whole.split('\n');
     const blocks = rows.slice(prompt ? echoTail(rows, prompt) : 0).join('\n').split(/\n[ \t]*(?:\n[ \t]*)+/);
     // A notice cut by the screen edge ends on the next row, sometimes after an empty one.
     let notice = false;
@@ -593,7 +633,7 @@
     return `${name} 没有记下这条（HTTP ${result.status}）。`;
   }
 
-  return { cleanTodos, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
+  return { cleanTodos, mergeTodos, todoBase, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerMachine, ownerLabel, cardFlag, cardReceipt, cardQuestion,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, rowHealth, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 
