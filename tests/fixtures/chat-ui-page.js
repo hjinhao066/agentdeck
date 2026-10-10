@@ -151,6 +151,7 @@ function load({ cols, saved = [], renderCard } = {}) {
   ctx.window = ctx;
   ctx.ChatCore = ChatCore;
   ctx.HubCore = HubCore;
+  ctx.AppShortcutsCore = require(path.join(ROOT, 'app-shortcuts-core.js'));
   ctx.BoardCore = { inferAgentType: (cmd) => (/claude/.test(cmd || '') ? 'Claude' : cmd ? 'Custom agent' : 'Shell'), LAUNCHERS: [] };
   ctx.AgentInfo = { PROVIDER_ICONS: {} };
   ctx.MainCore = { statusLabel: () => '', terminalActivity: () => false, workingForSend: () => false, LONG_PROMPT: 100000 };
