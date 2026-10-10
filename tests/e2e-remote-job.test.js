@@ -9,7 +9,7 @@ const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 
 const JOB = path.join(__dirname, '..', 'scripts', 'e2e-remote-job.js');
-const { depsKey, safeRemove } = require(JOB);
+const { depsKey, safeRemove, withInstallLock, InstallWaitTimeout } = require(JOB);
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e.x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e.x' } }).trim();
 
 // A fake Playwright: reports what its working directory holds at the start and 2 s later.
@@ -351,6 +351,60 @@ test('leftover checkouts of killed jobs are swept at the start of the next job; 
   } finally { env.done(); }
 });
 
+// A killed job's checkout still holds its node_modules link into deps/<key>. git for Windows follows that
+// junction on `worktree remove --force` and empties the shared folder (seen on the Windows PC, git 2.53),
+// after which every job fails as if a test had. POSIX git leaves the link alone, so there a git wrapper
+// notes every `worktree remove` that still finds a node_modules link in the folder it is given.
+function linkedLeftover(env) {
+  const shared = path.join(env.root, 'deps', '0123456789abcdef', 'node_modules');
+  fs.mkdirSync(path.join(shared, 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(shared, 'pkg', 'index.js'), 'shared dependency');
+  const leftover = path.join(env.root, 'checkouts', 'killed-run');
+  git(env.hub, 'worktree', 'add', '-q', '--detach', '--force', leftover, env.shas.A);
+  fs.symlinkSync(shared, path.join(leftover, 'node_modules'), 'junction');
+  const old = new Date(Date.now() - 6 * 3600 * 1000); fs.utimesSync(leftover, old, old);
+  const log = path.join(env.root, 'removed-with-link.log');
+  const extraEnv = {};
+  if (process.platform !== 'win32') {
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    const bin = path.join(env.root, 'git-bin'); fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh
+if [ "$3" = "worktree" ] && [ "$4" = "remove" ]; then
+  for last; do :; done
+  if [ -L "$last/node_modules" ]; then echo "$last" >> "${log}"; fi
+fi
+exec "${realGit}" "$@"
+`, { mode: 0o755 });
+    extraEnv.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
+  }
+  const removedWithLink = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : []);
+  return { shared, leftover, extraEnv, removedWithLink };
+}
+test('a killed job\'s leftover checkout is swept without reaching through its node_modules link into the shared dependencies', async () => {
+  const env = setup();
+  const left = linkedLeftover(env);
+  try {
+    const job = await startJob(env, 'r1', env.shas.A, { extraEnv: left.extraEnv });
+    assert.equal(job.code, 0, job.output);
+    assert.equal(fs.existsSync(left.leftover), false, 'the leftover checkout is swept');
+    assert.ok(fs.existsSync(path.join(left.shared, 'pkg', 'index.js')), 'the shared node_modules keeps its files');
+    assert.deepEqual(left.removedWithLink(), [], 'git was handed a checkout that still links the shared node_modules');
+  } finally { try { fs.unlinkSync(path.join(left.leftover, 'node_modules')); } catch {} env.done(); }
+});
+test('a leftover checkout whose node_modules link cannot be removed is left for a later sweep, never handed to git', posix, async () => {
+  const env = setup();
+  const left = linkedLeftover(env);
+  try {
+    fs.chmodSync(left.leftover, 0o555); // the link inside cannot be unlinked
+    const job = await startJob(env, 'r1', env.shas.A, { extraEnv: left.extraEnv });
+    assert.equal(job.code, 0, job.output);
+    assert.ok(fs.existsSync(path.join(left.leftover, 'node_modules')), 'the leftover checkout and its link stay');
+    assert.ok(fs.existsSync(path.join(left.shared, 'pkg', 'index.js')), 'the shared node_modules keeps its files');
+    assert.deepEqual(left.removedWithLink(), [], 'git was handed a checkout that still links the shared node_modules');
+    assert.match(job.output, /could not unlink .*killed-run/);
+  } finally { fs.chmodSync(left.leftover, 0o755); try { fs.unlinkSync(path.join(left.leftover, 'node_modules')); } catch {} env.done(); }
+});
+
 test('--no-install reuses the most recently used complete install (there is no hub\\node_modules any more)', posix, async () => {
   const env = setup();
   try {
@@ -380,6 +434,38 @@ test('an install lock whose owner process is gone is broken at once, not after 3
     assert.equal(job.code, 0, job.output);
     assert.match(job.output, /owner .* is gone/);
   } finally { env.done(); }
+});
+// Two waiters both find the owner of the lock gone. The first takes the lock over between the second one's
+// check and its own break-in; the second must then leave the first one's lock alone, or both install into
+// the same folder (seen with SLOTS=3: npm ci twice, or a folder removed under a job, exits 1/12/14).
+// Played in this process: right after this waiter finds the owner gone, the "other waiter" takes over.
+test('a stale install lock is taken over by one waiter only: a waiter that also saw it stale leaves the new holder alone', async () => {
+  const dead = spawn(process.execPath, ['-e', '0']); await new Promise((r) => dead.on('close', r));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-lock-race-'));
+  const lock = path.join(root, '0123456789abcdef.lock');
+  const otherWaiter = process.ppid;
+  const realKill = process.kill, waitMs = process.env.AGENTDECK_E2E_INSTALL_WAIT_MS;
+  let tookOver = false, ran = false;
+  try {
+    fs.mkdirSync(lock); fs.writeFileSync(path.join(lock, 'owner'), String(dead.pid));
+    process.kill = (pid, signal) => {
+      try { return realKill.call(process, pid, signal); } finally {
+        if (pid === dead.pid && !tookOver) {
+          tookOver = true;
+          fs.rmSync(path.join(lock, 'owner')); fs.rmdirSync(lock); fs.mkdirSync(lock); fs.writeFileSync(path.join(lock, 'owner'), String(otherWaiter));
+        }
+      }
+    };
+    process.env.AGENTDECK_E2E_INSTALL_WAIT_MS = '1';
+    assert.throws(() => withInstallLock(lock, () => { ran = true; }), InstallWaitTimeout);
+    assert.ok(tookOver, 'the other waiter took the lock over');
+    assert.equal(ran, false, 'this waiter must not install while the other one holds the lock');
+    assert.equal(fs.readFileSync(path.join(lock, 'owner'), 'utf8'), String(otherWaiter), 'the other waiter still holds its lock');
+  } finally {
+    process.kill = realKill;
+    if (waitMs === undefined) delete process.env.AGENTDECK_E2E_INSTALL_WAIT_MS; else process.env.AGENTDECK_E2E_INSTALL_WAIT_MS = waitMs;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 test('an install lock whose owner is alive is respected even when it is older than the stale limit', posix, async () => {
   const env = setup();

@@ -1203,7 +1203,7 @@ npm run dist:mac
 - **发版**（小版本打包前）：跑 `npm test` 和 `npm run test:smoke`。冒烟复用现有用例，用 Playwright 标签 `@smoke` 标出，不另抄一份测试。命令是 `playwright test --grep @smoke --workers=1`，单 worker，目标 5 分钟内。覆盖：应用能启动并显示主界面；队长用 board-cli `new` / `tell` 派活且队员收到；队员回执回到队长；会话归档后能恢复；终端能显示输出；额度区能显示；任务看板能打开。
 - **全量**：`npm run test:e2e` 夜里跑，或换一台机器跑。冒烟通过不能代替全量。
 
-**Mac 压力下的 E2E 分流：** 跑 E2E 时用 `node scripts/e2e-auto.js tests/e2e/a.spec.js [b.spec.js] [-- playwright 参数]`：带 Windows 平台跳过标记（`test.skip(process.platform === 'win32', …)`）的 spec 走本机排队锁；其余 spec 在 Windows 在线时合成一组、经 ssh 在后台（非桌面会话，不弹窗）派到 Windows 跑，ssh 或远端准备失败时自动改走本机排队锁。Windows 测的是当前工作区（没提交的改动也会带过去）；测试在 Windows 上真失败就是失败，不会悄悄换 Mac 重跑，只在 Windows 才不通过的 spec 要加上面的跳过标记。看本机队列：`node scripts/e2e-auto.js --status`。
+**Mac 压力下的 E2E 分流：** 跑 E2E 时用 `node scripts/e2e-auto.js tests/e2e/a.spec.js [b.spec.js] [-- playwright 参数]`：带 Windows 平台跳过标记（`test.skip(process.platform === 'win32', …)`）的 spec 走本机排队锁；其余 spec 在 Windows 在线时合成一组、经 ssh 在后台（非桌面会话，不弹窗）派到 Windows 跑，ssh 或远端准备失败时自动改走本机排队锁。Windows 测的是当前工作区（没提交的改动也会带过去）；测试在 Windows 上真失败就是失败，不会悄悄换 Mac 重跑，只在 Windows 才不通过的 spec 要加上面的跳过标记。中途按 Ctrl-C 整组停下（退出码 130），不会改到 Mac 重跑；spec 写绝对路径也行，会换成仓库内的相对路径（仓库外的 spec 直接报错）。看本机队列：`node scripts/e2e-auto.js --status`。
 
 **Windows 后台执行：** Windows 上每个任务有自己的检出目录（`agentdeck-e2e-win\checkouts\<运行号>`），依赖按 lockfile 分目录（`deps\<哈希>`，哈希不含根 `version`；同一 lockfile 只装一次，其他任务等它装完复用，等锁有日志、25 分钟超时后退出码 15 并自动改走 Mac；每次任务结束后只留最近用过的 2 份、正在被用的不删，新装前可用空间不足 2 GB 退出码 16 并改走 Mac），所以 `AGENTDECK_E2E_SLOTS` 大于 1 时几组可以同时跑，互不覆盖。进程优先级没有调低。验证没有窗口跑到桌面的办法：`scripts/verify-windows-background.ps1`（ssh 登录在会话 0，看不到桌面会话的窗口，所以证据是「所有测试进程都在会话 0、桌面会话里没有新的测试进程」）。
 
