@@ -2123,9 +2123,13 @@ function buildColumn(col, isFresh) {
       if (term.buffer.active.viewportY < term.buffer.active.baseY) newOutput.hidden = false;
     });
 
-    // Cmd+C copies the selection (paste is handled natively by xterm).
+    // Copy the selection: Cmd+C on a Mac; Ctrl+Shift+C on Windows, and Ctrl+C there
+    // while text is selected (as in Windows Terminal). Without a selection Ctrl+C
+    // stays the terminal's interrupt. Paste is handled natively by xterm.
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type === 'keydown' && e.metaKey && (e.key === 'c' || e.key === 'C') && term.hasSelection()) {
+      const keyC = e.key === 'c' || e.key === 'C' || e.code === 'KeyC';
+      const copyChord = env.platform === 'darwin' ? e.metaKey : (e.ctrlKey && !e.metaKey && !e.altKey);
+      if (e.type === 'keydown' && keyC && copyChord && term.hasSelection()) {
         let text = term.getSelection();
         try {
           const bytes = new Uint8Array(text.length);
@@ -2141,6 +2145,8 @@ function buildColumn(col, isFresh) {
           }
         } catch (_) {}
         window.deck.clipboardWrite(text);
+        // the next Ctrl+C is an interrupt again
+        if (env.platform !== 'darwin') { term.clearSelection(); e.preventDefault(); }
         return false;
       }
       // Ctrl+V pastes the clipboard (macOS Cmd+V already pastes natively).
