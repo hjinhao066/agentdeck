@@ -1067,9 +1067,71 @@ an index from before this counts nothing as new). The phone hub does not have it
   truncation still cannot be recovered after the missing text has been discarded.
 
 - Clicking a link or file path in a bubble opens it in the right side pane, with
-  tabs for 预览 (code, Markdown, images, directories), 终端 and 浏览器 (PDF opens
+  tabs for 预览 (code, Markdown, web pages, images, directories), 终端 and 浏览器 (PDF opens
   there too). Cmd/Ctrl-click uses the system browser or file manager, Option-click
-  the editor. Terminal output and bubbles find paths with the same rules
+  the editor. The preview's header holds icon buttons only: page/layout ↔ source,
+  reload (web pages), reading theme (Markdown), copy path, show in the file manager,
+  open in the editor.
+- **A `.html` / `.htm` file is drawn as the page**; the `</>` button switches to its
+  source and back. The page runs its own scripts, so it is kept like a page from the
+  internet (`preview-html-core.js`, `side-main.js`): a separate sandboxed
+  `WebContentsView` with no preload, in a session of its own that is not persisted
+  (`agentdeck-preview`); it is served from `agentdeck-preview://<random>/`, an address
+  that answers only for the page open right now and only with files of the folder the
+  page lies in (real paths: no `..`, no symbolic link leading out, no hidden file, no
+  key or credential name, only formats a page is made of, 64 MB each). Requests to
+  `file:`, to this machine (`localhost`, `127.*`, `::1`), to the local network and to
+  anything but `http(s)` on the public web are cancelled, so a CDN chart library loads
+  and the deck's own phone page or sync server cannot be reached. Permissions,
+  downloads and new windows are denied; the page can move between its own pages; a
+  link to the public web opens in the 浏览器 tab. A page lying in a catch-all folder
+  (the home folder and what sits right in it such as Desktop, Downloads or `~/reports`,
+  a drive, the temporary folder) is given only itself, and the pane says so: put it in
+  a folder of its own to load the pictures and scripts next to it. Leaving the page
+  (another file, the source view) ends it.
+- **Markdown is shown in a reading theme** (`preview-themes.js` colours,
+  `preview-themes.css` shapes): 星光 (the default: deep indigo, glowing periwinkle,
+  amber), 碳黑, Nord 极地, Obsidian 默认, Minimal 极简, Gruvbox. They are designed dark
+  first, hard-edged and high in contrast (no pastel or pink sets, by the owner's taste);
+  each also has a light side, and the deck's light/dark switch picks which one shows. The palette
+  button lists them; one click applies and is remembered (`config.side.mdTheme`), the
+  list stays open to compare. Headings 1–6, bold, italic, inline code, links, quotes,
+  tables, list marks and highlights each have a colour; every text colour is checked
+  against its background at 4.5:1 or better (`tests/preview-markdown.test.js`, and on
+  screen in `tests/e2e/preview-html-themes.spec.js`), the smallest text is 11.5px. The
+  reading view also reads what an Obsidian note uses (`renderMarkdown(..., { rich: true })`,
+  off everywhere else): `==highlight==`, task boxes, callouts (`> [!note]`, folding with
+  `-`/`+`), properties at the top, `#tags`, `[[links]]` to a note beside this one,
+  pictures lying next to the note, footnotes, `%%comments%%`, and a single line break
+  kept as a line break (as Obsidian does). Relative links open in the preview, web
+  links in the 浏览器 tab.
+- **Reading tools in the preview** (logic in `preview-reader.js`, wired in `side-pane.js`):
+  - 目录: a note with two or more headings gets an outline icon button. The outline sits
+    beside the note when the pane is at least 600px wide (open or put away is remembered,
+    `config.side.outline`); in a narrower pane it floats over the note when asked for and
+    goes after a jump or Esc. A click jumps to the heading; the section being read is
+    marked as the note scrolls.
+  - The file on screen is watched (`preview:watch`: the main process polls that one
+    file's stat once a second and tells the page a number, never a path). When it
+    changes the pane reads it again and draws it where the reader was: a note finds the
+    block at the top of the view again by its text, a code file keeps its first line in
+    view, unfolded callouts stay unfolded, and 「已更新」 shows by the name for a moment.
+    A web page reloads in its own view. A file that is gone keeps its last text, and the
+    head says so until it is back.
+  - ⌘F (Ctrl+F off the Mac) with the pointer or the keyboard in the preview opens a find
+    bar: Enter / Shift+Enter (and ⌘G / ⇧⌘G) walk the matches, Esc closes. Notes, code
+    files and folder lists mark matches with CSS highlight ranges (nothing is written
+    into the text; a match in a folded callout unfolds it; line numbers are not
+    searched); a web page uses Chromium's own find in its view, and ⌘F pressed inside
+    the page comes to the bar. Anywhere else ⌘F is the conversation or terminal search
+    as before. ⌘⇧F is left alone: a lyrics app on the owner's Mac holds it system-wide.
+  - Every code block in a note has a bar with its language and a copy icon button (two
+    squares; a tick for a moment after copying).
+  - A picture in a note, or one previewed on its own, opens full screen with a click or
+    Enter: fitted to the window (never enlarged past its own size); the wheel or a pinch
+    zooms about the pointer, a drag moves it, a double click goes to its own size and
+    back, + − 0 1 on the keyboard; Esc or a click beside it closes.
+- Terminal output and bubbles find paths with the same rules
   (`findLinks` in `renderer.js`): a path ends at Chinese or full-width punctuation,
   curly quotes and the space before the words after it, so two paths on one line
   are two links. Spaces stay inside a folder name (`Application Support`,

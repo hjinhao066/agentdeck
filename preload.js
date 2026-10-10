@@ -74,6 +74,10 @@ contextBridge.exposeInMainWorld('deck', {
   chatDelete: (id) => ipcRenderer.send('chat:delete', { id }),
   // Right-hand pane: file preview, embedded browser.
   previewRead: (raw, id, cont) => ipcRenderer.invoke('preview:read', { raw, id, cont }),
+  // the file on screen is watched; a change is told as the number previewWatch returned
+  previewWatch: (raw, id, cont) => ipcRenderer.invoke('preview:watch', { raw, id, cont }),
+  previewUnwatch: () => ipcRenderer.send('preview:unwatch'),
+  onPreviewChanged: (cb) => ipcRenderer.on('side:preview-changed', (_e, m) => cb(m)),
   // Artifacts: which delivered files are still on disk (0 gone, 1 file, 2 folder).
   artifactsStat: (paths) => ipcRenderer.invoke('artifacts:stat', { paths }),
   sideBrowserOpen: (url) => ipcRenderer.send('side:browser-open', { url }),
@@ -81,6 +85,17 @@ contextBridge.exposeInMainWorld('deck', {
   sideBrowserBounds: (b) => ipcRenderer.send('side:browser-bounds', b),
   sideBrowserAction: (action) => ipcRenderer.send('side:browser-action', { action }),
   onBrowserState: (cb) => ipcRenderer.on('side:browser-state', (_e, m) => cb(m)),
+  // A previewed web page: shown in a separate sandboxed view the pane only places.
+  sidePreviewHtml: (raw, id, cont) => ipcRenderer.send('side:preview-html', { raw, id, cont }),
+  sidePreviewBounds: (b) => ipcRenderer.send('side:preview-bounds', b),
+  sidePreviewAction: (action) => ipcRenderer.send('side:preview-action', { action }),
+  onPreviewLink: (cb) => ipcRenderer.on('side:preview-link', (_e, m) => cb(m)),
+  onPreviewState: (cb) => ipcRenderer.on('side:preview-state', (_e, m) => cb(m)),
+  // find in that page: Chromium's own search; ⌘F pressed inside the page comes back as find-key
+  sidePreviewFind: (text, next, forward) => ipcRenderer.send('side:preview-find', { text, next, forward }),
+  sidePreviewFindStop: () => ipcRenderer.send('side:preview-find-stop'),
+  onPreviewFound: (cb) => ipcRenderer.on('side:preview-found', (_e, m) => cb(m)),
+  onPreviewFindKey: (cb) => ipcRenderer.on('side:preview-find-key', () => cb()),
   // Skills page: keys come from the listing; main re-checks every path.
   skillsList: () => ipcRenderer.invoke('skills:list', {}),
   skillsRead: (key) => ipcRenderer.invoke('skills:read', { key }),
