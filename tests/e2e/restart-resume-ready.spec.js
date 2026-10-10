@@ -129,7 +129,7 @@ test('after a restart the 队长 and every crew session stopped at a safe point 
     throw error;
   } finally {
     if (app) await quitAndWait(app.application);
-    fs.rmSync(profile, { recursive: true, force: true });
+    try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
   }
 });
 
@@ -163,7 +163,7 @@ test('a 队长 that is not back at work after a start is reported on 待我处�
     expect((await app.page.evaluate(() => window.AttentionUI.mobileView())).items.filter((i) => i.title === '重启后队长没接上')).toHaveLength(1);
   } finally {
     if (app) await quitAndWait(app.application);
-    fs.rmSync(profile, { recursive: true, force: true });
+    try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
   }
 });
 
@@ -207,6 +207,6 @@ test('after a crash, a crew session the 3-minute rule had closed at its safe poi
     throw error;
   } finally {
     if (app) await quitAndWait(app.application);
-    fs.rmSync(profile, { recursive: true, force: true });
+    try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); }
   }
 });
