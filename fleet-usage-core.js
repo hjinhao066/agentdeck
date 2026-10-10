@@ -112,9 +112,16 @@
   }
   // The record's single turn, and the summary out of a record.
   const turnsOf = (summary) => [{ task: summary }];
-  function fromRecord(record) {
+  const taskOf = (record) => {
     const turn = record && Array.isArray(record.turns) && record.turns.length === 1 ? record.turns[0] : null;
-    return turn && isObject(turn) ? clean(turn.task) : null;
+    return turn && isObject(turn) ? turn.task : null;
+  };
+  const fromRecord = (record) => clean(taskOf(record));
+  // A summary in a format newer than this build reads (a later AgentDeck on the other
+  // machine): its version, else 0. The page says to update this machine, never "wait".
+  function newerOf(record) {
+    const task = taskOf(record);
+    return isObject(task) && Number.isInteger(task.v) && task.v > VERSION && task.v < 1000 ? task.v : 0;
   }
 
   // '2.0.10' >= '2.0.7'; an unreadable version is not.
@@ -130,7 +137,8 @@
   // What the chart shows for `platform`: this machine's own scan, or the other
   // machine's summary, or why there is none. `fleet` is the sync client's usage
   // state: { configured, selfId, error, lastSyncAt, devices, usage: { deviceId: { summary, updatedAt } } }.
-  // state: self | ok | unconfigured | connecting | error | missing | old | waiting | offline
+  // A usage entry may instead be { newer: v }: the other machine sends a format this build cannot read.
+  // state: self | ok | newer | unconfigured | connecting | error | missing | old | waiting | offline
   function machine({ platform, selfPlatform, fleet }) {
     const label = platformLabel(platform);
     if (platform === selfPlatform) return { state: 'self', platform, label };
@@ -145,9 +153,19 @@
       .filter((x) => x.device && x.u && x.u.summary)
       .sort((a, b) => (b.u.summary.generatedAt || 0) - (a.u.summary.generatedAt || 0));
     const seen = (d) => Date.parse(d.lastSeenAt || '') || 0;
-    const device = withData.length ? withData[0].device : devices.slice().sort((a, b) => seen(b) - seen(a))[0] || null;
+    // a machine sending a newer format, seen at least as late as the newest one with numbers
+    const newer = Object.entries(usage)
+      .map(([id, u]) => ({ id, u, device: known.get(id) }))
+      .filter((x) => x.device && x.u && Number.isInteger(x.u.newer) && x.u.newer > VERSION)
+      .sort((a, b) => seen(b.device) - seen(a.device))[0];
+    const showNewer = !!newer && (!withData.length || seen(newer.device) >= seen(withData[0].device));
+    const device = showNewer ? newer.device : withData.length ? withData[0].device : devices.slice().sort((a, b) => seen(b) - seen(a))[0] || null;
     const base = { platform, label, device: device ? { name: device.name, version: device.version || '', online: !!device.online, lastSeenAt: device.lastSeenAt || null } : null };
     const syncError = f.error ? String(f.error) : '';
+    if (showNewer) {
+      const v = device.version ? ` ${device.version}` : '';
+      return { ...base, state: 'newer', title: '那台的 AgentDeck 比本机新，本机升级后才能看', detail: `${label} 上的 AgentDeck${v} 传来的用量是新格式（第 ${newer.u.newer} 版），这台只认得第 ${VERSION} 版；把这台升级到最新版就能看到` };
+    }
     if (withData.length) {
       const u = withData[0].u;
       return { ...base, state: 'ok', summary: u.summary, updatedAt: u.updatedAt || null, stale: !device.online, syncError };
@@ -161,8 +179,25 @@
     return { ...base, state: 'waiting', title: `${label} 还没传上用量`, detail: '它开着 AgentDeck，几分钟内会传上来' };
   }
 
+  // What the page does with a machine (token-usage-ui.js applies it):
+  // the notice in the chart's place when there are no numbers, keyed by what it says so the
+  // status region is rebuilt (and read out) only when that changes; its icon; what is said
+  // on a switch (nothing for a notice: the status region reads it, once); and whether the
+  // 数据来源 row shows (it lists this machine's logs, so only for this machine).
+  const ICONS = { offline: 'clock', waiting: 'clock', connecting: 'clock', unconfigured: 'unlinked' };
+  function notice(m) {
+    if (!m || m.state === 'self' || m.state === 'ok') return null;
+    return { key: JSON.stringify([m.state, m.title, m.detail]), state: m.state, icon: ICONS[m.state] || 'alert', title: m.title, detail: m.detail };
+  }
+  function announcement(m) {
+    if (!m) return '';
+    if (m.state === 'self') return `${m.label}（本机）的用量`;
+    return m.state === 'ok' ? `${m.label} 的用量` : '';
+  }
+  const showsSources = (m) => !m || m.state === 'self';
+
   return {
     USAGE_SESSION, VERSION, KEEP_DAYS, MAX_MODELS, MAX_BYTES, MORE, FIRST_VERSION, LABEL, EPOCH, PLATFORMS,
-    summarize, clean, turnsOf, fromRecord, byteSize, versionAtLeast, platformLabel, machine,
+    summarize, clean, turnsOf, fromRecord, newerOf, byteSize, versionAtLeast, platformLabel, machine, notice, announcement, showsSources,
   };
 });

@@ -4532,13 +4532,13 @@ dialog .todo-quick-input, dialog .todo-quick-input:focus { height: 100%; padding
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; height: 300px; padding: 0 28px;
   border-radius: 10px; background: var(--tbv-chip); box-shadow: inset 0 0 0 1px var(--tbv-line); text-align: center;
 }
-.tu-off[hidden], .tu-view.off .tu-chart, .tu-day[hidden] { display: none; }
+.tu-off[hidden], .tu-view.off .tu-chart, .tu-day[hidden], .tu-sources[hidden] { display: none; }
 .tu-off-icon {
   display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 4px; border-radius: 50%;
   color: var(--tbv-ink-2); background: var(--tbv-glass); box-shadow: inset 0 0 0 1px var(--tbv-rim);
 }
 .tu-off-icon svg { width: 19px; height: 19px; }
-.tu-off:is([data-state="old"], [data-state="missing"], [data-state="unconfigured"]) .tu-off-icon {
+.tu-off:is([data-state="old"], [data-state="newer"], [data-state="missing"], [data-state="unconfigured"]) .tu-off-icon {
   color: var(--tbv-doing); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tbv-doing-lit) 45%, transparent), 0 0 18px -4px color-mix(in srgb, var(--tbv-doing-lit) var(--tbv-glow), transparent);
 }
 .tu-off[data-state="error"] .tu-off-icon { color: var(--tbv-fail); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tbv-fail-lit) 45%, transparent); }

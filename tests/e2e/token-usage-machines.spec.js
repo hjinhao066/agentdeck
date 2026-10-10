@@ -159,6 +159,16 @@ test('默认本机; the other machine: an older build says so, then its own numb
   await expect(view.locator('.tu-legend-item')).toHaveCount(0);
   await expect(hero).toHaveText(C.formatShort(localTotal), { timeout: 1 });
   await expect(otherBtn).toBeFocused();
+  // 数据来源 lists this machine's logs: hidden while the chart shows the other one
+  await expect(view.locator('.tu-sources')).toBeHidden();
+  // the switch does not say the notice too: its status region reads it, once
+  expect(await view.locator('.tbv-live').textContent()).not.toContain('还不会上传用量');
+  // a refresh that says the same keeps the status region's nodes (nothing is read out again)
+  await page.evaluate(() => { document.querySelector('#taskBoardView .tu-off-title').dataset.mark = 'kept'; });
+  await view.locator('.tu-refresh').click();
+  await expect(view.locator('.tu-refresh')).not.toHaveClass(/busy/, { timeout: 30000 });
+  await page.waitForTimeout(11000);   // past one machine poll (10 s) too
+  await expect(off.locator('.tu-off-title')).toHaveAttribute('data-mark', 'kept');
   await screenshot('dark-3-other-missing');
 
   // it updates and sends its summary: its columns, its legend, its day table; the cards stay this machine's
@@ -186,8 +196,26 @@ test('默认本机; the other machine: an older build says so, then its own numb
   for (const c of await caps()) expect(c.total, c.day).toBe(C.formatUsd(otherUsd(c.day)));
   await view.locator('.tu-unit button[data-unit="tokens"]').click();
 
+  await expect(view.locator('.tu-sources')).toBeHidden();
+  expect(await view.locator('.tbv-live').textContent()).toBe(`${otherLabel} 的用量`);
+
+  // a later AgentDeck there sends a newer format: says to update this machine, never "wait"
+  const newer = { ...summary, v: F.VERSION + 1 };
+  store.pushHistory({ opId: 'op-newer-' + Date.now(), sessionId: F.USAGE_SESSION, deviceId: 'dev-other', contentHash: require('crypto').createHash('sha256').update(JSON.stringify(F.turnsOf(newer))).digest('hex'),
+    summary: F.LABEL, startedAt: F.EPOCH, endedAt: F.EPOCH, turns: F.turnsOf(newer) });
+  await expect(off).toBeVisible({ timeout: 20000 });
+  await expect(off).toHaveAttribute('data-state', 'newer');
+  await expect(off.locator('.tu-off-title')).toHaveText('那台的 AgentDeck 比本机新，本机升级后才能看');
+  await expect(off).not.toContainText('几分钟');
+  await expect(view.locator('.tu-col')).toHaveCount(0);
+  await screenshot('dark-5-other-newer');
+  push();
+  await expect(off).toBeHidden({ timeout: 20000 });
+
   // back to this machine
   await selfBtn.click();
+  await expect(view.locator('.tu-sources')).toBeVisible();
+  expect(await view.locator('.tbv-live').textContent()).toBe(`${selfLabel}（本机）的用量`);
   await expect(view.locator('.tu-machine-note')).toBeHidden();
   for (const c of await caps()) expect(c.total, c.day).toBe(local[c.day] ? C.formatShort(local[c.day]) : '');
   await expect(view.locator('.tu-table-day')).not.toContainText(`· ${otherLabel}`);
@@ -208,6 +236,13 @@ test('默认本机; the other machine: an older build says so, then its own numb
   await expect(off).toBeVisible({ timeout: 15000 });
   await expect(off).toHaveAttribute('data-state', 'old');
   await screenshot('light-3-other-missing');
+  // and in the light theme, the newer-format notice
+  version = '2.1.0'; heartbeat();
+  store.pushHistory({ opId: 'op-newer-light-' + Date.now(), sessionId: F.USAGE_SESSION, deviceId: 'dev-other', contentHash: require('crypto').createHash('sha256').update(JSON.stringify(F.turnsOf(newer))).digest('hex'),
+    summary: F.LABEL, startedAt: F.EPOCH, endedAt: F.EPOCH, turns: F.turnsOf(newer) });
+  await expect(off).toHaveAttribute('data-state', 'newer', { timeout: 20000 });
+  await expect(off.locator('.tu-off-detail')).toContainText('2.1.0');
+  await screenshot('light-5-other-newer');
 
   // opened again, the view starts on this machine
   await page.evaluate(() => { TaskBoardUI.open('board'); });
@@ -230,6 +265,11 @@ test('without two-machine sync the other machine says sync is off', async () => 
   await expect(off).toHaveAttribute('data-state', 'unconfigured');
   await expect(off.locator('.tu-off-title')).toHaveText(`这台电脑没开两机同步，看不到 ${otherLabel} 的用量`);
   await expect(view.locator('.tu-col')).toHaveCount(0);
+  // not connected: a broken link, no strike-through
+  expect(await off.locator('.tu-off-icon svg').innerHTML()).not.toContain('M3 3l18 18');
   await screenshot('dark-4-other-unconfigured');
+  await page.evaluate(() => applyTheme('light'));
+  await page.waitForTimeout(400);
+  await screenshot('light-4-other-unconfigured');
   expect(errors).toEqual([]);
 });

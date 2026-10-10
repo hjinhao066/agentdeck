@@ -320,3 +320,109 @@ test('every scan the Token view runs also feeds the sync (onResult)', async () =
   const broken = createTokenUsage({ run: async () => ({ ok: 1 }), onResult: () => { throw new Error('x'); } });
   assert.deepEqual(await broken.get(), { ok: 1 }, 'a failing listener never fails the view');
 });
+
+// ---- second round (review of ea38926) ----
+test('every scan goes up: a summary that differs only in its time is new (generatedAt stays in the hash), at most once per usageEveryMs', async (t) => {
+  const root = hubDir(t);
+  fs.writeFileSync(path.join(root, 'token'), 'usage-token\n', { mode: 0o600 });
+  const store = new SharedStore({ file: path.join(root, 'hub', 'store.json') });
+  const server = await startSyncServer({ store, token: 'usage-token' });
+  t.after(() => server.close());
+  let now = 5_000_000;
+  const win = client(root, 'win', 'win32', { url: server.url, now: () => now });
+  const first = F.summarize(scan({ days: 3 }));
+  win.noteUsage(first);
+  await win.syncOnce();
+  const sent = () => F.fromRecord(store.record(F.USAGE_SESSION, 'dev-win')).generatedAt;
+  assert.equal(sent(), first.generatedAt);
+  const later = { ...first, generatedAt: first.generatedAt + 30 * 60_000 };   // same numbers, the next scan
+  win.noteUsage(later);
+  assert.ok(win.usageItem, 'only the time changed, still a new summary');
+  now += 60_000;
+  await win.syncOnce();
+  assert.equal(sent(), first.generatedAt, 'not before usageEveryMs');
+  now += 15 * 60_000;
+  await win.syncOnce();
+  assert.equal(sent(), later.generatedAt, "so the other machine's 截至 moves on");
+  // each upload leaves the hub one receipt of about 300 bytes (30 days): 96 a day at worst is under 0.9 MB
+  const file = path.join(root, 'hub', 'store.json');
+  const before = fs.statSync(file).size;
+  for (let i = 1; i <= 20; i++) { now += 15 * 60_000; win.noteUsage({ ...later, generatedAt: later.generatedAt + i }); await win.syncOnce(); }
+  const perUpload = (fs.statSync(file).size - before) / 20;
+  assert.ok(perUpload > 200 && perUpload < 360, `${perUpload} bytes per upload`);
+  assert.ok(perUpload * 96 * 30 < 0.95 * 1024 * 1024);
+});
+
+test('the note beside noteUsage names the hub rule and a fleet-usage test that exists', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'sync-client.js'), 'utf8');
+  assert.ok(source.includes("turnExtends' `moving && key === 'task'`"));
+  const named = /fleet-usage test "([^"]+)"/.exec(source.replace(/\n\s*\/\/\s*/g, ' '));
+  assert.ok(named, 'a test is named');
+  const tests = fs.readFileSync(__filename, 'utf8');
+  assert.ok(tests.includes("test('" + named[1] + "'"), named[1]);
+  // the rule itself is still in the hub this client relies on
+  assert.ok(fs.readFileSync(path.join(__dirname, '..', 'shared-store.js'), 'utf8').includes("if (moving && key === 'task') return true;"));
+});
+
+test("数据来源 lists this machine's logs: shown only while the chart shows this machine", () => {
+  assert.equal(F.showsSources(null), true);
+  assert.equal(F.showsSources({ state: 'self' }), true);
+  for (const state of ['ok', 'old', 'unconfigured', 'newer', 'offline']) assert.equal(F.showsSources({ state }), false, state);
+});
+
+test('the notice is keyed by what it says, so a refresh saying the same is not read out again; a switch says nothing over it', () => {
+  const fleet = { configured: true, devices: [{ id: 'dev-mac', platform: 'darwin', version: '2.0.6', online: true }], usage: {}, lastSyncAt: 'x' };
+  const a = F.notice(F.machine({ platform: 'darwin', selfPlatform: 'win32', fleet }));
+  const b = F.notice(F.machine({ platform: 'darwin', selfPlatform: 'win32', fleet: { ...fleet, lastSyncAt: 'y' } }));
+  assert.equal(a.key, b.key, 'only the sync time moved');
+  assert.equal(a.state, 'old');
+  const c = F.notice(F.machine({ platform: 'darwin', selfPlatform: 'win32', fleet: { ...fleet, devices: [{ ...fleet.devices[0], version: '2.0.7' }] } }));
+  assert.notEqual(c.key, a.key);
+  assert.equal(F.notice({ state: 'self' }), null);
+  assert.equal(F.notice({ state: 'ok', label: 'Mac' }), null);
+  assert.equal(F.announcement({ state: 'self', label: 'Windows' }), 'Windows（本机）的用量');
+  assert.equal(F.announcement({ state: 'ok', label: 'Mac' }), 'Mac 的用量');
+  assert.equal(F.announcement({ state: 'old', label: 'Mac', title: 'x' }), '', 'the status region reads a notice itself');
+});
+
+test('a summary in a newer format: 那台的 AgentDeck 比本机新, never 几分钟内会传上来, and kept over a restart', async (t) => {
+  const v2 = { ...F.summarize(scan({ days: 2 })), v: F.VERSION + 1, extra: { newField: 1 } };
+  assert.equal(F.fromRecord({ turns: F.turnsOf(v2) }), null);
+  assert.equal(F.newerOf({ turns: F.turnsOf(v2) }), F.VERSION + 1);
+  assert.equal(F.newerOf({ turns: F.turnsOf({ ...v2, v: 0 }) }), 0);
+  assert.equal(F.newerOf({ turns: F.turnsOf({ ...v2, v: '2' }) }), 0);
+  const root = hubDir(t);
+  fs.writeFileSync(path.join(root, 'token'), 'usage-token\n', { mode: 0o600 });
+  const store = new SharedStore({ file: path.join(root, 'hub', 'store.json') });
+  store.heartbeat({ id: 'dev-mac', name: 'Mac', platform: 'darwin', version: '2.1.0' });
+  const turns = F.turnsOf(v2);
+  store.pushHistory({ opId: 'op-newer-0001', sessionId: F.USAGE_SESSION, deviceId: 'dev-mac', contentHash: turnsHash(turns), summary: F.LABEL, startedAt: F.EPOCH, endedAt: F.EPOCH, turns });
+  const server = await startSyncServer({ store, token: 'usage-token' });
+  t.after(() => server.close());
+  const win = client(root, 'win', 'win32', { url: server.url });
+  await win.syncOnce();
+  const m = F.machine({ platform: 'darwin', selfPlatform: 'win32', fleet: win.usageSnapshot() });
+  assert.equal(m.state, 'newer');
+  assert.equal(m.title, '那台的 AgentDeck 比本机新，本机升级后才能看');
+  assert.match(m.detail, /2\.1\.0/);
+  assert.doesNotMatch(m.title + m.detail, /几分钟/);
+  const again = client(root, 'win', 'win32', { url: 'http://127.0.0.1:9/' });
+  assert.equal(F.machine({ platform: 'darwin', selfPlatform: 'win32', fleet: { ...again.usageSnapshot(), devices: win.usageSnapshot().devices } }).state, 'newer');
+  // a machine with readable numbers seen more recently than the newer one wins
+  const summary = F.summarize(scan({ days: 2 }));
+  const both = F.machine({ platform: 'darwin', selfPlatform: 'win32', fleet: { configured: true, lastSyncAt: 'x',
+    devices: [{ id: 'a', platform: 'darwin', lastSeenAt: '2026-10-01T00:00:00Z' }, { id: 'b', platform: 'darwin', lastSeenAt: '2026-10-10T00:00:00Z', online: true }],
+    usage: { a: { newer: 2 }, b: { summary } } } });
+  assert.equal(both.state, 'ok');
+});
+
+test('icons: not connected is a broken link (no slash, which read as a muted bell), waiting is a clock, the rest an alert', () => {
+  const icon = (state) => F.notice({ state, title: 't', detail: 'd' }).icon;
+  assert.equal(icon('unconfigured'), 'unlinked');
+  for (const s of ['offline', 'waiting', 'connecting']) assert.equal(icon(s), 'clock', s);
+  for (const s of ['old', 'newer', 'missing', 'error']) assert.equal(icon(s), 'alert', s);
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'token-usage-ui.js'), 'utf8');
+  for (const name of ['unlinked', 'clock', 'alert']) assert.match(ui, new RegExp('^\\s+' + name + ': svgIcon\\(', 'm'), name);
+  const unlinked = /^\s+unlinked: svgIcon\('(.*)'\),$/m.exec(ui)[1];
+  assert.doesNotMatch(unlinked, /M3 3l18 18|M2 2l20 20/, 'no strike-through');
+});

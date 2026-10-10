@@ -290,7 +290,13 @@ class FleetClient {
     });
   }
   // This machine's Token 用量 summary (FleetUsage.summarize of its own scan). The
-  // newest one waits for its turn; an unchanged one is not sent again.
+  // newest one waits for its turn; an unchanged one is not sent again. Every scan
+  // differs (generatedAt is in the hash, so the other machine's 截至 time moves on), so
+  // in practice each scan goes up, at most once per usageEveryMs.
+  // The hub replaces this record in place only through turnExtends' `moving && key === 'task'`
+  // rule in shared-store.js (a changed `task` is the same turn moving on, no kept copy);
+  // locked by the fleet-usage test "the hub keeps one usage record per machine, replaced
+  // in place: no kept copies, only small receipts".
   noteUsage(summary) {
     if (!summary || typeof summary !== 'object') return;
     const turns = stripSecrets(FleetUsage.turnsOf(summary));
@@ -316,8 +322,12 @@ class FleetClient {
     try {
       const saved = JSON.parse(fs.readFileSync(this.usageFile, 'utf8'));
       for (const [id, u] of Object.entries((saved && saved.devices) || {})) {
-        const summary = isDeviceId(id) && u ? FleetUsage.clean(u.summary) : null;
-        if (summary) this.usage.set(id, { summary, updatedAt: typeof u.updatedAt === 'string' ? u.updatedAt : null, contentHash: String(u.contentHash || '') });
+        if (!isDeviceId(id) || !u) continue;
+        const summary = FleetUsage.clean(u.summary);
+        const newer = Number.isInteger(u.newer) && u.newer > FleetUsage.VERSION ? u.newer : 0;
+        const kept = { updatedAt: typeof u.updatedAt === 'string' ? u.updatedAt : null, contentHash: String(u.contentHash || '') };
+        if (summary) this.usage.set(id, { summary, ...kept });
+        else if (newer) this.usage.set(id, { newer, ...kept });
       }
     } catch (_) {}
   }
@@ -349,10 +359,13 @@ class FleetClient {
         const query = new URLSearchParams({ sessionId: head.sessionId, deviceId: head.deviceId });
         record = (await this._send(token, 'GET', '/v1/history?' + query)).body.record;
       }
-      const summary = record && record.deviceId === head.deviceId ? FleetUsage.fromRecord(record) : null;
+      const own = record && record.deviceId === head.deviceId;
+      const summary = own ? FleetUsage.fromRecord(record) : null;
+      // a format a later AgentDeck writes: kept as "newer", so the page says to update this machine
+      const newer = own && !summary ? FleetUsage.newerOf(record) : 0;
       this.usageStamps.set(head.deviceId, stamp);
-      if (!summary) { if (this.usage.delete(head.deviceId)) changed = true; continue; }
-      this.usage.set(head.deviceId, { summary, updatedAt: head.updatedAt || null, contentHash: head.contentHash });
+      if (!summary && !newer) { if (this.usage.delete(head.deviceId)) changed = true; continue; }
+      this.usage.set(head.deviceId, { ...(summary ? { summary } : { newer }), updatedAt: head.updatedAt || null, contentHash: head.contentHash });
       changed = true;
     }
     for (const id of [...this.usage.keys()]) if (!listed.has(id)) { this.usage.delete(id); this.usageStamps.delete(id); changed = true; }
@@ -644,7 +657,7 @@ class FleetClient {
   // What the Token 用量 chart needs to show another machine (FleetUsage.machine).
   usageSnapshot() {
     const usage = {};
-    for (const [id, u] of this.usage) usage[id] = { summary: u.summary, updatedAt: u.updatedAt };
+    for (const [id, u] of this.usage) usage[id] = u.summary ? { summary: u.summary, updatedAt: u.updatedAt } : { newer: u.newer, updatedAt: u.updatedAt };
     return { configured: true, selfId: this.device.id, devices: this.devices, error: this.error, lastSyncAt: this.lastSyncAt, usage };
   }
 }

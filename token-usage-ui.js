@@ -36,7 +36,8 @@
     download: svgIcon('<path d="M12 4v11"/><path d="m7 11 5 5 5-5"/><path d="M5 20h14"/>'),
     alert: svgIcon('<path d="M12 8v5M12 16.5v.01"/><circle cx="12" cy="12" r="9"/>'),
     pencil: svgIcon('<path d="M4 20h4L19 9a2.83 2.83 0 0 0-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/>'),
-    unplugged: svgIcon('<path d="M3 3l18 18"/><path d="M8.5 8.5A7 7 0 0 0 5 14.5c0 .17 0 .33.02.5"/><path d="M12 5a7 7 0 0 1 7 7v.5"/><path d="M8 19h8"/><path d="M12 15v4"/>'),
+    // a chain link broken in two, the gap marked: not connected (a slash read as a muted bell)
+    unlinked: svgIcon('<path d="M10 8H7.5a4 4 0 0 0 0 8H10"/><path d="M14 8h2.5a4 4 0 0 1 0 8H14"/><path d="M12 4v2.5M12 17.5V20"/><path d="M8.5 12H10M14 12h1.5"/>'),
     clock: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   };
   const UNITS = [['tokens', 'Token'], ['usd', '金额']];
@@ -384,13 +385,25 @@
     return shown.state === 'ok' ? shown.summary : null;
   }
   // The dot on the other machine's button: has numbers, has old numbers, or none.
-  const dotOf = (mm) => (mm.state === 'ok' ? (mm.stale ? 'stale' : 'ok') : ['old', 'missing', 'error', 'unconfigured'].includes(mm.state) ? 'warn' : 'none');
+  const dotOf = (mm) => (mm.state === 'ok' ? (mm.stale ? 'stale' : 'ok') : ['old', 'newer', 'missing', 'error', 'unconfigured'].includes(mm.state) ? 'warn' : 'none');
   function renderMachine() {
     const self = machines && machines.selfPlatform;
     const known = !!(F && self && F.PLATFORMS.some((p) => p.key === self));
     machineEl.hidden = !known;
     root.classList.toggle('off', shownOff());
-    offEl.hidden = !shownOff();
+    // the notice is a status region: rebuilt (and so read out) only when what it says changes
+    // or when it comes into view, never on a refresh that says the same again
+    const note = F && F.notice(shown);
+    if (!note) { offEl.hidden = true; delete offEl.dataset.key; }
+    else if (offEl.hidden || offEl.dataset.key !== note.key) {
+      offEl.dataset.state = note.state;
+      offEl.dataset.key = note.key;
+      const icon = el('i', 'tu-off-icon');
+      icon.innerHTML = ICON[note.icon] || ICON.alert;
+      icon.setAttribute('aria-hidden', 'true');
+      offEl.replaceChildren(icon, el('b', 'tu-off-title', note.title), el('span', 'tu-off-detail', note.detail));
+      offEl.hidden = false;
+    }
     if (!known) { machineNoteEl.textContent = ''; return; }
     machineEl.querySelectorAll('button').forEach((b) => {
       const p = b.dataset.platform;
@@ -417,13 +430,6 @@
       machineNoteEl.title = `${shown.label}${shown.device && shown.device.name ? `（${shown.device.name}）` : ''}最近一次上传的用量${shown.syncError ? `；这台电脑同步出了问题：${shown.syncError}` : ''}`;
     } else { machineNoteEl.textContent = ''; machineNoteEl.title = ''; }
     emptyEl.textContent = shown ? `这段时间 ${shown.label} 没有用量记录` : EMPTY;
-    if (shownOff()) {
-      offEl.dataset.state = shown.state;
-      const icon = el('i', 'tu-off-icon');
-      icon.innerHTML = ['offline', 'waiting', 'connecting'].includes(shown.state) ? ICON.clock : shown.state === 'unconfigured' ? ICON.unplugged : ICON.alert;
-      icon.setAttribute('aria-hidden', 'true');
-      offEl.replaceChildren(icon, el('b', 'tu-off-title', shown.title), el('span', 'tu-off-detail', shown.detail));
-    }
   }
   function loadMachines() {
     if (!window.deck || !window.deck.tokenUsageMachines) return;
@@ -448,8 +454,9 @@
     delete wrapEl.dataset.scrolled;
     render();
     loadMachines();   // what the other machine sent may have changed since the view opened
-    const mm = shown;
-    host.announce(!mm ? `${F.platformLabel(p)}（本机）的用量` : mm.state === 'ok' ? `${mm.label} 的用量` : mm.title);
+    // a notice is read by its own status region; saying it here too would read it twice
+    const said = F.announcement(shown || { state: 'self', label: F.platformLabel(p) });
+    if (said) host.announce(said);
   }
 
   // ---- where the numbers come from ----
@@ -459,6 +466,8 @@
     'chatgpt-web': '网页版 ChatGPT 不提供用量数字',
   };
   function renderSources() {
+    // the row lists this machine's logs: shown only while the chart shows this machine
+    sourcesEl.hidden = !!F && !F.showsSources(shown);
     sourcesEl.replaceChildren(...(data.sources || []).map((s) => {
       const item = el('li', 'tu-source ' + s.state);
       item.dataset.source = s.id;
