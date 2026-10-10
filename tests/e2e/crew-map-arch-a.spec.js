@@ -289,7 +289,7 @@ test('live updates keep a hand-placed view; 智能一页 brings the fit back', a
   const fitted = (await page.evaluate(() => CrewMap.view())).scale;
   await page.locator('[data-cm="in"]').click();
   await expect(page.locator('[data-cm="reset"]')).toHaveText(`${(Math.floor(fitted / 0.07 + 1e-6) + 1) * 10}%`);
-  await page.locator('[data-cm="reset"]').click();
+  await page.locator('[data-cm="reset"]').click(); await page.locator('[data-cm="zoom-100"]').click();
   expect((await page.evaluate(() => CrewMap.view())).scale).toBeCloseTo(0.7, 5);
   await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');
   await page.locator('[data-cm="fit"]').click();

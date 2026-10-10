@@ -366,7 +366,7 @@ test('智能一页 is the default and follows the window; a first drag leaves it
   expect(await grid()).toEqual([28, 0, 0]);
   await page.locator('[data-cm="in"]').click(); await settled();
   expect(await grid()).toEqual([28, 0, 0]);
-  await page.locator('[data-cm="reset"]').click(); await settled();
+  await page.locator('[data-cm="reset"]').click(); await page.locator('[data-cm="zoom-100"]').click(); await settled();
   expect(await fit.evaluate((n) => [n.title === n.getAttribute('aria-label'), !!n.querySelector('svg'), n.textContent.trim()])).toEqual([true, true, '']);
   const wide = await read();
   // the window narrows: the map arranges itself again (in lanes), and fills this window, still on its own
@@ -437,7 +437,7 @@ test('智能一页 keeps the zoom the user set (80%, 100%, 125%): arranged for i
   expect.soft(g.view.scale, 'no zoom set: 智能一页 picks it (lanes at 100%)').toBeCloseTo(0.7, 5);
   await shot('user-zoom-auto-1366x900-dark', true);
   const zoomTo = async (pct) => {
-    await label().click();
+    await label().click(); await page.locator('[data-cm="zoom-100"]').click();   // the number's menu: 回到 100%
     if (pct === 80) { await page.locator('[data-cm="out"]').click(); await page.locator('[data-cm="out"]').click(); }
     // (125% is no step of the buttons: a pinch, as a trackpad sends it, ctrl+wheel by exactly that much)
     if (pct === 125) await page.evaluate(() => { const vp = document.querySelector('.cm-viewport'), r = vp.getBoundingClientRect(); vp.dispatchEvent(new WheelEvent('wheel', { deltaY: -Math.log(1.25) / 0.0022, ctrlKey: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); });

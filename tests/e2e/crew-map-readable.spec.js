@@ -178,8 +178,8 @@ test('1x screen: a zoom the user sets under the readable size is kept; 智能一
   expect((await read()).scale, 'untouched: as large as keeps the text readable, or larger').toBeGreaterThanOrEqual(10 / 11.5 - 1e-6);
   const hint = () => page.evaluate(() => { const h = document.querySelector('.cm-hint'); return h.hidden ? '' : h.textContent; });
   const SMALL = '100% 下卡片上最小的字不到 10 像素，可能看不清（放大到 125% 或以上就清楚）';
-  // the user zooms to 100%: the line comes up at once
-  await page.locator('[data-cm="reset"]').click();
+  // the user zooms to 100% (the number's menu: 回到 100%): the line comes up at once
+  await page.locator('[data-cm="reset"]').click(); await page.locator('[data-cm="zoom-100"]').click();
   await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');
   expect.soft(await hint(), 'zoomed under the readable size: said').toBe(SMALL);
   await page.locator('[data-cm="fit"]').click(); await settled();
@@ -231,7 +231,7 @@ test('1x screen: the text is drawn at the scale it shows at: at 140%, on arrival
   await expect.poll(() => page.evaluate(() => { const c = document.querySelector('.cm-canvas'); return c.matches('.cm-smooth, .panning .cm-canvas, .cm-moving .cm-canvas') ? 'moving' : getComputedStyle(c).willChange; }), { message: 'no layer of its own at rest' }).toBe('auto');
   await go();
   // 100%, then four steps in: 140% again, by hand
-  for (const c of ['reset', 'in', 'in', 'in', 'in']) { await page.locator(`[data-cm="${c}"]`).click(); await page.waitForTimeout(150); }
+  for (const c of ['reset', 'zoom-100', 'in', 'in', 'in', 'in']) { await page.locator(`[data-cm="${c}"]`).click(); await page.waitForTimeout(150); }   // the number's menu: 回到 100%
   await settled();
   expect((await read()).label).toBe('140%');
   const zoomed = await card(), again = await afresh();

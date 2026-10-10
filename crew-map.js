@@ -32,7 +32,9 @@
 //   opened from the tray) it arranges itself for that zoom (C.arrangePage's zoom: each frame's columns, the lanes,
 //   one row or wrapped, the whole map on one page where any arrangement gives one, the most compact where none does)
 //   and shows exactly that zoom. Only a map whose zoom was never set picks its own, as above. A zoom that puts the
-//   smallest text under 10 device px is kept too: a line at the bottom says so.
+//   smallest text under 10 device px is kept too: a line at the bottom says so. Nothing the map does by itself drops
+//   it: only the user's own 回到自动大小 (in the menu a click on the number opens, beside 回到 100%) does, and the map
+//   then picks its own zoom again.
 // 一键整理 puts every frame and card back on the grid in the order the frames
 // were left in, and leaves a hand-set zoom alone. 智能一页 hands the arrangement
 // back: arrangement and order are worked out again for this window, at the zoom
@@ -57,7 +59,7 @@
   const TIGHT = { captainH: 104, fanY: 40, rowGap: 10, padBottom: 12 };
   const DRAG_PX = 4;
   let host = null;
-  let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, projectsEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn, undoBtn, fitBtn, hintEl, trayEl, popEl;
+  let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, projectsEl, nodesEl, emptyEl, zoomLabel, zoomMenu, archBtn, returnBtn, undoBtn, fitBtn, hintEl, trayEl, popEl;
   let mode = 'crew';
   let showArchived = false;
   let showReturn = false;
@@ -486,7 +488,7 @@
     vpEl.style.setProperty('--cm-gy', view.y + 'px');
     const pct = C.zoomPercent(view.scale) + '%';
     zoomLabel.textContent = pct;
-    zoomLabel.setAttribute('aria-label', `回到 100%（当前 ${pct}）`);
+    zoomLabel.setAttribute('aria-label', `缩放比例（当前 ${pct}）：点开可回到 100% 或回到自动大小`);
     placePop();
   }
   function saveView() { saved().view = { ...view }; host.save(); }
@@ -595,6 +597,41 @@
     syncFit();
   }
   function zoomCenter(factor) { hush(); zoomAt(vpEl.clientWidth / 2, vpEl.clientHeight / 2, factor); say(smallNote()); }
+  // 回到自动大小: the one way a zoom the user set is dropped, and only when they choose it. The map then sizes itself
+  // for the window again as if no zoom had ever been set (智能一页's own zoom, filling the page); where frames and cards
+  // stand is left as it is.
+  function autoSize() {
+    if (!saved().zoom) return;
+    saved().zoom = null;
+    planZoom = null;
+    userView = false;
+    host.save();
+    say('');
+    render({ smooth: true });
+  }
+  // The menu a click on the number opens: 回到 100% (what that click did before) and 回到自动大小, which is open only
+  // while a zoom the user set is in use. Arrow keys move between the two, Esc or a click elsewhere closes it.
+  function openZoomMenu() {
+    const auto = zoomMenu.querySelector('[data-cm="zoom-auto"]'), zoom = saved().zoom;
+    auto.setAttribute('aria-disabled', String(!zoom));
+    auto.title = zoom ? `不再用你设的 ${C.zoomPercent(zoom)}%：按窗口自动定大小，铺满一屏` : '现在就是自动大小：按窗口自动定大小，铺满一屏';
+    zoomMenu.hidden = false;
+    zoomLabel.setAttribute('aria-expanded', 'true');
+    zoomMenu.querySelector('[role="menuitem"]').focus({ preventScroll: true });
+  }
+  function closeZoomMenu(refocus) {
+    if (zoomMenu.hidden) return;
+    zoomMenu.hidden = true;
+    zoomLabel.setAttribute('aria-expanded', 'false');
+    if (refocus) zoomLabel.focus({ preventScroll: true });
+  }
+  function onZoomMenuKey(e) {
+    const items = [...zoomMenu.querySelectorAll('[role="menuitem"]')], at = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      items[(at + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus({ preventScroll: true });
+    } else if (e.key === 'Tab') closeZoomMenu();
+  }
 
   function startCardDrag(e, n, node, box) {
     if (e.button !== 0) return;
@@ -1004,6 +1041,7 @@
     nodesEl = rootEl.querySelector('.cm-nodes');
     emptyEl = rootEl.querySelector('.cm-empty');
     zoomLabel = rootEl.querySelector('[data-cm="reset"]');
+    zoomMenu = rootEl.querySelector('.cm-zoom-menu');
     archBtn = rootEl.querySelector('[data-cm="archived"]');
     returnBtn = rootEl.querySelector('[data-cm="return"]');
     undoBtn = rootEl.querySelector('[data-cm="undo"]');
@@ -1016,7 +1054,10 @@
     on('archived', () => setShowArchived(!showArchived));
     on('out', () => view && zoomCenter(C.zoomStep(view.scale, -1) / view.scale));
     on('in', () => view && zoomCenter(C.zoomStep(view.scale, 1) / view.scale));
-    on('reset', () => view && zoomCenter(FIT / view.scale));
+    on('reset', () => { if (!zoomMenu.hidden) closeZoomMenu(); else if (view) openZoomMenu(); });
+    on('zoom-100', () => { closeZoomMenu(true); if (view) zoomCenter(FIT / view.scale); });
+    on('zoom-auto', () => { if (!saved().zoom) return; closeZoomMenu(true); autoSize(); });
+    zoomMenu.addEventListener('keydown', onZoomMenuKey);
     on('fit', page);
     on('relayout', tidy);
     on('undo', undoArrange);
@@ -1027,6 +1068,8 @@
     // a click anywhere but the popover (or what opens it) and Esc close the popover
     document.addEventListener('pointerdown', (e) => { if (popId && !e.target.closest('.cm-pop, .cm-more, .cm-view')) closePop(); }, true);
     document.addEventListener('keydown', (e) => { if (popId && e.key === 'Escape') { e.stopPropagation(); closePop(); } }, true);
+    document.addEventListener('pointerdown', (e) => { if (!zoomMenu.hidden && !e.target.closest('.cm-zoom-wrap')) closeZoomMenu(); }, true);
+    document.addEventListener('keydown', (e) => { if (!zoomMenu.hidden && e.key === 'Escape') { e.stopPropagation(); closeZoomMenu(true); } }, true);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);

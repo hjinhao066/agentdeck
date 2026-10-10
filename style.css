@@ -3245,6 +3245,16 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-controls button.on { background: color-mix(in srgb, var(--cm-text) 12%, transparent); color: var(--cm-text); }
 .cm-controls button[hidden] { display: none; }
 .cm-controls .cm-zoom { min-width: 52px; font-family: var(--mono); color: var(--cm-text); }
+/* A click on the number: 回到 100%, or 回到自动大小 (open only while a zoom the user set is in use), above it */
+.cm-zoom-wrap { position: relative; display: inline-flex; }
+.cm-controls .cm-zoom[aria-expanded="true"] { background: color-mix(in srgb, var(--cm-text) 12%, transparent); }
+.cm-zoom-menu {
+  position: absolute; z-index: 13; left: 50%; bottom: calc(100% + 10px); transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 2px; padding: 4px;
+  background: var(--cm-pane); border: 1px solid var(--cm-rim-hi); border-radius: 11px; box-shadow: 0 14px 30px -14px rgba(0, 0, 0, 0.6);
+}
+.cm-controls .cm-zoom-menu button { justify-content: flex-start; padding: 0 12px; color: var(--cm-text); white-space: nowrap; }
+.cm-controls .cm-zoom-menu button[aria-disabled="true"]:hover { background: transparent; }
 /* 智能一页: lit while the map arranges itself for the window; a dot on it once something was placed by hand */
 .cm-controls .cm-fit { color: var(--cm-text); background: color-mix(in srgb, var(--cm-text) 13%, transparent); }
 .cm-controls .cm-fit:hover { background: color-mix(in srgb, var(--cm-text) 19%, transparent); }
