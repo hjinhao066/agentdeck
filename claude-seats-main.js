@@ -158,7 +158,7 @@ async function declineAutoModeNudge(seat, home) {
   try {
     const loc = credentialLocation(seat, home);
     try {
-      if (JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8').replace(/^﻿/, '')).hasSeenAutoDefaultNudge === true) return { ok: true, changed: false };
+      if (JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8').replace(/^\uFEFF/, '')).hasSeenAutoDefaultNudge === true) return { ok: true, changed: false };
     } catch (e) {
       if (e.code === 'ENOENT') return { ok: false, reason: '席位还没有配置文件' };   // not set up: Claude onboards first, no nudge
     }
@@ -168,7 +168,7 @@ async function declineAutoModeNudge(seat, home) {
         const stat = fs.statSync(loc.metadataPath);
         if (stat.size > 8 * 1024 * 1024) return { ok: false, reason: '席位配置文件太大' };
         mode = stat.mode & 0o777;
-        existing = JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8').replace(/^﻿/, ''));
+        existing = JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8').replace(/^\uFEFF/, ''));
       } catch (_) { return { ok: false, reason: '席位配置文件读不了，没有改动' }; }   // damaged JSON is never overwritten
       if (!existing || typeof existing !== 'object' || Array.isArray(existing)) return { ok: false, reason: '席位配置文件格式不对，没有改动' };
       if (existing.hasSeenAutoDefaultNudge === true) return { ok: true, changed: false };
@@ -187,7 +187,7 @@ async function declineAutoModeNudge(seat, home) {
     return { ok: false, reason: String(e && e.message || e).slice(0, 200) };
   }
 }
-const AUTH_ENV =['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+const AUTH_ENV = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'CLAUDE_CODE_HOST_CREDS_FILE', 'CLAUDE_CODE_HOST_GATEWAY_LINEAGE'];
 function seatEnvironment(env, seat, home) {
   const result = { ...env }, loc = credentialLocation(seat, home);
