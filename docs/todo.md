@@ -112,7 +112,7 @@ node "$AGENTDECK_BOARD_CLI" todo status --id td-… --task-id todo-… --status 
 node "$AGENTDECK_BOARD_CLI" todo status --id td-… --task-id todo-… --status failed --message "检索失败的具体原因"
 ```
 
-队长照常用 `new --task-id <卡片 id> ...` 派活；接手、等待、验收完毕或失败后由队长明确回填，不把屏幕结束或队员说明当作完成证明。`done` 必须有至少一个本机存在的文件绝对路径（不接受目录），但文件质量/是否搜全仍由队长验收。AI 完成不自动勾掉用户的 `done`。回填同时更新关联卡片：working→doing，needs_user→needs_user（具体缺材料进入 `user_question`），done→done，failed→needs_user + failed 标记；当前基线的「需要你」看板据此读取等待/失败原因。
+队长照常用 `new --task-id <卡片 id> ...` 派活；接手、等待、验收完毕或失败后由队长明确回填，不把屏幕结束或队员说明当作完成证明。`done` 必须有至少一个本机存在的文件绝对路径（不接受目录；`--files` 里只有后面紧跟另一个绝对路径的逗号才分隔两个文件，文件名里的逗号照原样保留，如 `Thinking, Fast and Slow.epub`），但文件质量/是否搜全仍由队长验收。AI 完成不自动勾掉用户的 `done`。回填同时更新关联卡片：working→doing，needs_user→needs_user（具体缺材料进入 `user_question`），done→done，failed→needs_user + failed 标记；当前基线的「需要你」看板据此读取等待/失败原因。
 
 `ai` 的字段（界面见下一节）：
 

@@ -486,7 +486,9 @@ async function main() {
         (args.message !== undefined && typeof args.message !== 'string') || (args.files !== undefined && typeof args.files !== 'string'))) fail('todo status requires --id, --task-id and a valid --status.');
     const response = await request({ action: 'main-todo', op, ...(op === 'status' ? { input: {
       id: args.id, taskId: args['task-id'], status: args.status, message: args.message || '',
-      files: args.files ? args.files.split(',').map((file) => file.trim()).filter(Boolean) : [],
+      // Only a comma that starts the next absolute path separates two files:
+      // book titles keep theirs ("Thinking, Fast and Slow.epub").
+      files: args.files ? args.files.split(/,(?=\s*(?:\/|[A-Za-z]:[\\/]|\\\\))/).map((file) => file.trim()).filter(Boolean) : [],
     } } : {}) }, false);
     process.stdout.write(`${response.result || ''}\n`);
     return;
