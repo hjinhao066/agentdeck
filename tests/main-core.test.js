@@ -740,3 +740,26 @@ test('ledger says which account a Claude session runs on', () => {
   assert.match(first, /^c1  「修登录」  .*  账号:taylor0421us（us2）  文件夹:网站$/);
   assert.doesNotMatch(second, /账号/);
 });
+
+// A test instance (--test-user-data) with no saved columns must not open the default agent columns: those start real
+// agents (agy, claude, grok) by name from PATH. A normal run keeps them.
+test('emptyLayoutColumns: a test instance gets no columns, a normal run gets the defaults', () => {
+  const defaults = () => ['Antigravity', 'Claude', 'Grok'].map((title) => ({ title }));
+  assert.deepEqual(M.emptyLayoutColumns(true, defaults), []);
+  assert.deepEqual(M.emptyLayoutColumns(false, defaults).map((c) => c.title), ['Antigravity', 'Claude', 'Grok']);
+  // an environment that did not say (undefined, or anything but a real true) is a normal run
+  assert.equal(M.emptyLayoutColumns(undefined, defaults).length, 3);
+  assert.equal(M.emptyLayoutColumns('yes', defaults).length, 3);
+  let calls = 0;
+  M.emptyLayoutColumns(true, () => { calls += 1; return []; });
+  assert.equal(calls, 0, 'a test instance does not even build the default columns');
+});
+
+test('renderer: the default columns reach a launch only through emptyLayoutColumns, and a saved layout still wins', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'renderer.js'), 'utf8');
+  const calls = source.match(/(?<!function )defaultColumns\(\)/g) || [];
+  assert.equal(calls.length, 0, 'no bare defaultColumns() call is left');
+  assert.equal((source.match(/MainCore\.emptyLayoutColumns\(env\.testInstance, defaultColumns\)/g) || []).length, 2, 'first launch and 恢复默认布局');
+  // the saved columns still replace whatever the fallback was, test instance or not
+  assert.match(source, /if \(Array\.isArray\(saved\.columns\) && saved\.columns\.length\) \{\s*config\.columns = saved\.columns\.map\(/);
+});
