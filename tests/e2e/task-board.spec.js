@@ -53,6 +53,7 @@ test.beforeAll(async () => {
   page = await app.firstWindow();
   await page.waitForFunction(() => typeof window.MainSession === 'object' && typeof window.TaskBoard === 'object' && typeof config === 'object');
   await expect(page.locator('.column')).toHaveCount(1);
+  keepColumns = await page.evaluate(() => columns.map((c) => c.id));   // the idle shell; the Captain is kept by its isMain flag
   await page.evaluate((cwd) => MainSession.create('', cwd), profile);
   const captain = await page.evaluate(() => MainSession.mainCol().id);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), captain)).toBe(true);
@@ -86,9 +87,28 @@ async function installStandIns() {
 }
 // (a profile still held by the closed Electron's helpers on Windows is reported, it does not fail the run)
 test.afterAll(async () => { if (app) await app.close(); if (profile) try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); } catch (e) { console.warn(`profile ${profile} not removed: ${e.code}`); } });
+// Every worker is a ConPTY PowerShell plus its stand-in node. Left open
+// until the file ends, the first ten tests alone piled up 26 PowerShells and a whole run took the machine to 98% commit. So a test's
+// terminals end with the test: whatever column the test (a worker, a reviewer, a dispatcher stand-in) opened is archived through the
+// Captain's own `archive` path (the PTY is killed and the xterm disposed; the card keeps its record, the conversation is saved).
+// The case that leaves dispatcher stand-ins on purpose ("Gemini out or unread") is covered the same way, after it has finished.
+// Columns present when the tests start (the idle shell and the Captain) stay.
+let keepColumns = [];
+async function closeTestTerminals() {
+  const closed = await page.evaluate((keep) => {
+    const ids = [];
+    for (const col of columns.filter((c) => !c.isMain && !keep.includes(c.id))) { archiveColumn(col, { captain: true, quiet: true }); ids.push(col.id); }
+    return ids;
+  }, keepColumns);
+  // archiveColumn sends the kill; wait until each PTY is really gone before the next test starts a new one
+  for (const id of closed) await expect.poll(() => page.evaluate((s) => window.deck.ptyIsAlive(s), id), { timeout: 15000 }).toBe(false);
+  return closed.length;
+}
 test.afterEach(async ({}, info) => {
-  if (info.status === info.expectedStatus) return;
-  await info.attach('task-board-state', { body: JSON.stringify({ cards: await list({ archived: true }), notices: await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板')) }), contentType: 'application/json' });
+  if (info.status !== info.expectedStatus) {
+    await info.attach('task-board-state', { body: JSON.stringify({ cards: await list({ archived: true }), notices: await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板')) }), contentType: 'application/json' });
+  }
+  try { await closeTestTerminals(); } catch (error) { console.warn(`terminals of "${info.title}" not all closed: ${error.message.split('\n')[0]}`); }
 });
 
 test('CLI cards bind actual worker receipts, exact text stays in the session and dependencies unlock', async () => {
@@ -650,7 +670,7 @@ test('Gemini out or unread: the board dispatcher is a Haiku session, titled with
       expect(col.cmd).toContain('--haiku-stand-in');
       expect(col.title).toBe(`调度：Haiku dispatch ${gemini}（Claude Haiku 5.5）`);
       expect(await page.evaluate(() => columns.filter((c) => /^agy\b/.test(c.cmd || '')).length)).toBe(0);
-      // the stand-in dispatcher is left to the profile's teardown: it takes no part in what is checked here
+      // the stand-in dispatcher stays open on purpose: it takes no part in what is checked here, and afterEach archives it
     }
   } finally { await page.evaluate(() => { window.testStance = (cmd) => (cmd.includes('fake-agent.js') ? 'ok' : undefined); TaskBoard.settings('captain'); }); }
 });
