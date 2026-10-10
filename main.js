@@ -2258,7 +2258,11 @@ function startFleet(configPath) {
     // The other machine sees this one's Token 用量 even when nobody opens the view here:
     // a scan (incremental, in its utility process) a little after sync starts, then every
     // half hour. Scans the view runs feed the summary too (onResult above).
-    const scanForFleet = () => { if (tokenUsage) tokenUsage.get().catch(() => {}); };
+    // A scan the view ran before sync started (or under a minute ago) answers from its cache and
+    // was handed to nobody: give it to the sync here (the same summary twice goes up once).
+    const scanForFleet = () => {
+      if (tokenUsage) tokenUsage.get().then((result) => { if (fleetClient && fleetClient.noteUsage) fleetClient.noteUsage(FleetUsage.summarize(result)); }).catch(() => {});
+    };
     fleetUsageTimer = setTimeout(function again() {
       scanForFleet();
       fleetUsageTimer = setTimeout(again, settings.usageScanMs);
