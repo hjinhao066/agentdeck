@@ -17,7 +17,7 @@ function runtime(t, dispatcher = 'gemini') {
   const columns = [captain], created = [], sent = [], requests = [];
   const state = { colId: captain.id, tasks: [], pending: [], waitlist: [] };
   const store = new TaskStore(path.join(root, 'tasks'), { sessions: () => columns });
-  let quotaOut = false, afterRequest, stanceFn = null, seatList = null;
+  let quotaOut = false, afterRequest, stanceFn = null, seatList = null, outFn = null;
   const window = {
     MainCore: M, BoardCore: B, AutoVerifyCore: AV,
     QuotaCore: {
@@ -26,7 +26,7 @@ function runtime(t, dispatcher = 'gemini') {
       // the passive reading the dispatcher choice asks (QuotaCore.commandStance): every command is out together or has room
       commandStance: (_s, cmd, _seats, seatId) => (stanceFn ? stanceFn(cmd, seatId) : quotaOut ? 'out' : 'ok'),
       // This harness flags every command out together, so there is no same-tier peer to switch to.
-      quotaFallback: (_store, cmd) => quotaOut
+      quotaFallback: (_store, cmd) => (outFn ? outFn(cmd) : quotaOut)
         ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' }
         : { action: 'open', cmd, note: '' },
     },
@@ -60,6 +60,7 @@ function runtime(t, dispatcher = 'gemini') {
     setQuota: (value) => { quotaOut = value; },
     setStance: (fn) => { stanceFn = fn; },
     setSeats: (list) => { seatList = list; },
+    setOut: (fn) => { outFn = fn; },
     afterRequest: (callback) => { afterRequest = callback; },
     tick: () => window.MainSession.onTick(captain.id, { alive: true, state: 'done' }),
   };
@@ -207,4 +208,13 @@ test('Gemini and every Claude seat out: the start waits in the ordinary quota qu
   r.setQuota(false); r.setStance((cmd) => (/^agy/.test(cmd) ? 'unknown' : 'ok'));
   r.tick(); await new Promise(setImmediate); await new Promise(setImmediate);
   assert.equal(r.created.length, 1); assert.match(r.created[0].cmd, /claude-haiku-5-5/);
+});
+
+test('a start held back by quota retries as soon as the Claude fallback has room, though Gemini is still out', async (t) => {
+  const r = runtime(t), card = r.add();
+  r.setStance(() => 'out'); r.setOut(() => true);
+  assert.equal((await r.board.requestStart(card.id)).queued, true);
+  r.setStance((cmd) => (/^agy/.test(cmd) ? 'out' : 'ok')); r.setOut((cmd) => /^agy/.test(cmd));
+  r.tick(); await new Promise(setImmediate); await new Promise(setImmediate);
+  assert.equal(r.created.length, 1); assert.match(r.created[0].cmd, /^claude .*claude-haiku-5-5/);
 });

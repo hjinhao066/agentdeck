@@ -170,7 +170,7 @@
   }
   async function boardRequest(op, input) {
     const result = await window.deck.taskBoard(op, input);
-    if (op === 'move' && ['done', 'todo'].includes(result.card?.status)) cancelWaiting((w) => w.metadata?.boardId === result.card.id, '卡片已移到' + result.card.status + '，取消排队。');
+    if (op === 'move' && ['done', 'todo', 'needs_user'].includes(result.card?.status)) cancelWaiting((w) => w.metadata?.boardId === result.card.id, '卡片已移到' + result.card.status + '，取消排队。');
     for (const notice of result.notices || []) boardNotice(notice);
     return result;
   }
@@ -1474,6 +1474,25 @@
     if (removed.length) { save(); host.flushConfig?.(); }
     return removed.length;
   }
+  // What decides whether a queued card may still be started: where it sits and what it says. A
+  // priority mark, a receipt or a session binding do not count.
+  const cardGist = (c) => JSON.stringify([c.status, c.flag || null, !!c.archived, c.title, c.detail]);
+  const CARD_WORDS = { todo: '待办', doing: '进行中', review: '待验收', needs_user: '需要你', done: '已完成' };
+  // Why a request that waited for quota must not start now ('' when it may). The user put a card back,
+  // marked it 需要你, archived or edited it (on this machine or the other one) while it waited: the
+  // Captain's old order no longer stands, so nothing opens by itself.
+  async function queuedCardProblem(w) {
+    const id = w.metadata?.boardId;
+    if (!id || !w.cardGist) return '';
+    let card;
+    try { card = await findCard(id); } catch (_) { return ''; }   // a board that cannot be read now is retried, not a reason to drop
+    if (!card) return '卡片已经不在看板上了';
+    if (card.archived) return '卡片已归档';
+    if (card.status === 'needs_user') return '卡片现在在「需要你」，等用户拿主意';
+    if (['held', 'blocked'].includes(card.flag)) return '卡片现在是' + (card.flag === 'held' ? '已挂起' : '被前置任务挡住');
+    if (cardGist(card) !== w.cardGist) return `卡片在排队期间被改动过（现在在${CARD_WORDS[card.status] || card.status}）`;
+    return '';
+  }
   // A queued request keeps its text in config.json; a long one goes to a file first.
   async function enqueue(title, cmd, cwd, requestId, text, metadata = {}, reason = '') {
     const s = state();
@@ -1488,7 +1507,10 @@
     Object.assign(task, metadata);
     const held = openPlan(cmd, metadata.claudeSeatId, metadata.quotaExplicit, metadata);
     task.waitReason = held.action === 'queue' ? quotaQueueText(held, title) : reason;
+    // The card as it was when the Captain queued it: if it has changed by the time quota returns, nobody asked for this any more.
+    const queuedCard = metadata.boardId && !metadata.reviews?.length && !metadata.autoReviewRound ? await findCard(metadata.boardId).catch(() => null) : null;
     s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata,
+      ...(queuedCard ? { cardGist: cardGist(queuedCard) } : {}),
       order: s.waitlist.reduce((max, w) => Math.max(max, w.order || 0), 0) + 1 });
     s.waitlist = M.highFirst(s.waitlist, isHigh);   // 高优先级 waits ahead of ordinary work
     save();
@@ -1546,6 +1568,15 @@
             s.waitlist.unshift(w);
             task.waitReason = quotaQueueText(plan, w.title);
             update(task);
+            return;
+          }
+          const problem = await queuedCardProblem(w);
+          if (problem) {
+            task.status = 'stopped'; task.doneAt = Date.now();
+            task.receipt = { summary: `额度回来了，但没有自动派：${problem}。`, files: [], images: [], failed: '', explicit: true };
+            update(task);
+            boardNotice(`卡片 ${w.metadata.boardId}「${w.title}」排队等额度，额度回来后没有自动开：${problem}。要做就再 new --task-id ${w.metadata.boardId} 一次。`);
+            save();
             return;
           }
           const title = plan.action === 'switch' ? notedTitle(w.title, plan.note) : w.title;
@@ -2581,7 +2612,8 @@
       if (busy) captainBusySince ||= Date.now();
       else if (captainBusySince && entry.state === 'done') { s.captainSettledAt = Math.max(s.captainSettledAt || 0, captainBusySince); captainBusySince = 0; save(); }
       for (const [cardId, input] of quotaStarts) {
-        if (quotaPlan(window.BoardCore.commandForAgent('agy')).action !== 'queue') {
+        // retry as soon as any dispatcher candidate (Gemini, or the Claude fallback) is no longer held back by quota
+        if (window.AutoVerifyCore.DISPATCHERS.some((c) => quotaPlan(c.command || window.BoardCore.commandForAgent(c.agent)).action !== 'queue')) {
           quotaStarts.delete(cardId);
           startCard(cardId, input).catch((error) => host.showToast(error.message));
         }

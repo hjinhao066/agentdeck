@@ -148,3 +148,48 @@ test('explicit named command queue reason clarifies 5-hour quota is below thresh
   assert.match(result.result, /已用 --command 点名模型，不自动更换。5 小时额度低于阈值，稍后自动开新会话/);
   assert.match((await h.queue())[0].reason, /5 小时额度低于阈值/);
 });
+
+// ---- what waited for quota must not start by itself once the card is no longer the Captain's order ----
+const tickAndWait = async (h) => { h.window.ChatUI.readFooter ??= () => []; h.window.MainSession.onTick(h.captain.id, { alive: true, state: 'plain' }); for (let i = 0; i < 8; i++) await new Promise((resolve) => setImmediate(resolve)); };
+const notices = (h) => h.state.pending.filter((p) => p.title === '任务看板').map((p) => p.summary);
+
+test('a card left unchanged while it waited for quota opens when quota returns; a priority mark or a receipt does not hold it back', async (t) => {
+  const h = runtime(t), card = h.add();
+  await h.assign(card);
+  assert.equal(h.state.waitlist.length, 1); assert.ok(h.state.waitlist[0].cardGist);
+  const current = h.store.list().find((c) => c.id === card.id);
+  h.store.update({ id: card.id, updated: current.updated, patch: { important: true } });
+  h.out.clear();
+  await tickAndWait(h);
+  assert.equal(h.state.waitlist.length, 0); assert.equal(h.columns.length, 2, 'the session opened');
+  assert.equal(notices(h).filter((n) => n.includes('没有自动')).length, 0);
+});
+
+test('the user put the card on 需要你, back with a new note, or archived it while it waited: quota returning opens nothing and the Captain is told', async (t) => {
+  const changes = {
+    '需要你': (h, card) => h.store.move({ id: card.id, status: 'needs_user' }),
+    '改了说明（暂缓）': (h, card) => h.store.update({ id: card.id, updated: h.store.list().find((c) => c.id === card.id).updated, patch: { detail: '用户要先讨论设计，暂不派' } }),
+    '归档': (h, card) => { h.store.move({ id: card.id, status: 'done' }); h.store.archive({ done: true, project: 'test' }); },
+  };
+  for (const [name, change] of Object.entries(changes)) {
+    const h = runtime(t), card = h.add();
+    await h.assign(card);
+    assert.equal(h.state.waitlist.length, 1, name);
+    change(h, card);   // written straight to the board, as the other machine or the UI of another process would
+    h.out.clear();
+    await tickAndWait(h);
+    assert.equal(h.columns.length, 1, name + ': no session');
+    assert.equal(h.state.waitlist.length, 0, name);
+    assert.equal(h.state.tasks[0].status, 'stopped', name); assert.match(h.state.tasks[0].receipt.summary, /没有自动派/);
+    assert.equal(notices(h).filter((n) => n.includes('额度回来后没有自动开')).length, 1, name);
+    if (name === '需要你') assert.equal(storeStatus(h, card), 'needs_user', 'the card stays where the user put it');
+  }
+});
+
+test('moving a queued card to 需要你 on this machine cancels its request at once', async (t) => {
+  const h = runtime(t), card = h.add();
+  await h.assign(card);
+  await h.window.TaskBoard.move(card.id, 'needs_user');
+  assert.equal(h.state.waitlist.length, 0);
+  assert.equal(storeStatus(h, card), 'needs_user');
+});
