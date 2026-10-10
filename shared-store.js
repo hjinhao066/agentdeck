@@ -11,6 +11,13 @@ const TRAIL_CAP = 100;
 // A retried operation is answered from its receipt for this long; a client
 // offline longer resends work whose answer it never got, and that is applied again.
 const RECEIPT_KEEP_MS = 30 * 24 * 60 * 60_000;
+// A transcript too big for one request comes in pieces (stageHistoryPart), held in
+// memory until pushHistoryText puts them together. Pieces of an upload that is never
+// finished go after this long; all pieces held at once stay under STAGED_MAX characters.
+const UPLOAD_TTL_MS = 10 * 60_000;
+const STAGED_MAX = 256 * 1024 * 1024;
+const PARTS_MAX = 4096;
+const UPLOAD_ID = /^[A-Za-z0-9_-]{8,160}$/;
 const DEVICE_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const SESSION_ID = /^[A-Za-z0-9._-]{1,160}$/;
 // Fields a client may try to change. `updated` is omitted on purpose: every
@@ -181,6 +188,8 @@ class SharedStore {
     this.leaseMs = leaseMs;
     this.now = now;
     this.data = this._load();
+    this.uploads = new Map();
+    this.staged = 0;
   }
   _load() {
     let raw;
@@ -330,10 +339,68 @@ class SharedStore {
     this._save();
     return saved;
   }
-  pushHistory({ opId, sessionId, deviceId, contentHash, startedAt, endedAt, summary, turns }) {
+  _checkHistory({ opId, sessionId, deviceId, contentHash }) {
     if (typeof opId !== 'string' || !/^[A-Za-z0-9_-]{8,160}$/.test(opId)) throw reject(400, 'Invalid opId.');
     if (!isSessionId(sessionId) || !isDeviceId(deviceId)) throw reject(400, 'Invalid history identity.');
     if (typeof contentHash !== 'string' || !/^[a-f0-9]{64}$/.test(contentHash)) throw reject(400, 'Invalid history hash.');
+  }
+  _dropUpload(uploadId) {
+    const upload = this.uploads.get(uploadId);
+    if (!upload) return;
+    this.staged -= upload.size;
+    this.uploads.delete(uploadId);
+  }
+  // One piece of a transcript's text. Pieces are not written to the file: a hub
+  // that restarts loses them and the client sends the transcript again.
+  stageHistoryPart({ uploadId, index, count, text }) {
+    if (typeof uploadId !== 'string' || !UPLOAD_ID.test(uploadId)) throw reject(400, 'Invalid upload id.');
+    if (!Number.isInteger(count) || count < 1 || count > PARTS_MAX || !Number.isInteger(index) || index < 0 || index >= count) throw reject(400, 'Invalid upload part.');
+    if (typeof text !== 'string') throw reject(400, 'Invalid upload part.');
+    const now = this.now();
+    for (const [id, item] of this.uploads) if (now - item.at > UPLOAD_TTL_MS) this._dropUpload(id);
+    let upload = this.uploads.get(uploadId);
+    if (upload && upload.count !== count) throw reject(400, 'Upload part count changed.');
+    const before = upload && upload.parts[index] !== null ? upload.parts[index].length : 0;
+    if (this.staged - before + text.length > STAGED_MAX) throw reject(413, 'Too much upload staged.');
+    if (!upload) { upload = { count, parts: Array.from({ length: count }, () => null), size: 0, at: now }; this.uploads.set(uploadId, upload); }
+    upload.parts[index] = text;
+    upload.size += text.length - before;
+    this.staged += text.length - before;
+    upload.at = now;
+    return { status: 200, body: { uploadId, index, received: upload.parts.filter((part) => part !== null).length } };
+  }
+  // A transcript sent as JSON text: inline (`text`) or as staged pieces (`uploadId`,
+  // `parts`), whole or (with `base`) only the turns from `base.from` on, laid over the
+  // version the hub has when its hash is `base.contentHash`. The result must hash to
+  // `contentHash`; it is then saved like any other upload. 409 answers are not kept
+  // as receipts: `parts-missing` is sent again, `base-mismatch` is sent whole.
+  pushHistoryText({ opId, sessionId, deviceId, contentHash, startedAt, endedAt, summary, text, uploadId, parts, base }) {
+    this._checkHistory({ opId, sessionId, deviceId, contentHash });
+    if (this.data.ops[opId]) { this._dropUpload(uploadId); return this._replay(opId); }
+    let body = text;
+    if (typeof body !== 'string') {
+      const upload = this.uploads.get(uploadId);
+      if (!upload || upload.count !== parts || upload.parts.includes(null)) return { status: 409, body: { error: 'parts-missing' } };
+      body = upload.parts.join('');
+      this._dropUpload(uploadId);
+    }
+    let turns;
+    try { turns = JSON.parse(body); } catch (_) { throw reject(400, 'Invalid history text.'); }
+    if (!Array.isArray(turns)) throw reject(400, 'Invalid history text.');
+    if (base !== undefined && base !== null) {
+      const existing = this.data.history[sessionId + '@' + deviceId];
+      if (!existing || !base || existing.contentHash !== base.contentHash || !Number.isInteger(base.from) || base.from < 0 || base.from > existing.turns.length) {
+        return { status: 409, body: { error: 'base-mismatch' } };
+      }
+      turns = existing.turns.slice(0, base.from).concat(turns);
+    }
+    if (crypto.createHash('sha256').update(JSON.stringify(stripSecrets(turns))).digest('hex') !== contentHash) {
+      return { status: 409, body: { error: 'hash-mismatch' } };
+    }
+    return this.pushHistory({ opId, sessionId, deviceId, contentHash, startedAt, endedAt, summary, turns });
+  }
+  pushHistory({ opId, sessionId, deviceId, contentHash, startedAt, endedAt, summary, turns }) {
+    this._checkHistory({ opId, sessionId, deviceId, contentHash });
     if (this.data.ops[opId]) return this._replay(opId);
     const key = sessionId + '@' + deviceId;
     const existing = this.data.history[key];
