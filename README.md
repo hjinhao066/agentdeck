@@ -1497,7 +1497,11 @@ never the real layout or live agent sessions. Test windows are shown without
 activating the app; each spec opens its own instance, and CI runs the suite once
 against source and once against the packaged app. With `--test-user-data=<dir>` the
 Skills page scans `<dir>/skills-home` instead of the real home folder, so tests
-never list or edit the user's own skills.
+never list or edit the user's own skills. A test instance whose saved layout has no
+columns (no config file, an unreadable one, `columns` missing or empty) opens no columns
+at all, instead of the three default agent columns that start real `agy`/`claude`/`grok`;
+a normal run keeps the defaults. `test-instance-columns.spec.js` checks this with a PATH
+trap, and loads `fixtures/no-dialog-guard.js` (`electron -r <guard> <app>`) so no dialog can open.
 Fixture cleanup first requests normal Electron quit, then kills only its isolated process tree
 after 10 seconds if native teardown stalls, with an explicit warning in the test log.
 This cleanup is not a graceful-shutdown assertion; `restart-resume-exit.spec.js`

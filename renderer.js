@@ -121,7 +121,7 @@ function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AU
 
 let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
-  navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
+  navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: MainCore.emptyLayoutColumns(env.testInstance, defaultColumns), links: [],
   boardResponses: {}, todoDeliveries: {}, todoInbox: {}, globalViewMode: 'term',
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
@@ -974,7 +974,7 @@ function buildChrome() {
         window.deck.ptyKill(c.id);
         ChatUI.onColumnRemoved(c.id);
       });
-      columns = defaultColumns();
+      columns = MainCore.emptyLayoutColumns(env.testInstance, defaultColumns);
       config.links = [];
       const w = defaultColWidth(); columns.forEach((c) => { c.width = w; }); // equal slices
       saveConfig(); render(true);
