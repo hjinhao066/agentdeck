@@ -4129,7 +4129,7 @@ function dumpScreen(term, count = 40) {
 // dumpScreen's bounded tail is for reply/history extraction: it can miss a busy
 // row above a tall input/footer, or retain an obsolete spinner in scrollback.
 function statusScreen(term) {
-  const STATUS_ROW_START_RE = /^\s{0,2}(?:[✻✽✳✶✢✺∴*·⏺●◦•]|[⠀-⣿])\s+\S/;
+  const STATUS_ROW_START_RE = /^\s{0,2}(?:[✻✽✳✶✢✺∴*·⏺●◦•]|[\u2800-\u28FF])\s+\S/;
   const buf = term.buffer.active;
   const lines = [];
   for (let y = buf.baseY; y < buf.baseY + term.rows; y++) {
