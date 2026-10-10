@@ -12,7 +12,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'renderer.js'), 'utf8');
 // From the crew map's set-up to the end of the page script.
-const begin = source.indexOf('\n// The board view opens on the 终端架构图');
+const begin = source.indexOf('\n// The board view is 队伍');
 assert.ok(begin >= 0, 'renderer.js still sets the crew map up');
 const tail = source.slice(begin);
 assert.ok(tail.includes('TaskBoardUI.init(') && tail.includes('showView(config.activeView);'), 'the task board and the saved view are set up after it');
@@ -21,11 +21,11 @@ function start(initMap) {
   const done = { taskBoard: false, tabs: [], view: null, logged: [] };
   const context = vm.createContext({
     config: { activeView: 'board', archived: [] }, terms: new Map(), columns: [], activeView: 'board', env: { platform: 'win32' },
-    columnLabel: (c) => c.id, lastActivityLine: () => '', saveConfig() {}, renderBoardGraph() {}, restoreBoardTerminal() {},
+    columnLabel: (c) => c.id, lastActivityLine: () => '', saveConfig() {},
     restoreArchived() {}, whenMounted() {}, jumpToColumn() {}, showToast() {}, syncChromeState() {},
     MainSession: {}, ClaudeSeats: { described: () => [] }, Pages: { hide() {} }, Sidebar: { markPage() {} },
     window: { AgentInfo: {}, deck: {} },
-    CrewMap: { init: initMap, mode: () => 'crew', setMode() {} },
+    CrewMap: { init: initMap },
     TaskBoardUI: { init() { done.taskBoard = true; }, open() {}, close() {} },
     document: { getElementById: (id) => ({ addEventListener: (type) => done.tabs.push(`${id}:${type}`), focus() {} }) },
     showView: (view) => { done.view = view; },

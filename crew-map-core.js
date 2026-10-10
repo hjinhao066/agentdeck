@@ -1,4 +1,4 @@
-// Pure helpers behind the 终端架构图 (crew map): 队长 at the top, a line down
+// Pure helpers behind 队伍 (the crew map): 队长 at the top, a line down
 // to every session it handed work to, review sessions below the sessions they
 // review. Built from the same data as the ledger (config.mainSession.tasks,
 // the live columns, config.archived). No DOM: runs in the page and in tests.
@@ -1105,7 +1105,7 @@
     return out;
   }
 
-  // Saved state of the map: { mode, positions: { id: {x,y} }, projectPositions, view: { x, y, scale }, showReturn,
+  // Saved state of the map (a `mode` saved before 2.0.5 named the free canvas, since removed, and is dropped): { positions: { id: {x,y} }, projectPositions, view: { x, y, scale }, showReturn,
   // collapsedProjects, projectOrder: [key], plan: { lanes, caps, tight } | null, zoom: the zoom the user set (drawn
   // units, like the view's scale) | null (none: 智能一页 picks the zoom) }.
   function normalizeSaved(raw) {
@@ -1128,7 +1128,7 @@
     const plan = pl && pl.lanes.length <= 50 && pl.lanes.every((l) => Array.isArray(l) && l.length <= 500 && l.every(key))
       ? { lanes: pl.lanes.map((l) => l.slice()), caps: Object.fromEntries(Object.entries(pl.caps || {}).filter(([k, v]) => key(k) && Number.isInteger(v) && v >= 1 && v <= 12)), tight: !!pl.tight, page: !!pl.page } : null;
     const zoom = Number.isFinite(s.zoom) && s.zoom > 0 ? Math.min(MAX_SCALE, Math.max(MIN_SCALE, s.zoom)) : null;
-    return { projectPositions, mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view, collapsedProjects, showReturn: !!s.showReturn, projectOrder, plan, zoom };
+    return { projectPositions, positions, view, collapsedProjects, showReturn: !!s.showReturn, projectOrder, plan, zoom };
   }
   // The map's own zoom. Its 100% is BASE_SCALE of the canvas's drawn size (cards are drawn 280px wide
   // and shown 196px wide at 100%); the canvas, the saved view and every position stay in drawn units,

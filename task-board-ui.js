@@ -979,9 +979,9 @@
     // the lines follow the cards whenever the board is laid out again (window, drawer, zoom)
     new ResizeObserver(queueLinks).observe(lanesEl);
     viewEl.querySelector('.tbv-close').onclick = () => { setOpen(false); host.focusToggle(); };
-    // 架构图 / 自由画布 leave the board for the board view in that mode; 任务看板 / Token 用量 switch in place.
+    // 队伍 leaves the board for the board view; 任务看板 / Token 用量 switch in place.
     viewEl.querySelectorAll('.board-mode button[data-view]').forEach((b) => {
-      b.onclick = () => (MODES[b.dataset.view] ? setMode(b.dataset.view) : host.showBoard(b.dataset.view));
+      b.onclick = () => (MODES[b.dataset.view] ? setMode(b.dataset.view) : host.showBoard());
     });
     window.TokenUsageUI.init({ prefs: () => host.tokenPrefs(), savePrefs: (p) => host.saveTokenPrefs(p), announce });
     viewEl.addEventListener('keydown', (e) => {

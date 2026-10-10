@@ -1,4 +1,4 @@
-// 终端架构图 (crew map): the default face of the board view. A canvas: drag
+// 队伍 (crew map, called 终端架构图 before 2.0.5): the board view. A canvas: drag
 // the background to pan, Cmd/Ctrl+wheel (or pinch) to zoom, drag a card to
 // move it; positions and the view are kept in config.crewMap. 队长 sends work
 // down (派出), reviews run down from what they review (审查), results run
@@ -59,8 +59,7 @@
   const TIGHT = { captainH: 104, fanY: 40, rowGap: 10, padBottom: 12 };
   const DRAG_PX = 4;
   let host = null;
-  let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, projectsEl, nodesEl, emptyEl, zoomLabel, zoomMenu, archBtn, returnBtn, undoBtn, fitBtn, hintEl, trayEl, popEl;
-  let mode = 'crew';
+  let rootEl, vpEl, canvasEl, edgesEl, zonesEl, projectsEl, nodesEl, emptyEl, zoomLabel, zoomMenu, archBtn, returnBtn, undoBtn, fitBtn, hintEl, trayEl, popEl;
   let showArchived = false;
   let showReturn = false;
   let lastSig = '';
@@ -709,7 +708,7 @@
     syncFit();
   }
   function onWheel(e) {
-    if (mode !== 'crew' || !view || e.target.closest('.cm-pop')) return;
+    if (!view || e.target.closest('.cm-pop')) return;
     e.preventDefault();
     hush();
     // a layer while the wheel turns; dropped once it rests, so the text is drawn afresh at the new scale
@@ -834,7 +833,7 @@
   }
 
   function render(opts) {
-    if (!rootEl || mode !== 'crew' || !host.visible() || drag) return;
+    if (!rootEl || !host.visible() || drag) return;
     drawnFor = drawnKey();
     const map = collect();
     lastMap = map;
@@ -1001,7 +1000,7 @@
 
   // Every status tick: a structural change rebuilds, the rest updates text in place.
   function refresh() {
-    if (!rootEl || mode !== 'crew' || !host.visible() || drag) return;
+    if (!rootEl || !host.visible() || drag) return;
     const map = collect();
     if (C.signature(map) + '|' + showArchived !== lastSig) { render({ smooth: true }); return; }
     lastMap = map;
@@ -1015,22 +1014,10 @@
 
   function setShowArchived(v) { showArchived = !!v; render(); }
 
-  function setMode(next) {
-    mode = next === 'canvas' ? 'canvas' : 'crew';
-    saved().mode = mode;
-    viewEl.dataset.mode = mode;
-    viewEl.querySelectorAll('.board-mode button[data-mode]').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
-    viewEl.querySelector('.board-kicker').textContent = mode === 'crew' ? '队长 · 实时' : 'Live orchestration';
-    viewEl.querySelector('.board-toolbar h1').textContent = mode === 'crew' ? '终端架构图' : 'Conductor Board';
-    host.save();
-    if (mode === 'crew') { host.leaveCanvas(); render(); } else host.enterCanvas();
-  }
-
   function init(h) {
     host = h;
     host.config.crewMap = C.normalizeSaved(host.config.crewMap);
     showReturn = host.config.crewMap.showReturn || false;
-    viewEl = document.getElementById('boardView');
     rootEl = document.getElementById('crewMap');
     vpEl = rootEl.querySelector('.cm-viewport');
     canvasEl = rootEl.querySelector('.cm-canvas');
@@ -1074,7 +1061,6 @@
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
     vpEl.addEventListener('wheel', onWheel, { passive: false });
-    viewEl.querySelectorAll('.board-mode button[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
     // A window being resized: the map arranges itself at once, then (if the size moved on meanwhile) once
     // more when the window has rested RESIZE_MS, gliding there; a size it was already arranged for does nothing.
     let resizeT = 0, resizeAt = 0;
@@ -1090,8 +1076,8 @@
       resizeAt = Date.now();
       resizeT = setTimeout(() => { resizeAt = 0; if (ready()) render({ smooth: true }); }, RESIZE_MS);
     }).observe(vpEl);
-    setMode(host.config.crewMap.mode);
+    render();
   }
 
-  window.CrewMap = { init, render, refresh, fit, relayout: tidy, tidy, page, undo: undoArrange, plan: () => plan && { lanes: plan.lanes.map((l) => l.slice()), caps: { ...plan.caps }, tight: !!plan.tight, page: !!plan.page }, pageFits: () => pageFits, canUndo: () => !!undo, mode: () => mode, setMode, setShowArchived, setShowReturn, lastMap: () => lastMap, view: () => view && { ...view }, userMoved: () => userView, layout: () => lay };
+  window.CrewMap = { init, render, refresh, fit, relayout: tidy, tidy, page, undo: undoArrange, plan: () => plan && { lanes: plan.lanes.map((l) => l.slice()), caps: { ...plan.caps }, tight: !!plan.tight, page: !!plan.page }, pageFits: () => pageFits, canUndo: () => !!undo, setShowArchived, setShowReturn, lastMap: () => lastMap, view: () => view && { ...view }, userMoved: () => userView, layout: () => lay };
 })();

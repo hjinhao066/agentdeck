@@ -122,7 +122,7 @@ function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AU
 let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
-  boardResponses: {}, boardPositions: {}, todoDeliveries: {}, todoInbox: {}, globalViewMode: 'term',
+  boardResponses: {}, todoDeliveries: {}, todoInbox: {}, globalViewMode: 'term',
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
@@ -218,7 +218,8 @@ if (saved) {
   if (saved.chatDeliverables && typeof saved.chatDeliverables === 'object') config.chatDeliverables = DeliverablesCore.normalizeIndex(saved.chatDeliverables, DeliverablesCore.normalizeRules(config.deliverableRules));
   if (saved.activeView === 'board') config.activeView = 'board';
   if (saved.side && typeof saved.side === 'object') config.side = saved.side;
-  config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
+  // Card positions of the old board canvas (removed in 2.0.5): kept in config.json as saved, never shown
+  if (saved.boardPositions) config.boardPositions = saved.boardPositions;
   config.crewMap = CrewMapCore.normalizeSaved(saved.crewMap);
   if (saved.boardResponses && typeof saved.boardResponses === 'object' && !Array.isArray(saved.boardResponses)) {
     config.boardResponses = Object.fromEntries(Object.entries(saved.boardResponses).filter(([, r]) => savedBoardResponse(r)).slice(-200));
@@ -333,14 +334,6 @@ function flushConfig() {
 window.addEventListener('pagehide', flushConfig);
 document.addEventListener('visibilitychange', () => { if (document.hidden && saveTimer) flushConfig(); });
 function columnLabel(col) { return (col && (col.displayTitle || col.title || col.taskTitle)) || 'Terminal'; }
-function columnRelationshipLabel(col) {
-  if (!col) return '';
-  if (col.role === 'worker' && col.parentTaskId) {
-    const parent = columns.find((candidate) => candidate.taskId === col.parentTaskId);
-    if (parent) return `Delegated by ${columnLabel(parent)}`;
-  }
-  return col.relationship || (col.role === 'manual' ? 'Independent manual terminal' : 'Managed task');
-}
 function uniqueDisplayTitle(value, col) {
   return BoardCore.uniqueDisplayTitle(value || columnLabel(col), columns, col.taskId);
 }
@@ -359,7 +352,6 @@ function setColumnDisplayTitle(col, value) {
   applyNavTitle(nav && nav.label, label);
   if (label !== requested) showToast(`Title already used. Renamed to “${label}”.`);
   saveConfig();
-  renderBoardGraph();
   return true;
 }
 
@@ -562,7 +554,7 @@ window.deck.onPtyExit((id, reason) => {
     // frozen mid-count.
     if (t.workStart) { t.workedMs = Date.now() - t.workStart; t.workStart = 0; t.doneAt = Date.now(); }
     t.term.write('\r\n\x1b[2m[已退出 / process exited]\x1b[0m\r\n');
-    setDot(t, 'exited'); syncNav(); syncBoardState();
+    setDot(t, 'exited'); syncNav();
     ChatUI.onExit(id);
   }
 });
@@ -893,7 +885,7 @@ function buildChrome() {
   // Shown only while the sidebar is collapsed.
   const expandBtn = railBtn(ICONS.panelLeft, '展开侧边栏', () => setNavCollapsed(false));
   expandBtn.id = 'navExpandBtn';
-  const boardBtn = railBtn(ICONS.board, `终端架构图 (${keyLabel('crewMap')})`, () => showView(activeView === 'board' ? 'terminals' : 'board'));
+  const boardBtn = railBtn(ICONS.board, `队伍 (${keyLabel('crewMap')})`, () => showView(activeView === 'board' ? 'terminals' : 'board'));
   boardBtn.id = 'boardViewBtn';
   expandBtn.setAttribute('aria-label', expandBtn.title);
   boardBtn.setAttribute('aria-label', boardBtn.title);
@@ -984,7 +976,6 @@ function buildChrome() {
       });
       columns = defaultColumns();
       config.links = [];
-      config.boardPositions = {};
       const w = defaultColWidth(); columns.forEach((c) => { c.width = w; }); // equal slices
       saveConfig(); render(true);
     }));
@@ -1139,67 +1130,6 @@ function attachNavResize(handle) {
 // ---- Render ----
 const deckEl = document.getElementById('deck');
 const boardViewEl = document.getElementById('boardView');
-const boardScrollerEl = document.getElementById('boardScroller');
-const boardSurfaceEl = document.getElementById('boardSurface');
-const boardEdgesEl = document.getElementById('boardEdges');
-const boardNodesEl = document.getElementById('boardNodes');
-const boardEmptyEl = document.getElementById('boardEmpty');
-const boardInspectorEl = document.getElementById('boardInspector');
-const boardTerminalHostEl = document.getElementById('boardTerminalHost');
-const boardInspectorEmptyEl = document.getElementById('boardInspectorEmpty');
-const boardInspectorTitleEl = document.getElementById('boardInspectorTitle');
-const boardInspectorMetaEl = document.getElementById('boardInspectorMeta');
-const boardInspectorStateEl = document.getElementById('boardInspectorState');
-const boardInspectorSendTaskEl = document.getElementById('boardInspectorSendTask');
-let selectedBoardId = null;
-let connectSourceTaskId = null;
-let boardLinkDrag = null;
-const BOARD_NODE_WIDTH = 260;
-const BOARD_NODE_HEIGHT = 156;
-const BOARD_PADDING = 56;
-
-function restoreBoardTerminal() {
-  if (!selectedBoardId) return;
-  const entry = terms.get(selectedBoardId);
-  if (entry && entry.el && entry.wrap && entry.el.parentElement === boardTerminalHostEl) {
-    const resizer = entry.wrap.querySelector('.resizer');
-    entry.wrap.insertBefore(entry.el, resizer || null);
-    entry.wrap.classList.remove('board-inspected');
-  }
-}
-
-function selectBoardNode(columnId, focusTerminal) {
-  const col = columns.find((candidate) => candidate.id === columnId);
-  if (!col) return;
-  if (selectedBoardId && selectedBoardId !== columnId) restoreBoardTerminal();
-  selectedBoardId = columnId;
-  boardNodesEl.querySelectorAll('.board-node').forEach((card) => {
-    card.classList.toggle('selected', card.dataset.columnId === columnId);
-  });
-  const entry = terms.get(columnId);
-  boardInspectorTitleEl.textContent = columnLabel(col);
-  boardInspectorMetaEl.textContent = `${col.role === 'conductor' ? 'Conductor' : col.role === 'worker' ? 'Worker' : 'Manual'} · ${col.agentType || BoardCore.inferAgentType(col.cmd)} · ${columnRelationshipLabel(col)}`;
-  boardInspectorEmptyEl.hidden = !!entry;
-  boardTerminalHostEl.hidden = !entry;
-  if (!entry) {
-    setTimeout(() => {
-      if (activeView === 'board' && selectedBoardId === columnId) selectBoardNode(columnId, focusTerminal);
-    }, 100);
-    return;
-  }
-  if (entry.el.parentElement !== boardTerminalHostEl) {
-    boardTerminalHostEl.innerHTML = '';
-    boardTerminalHostEl.appendChild(entry.el);
-    entry.wrap.classList.add('board-inspected');
-  }
-  focusedId = columnId;
-  requestAnimationFrame(() => {
-    try { entry.fit.fit(); } catch (_) {}
-    if (focusTerminal) entry.term.focus();
-  });
-  syncNav();
-  syncBoardState();
-}
 
 function showView(view) {
   TaskBoardUI.close();
@@ -1214,515 +1144,11 @@ function showView(view) {
     Pages.hide();
     closeSearch();
     closeBroadcast();
-    renderBoardGraph();
     CrewMap.render();
   } else {
-    restoreBoardTerminal();
     requestAnimationFrame(() => { updateColumnStyles(); fitAll(); });
   }
   saveConfig();
-}
-
-function inspectColumn(columnId) {
-  const col = columns.find((c) => c.id === columnId);
-  if (!col) return;
-  showView('terminals');
-  setTimeout(() => jumpToColumn(col), 40);
-}
-
-function boardStateFor(col) {
-  const entry = terms.get(col.id);
-  return entry ? entry.state : 'plain';
-}
-
-function boardStatusLabel(col, state) {
-  const terminalLabel = BoardCore.stateLabel(state, false);
-  return col.taskCompleted ? `Task completed · Terminal ${terminalLabel}` : terminalLabel;
-}
-
-function allBoardLinks() {
-  const validTaskIds = new Set(columns.map((col) => col.taskId));
-  const byTaskId = new Map(columns.map((col) => [col.taskId, col]));
-  const links = (config.links || []).map(BoardCore.normalizeLink)
-    .filter((link) => validTaskIds.has(link.fromTaskId) && validTaskIds.has(link.toTaskId))
-    .map((link) => ({
-      ...link,
-      // The ownership tree is the ACL source of truth. Never claim that an
-      // edge grants control unless the target actually belongs to that parent.
-      grantedControl: link.type === 'delegation' &&
-        byTaskId.get(link.toTaskId).parentTaskId === link.fromTaskId,
-    }));
-  columns.filter((col) => col.parentTaskId && validTaskIds.has(col.parentTaskId)).forEach((col) => {
-    const exists = links.some((link) =>
-      link.type === 'delegation' && link.fromTaskId === col.parentTaskId && link.toTaskId === col.taskId);
-    if (!exists) {
-      links.push({
-        id: `managed:${col.parentTaskId}:${col.taskId}`,
-        fromTaskId: col.parentTaskId,
-        toTaskId: col.taskId,
-        type: 'delegation',
-        message: col.taskPrompt || '',
-        grantedControl: true,
-        synthetic: true,
-      });
-    }
-  });
-  return links;
-}
-
-function beginBoardRename(titleEl, col) {
-  if (!titleEl || !col) return;
-  titleEl.contentEditable = 'true';
-  titleEl.spellcheck = false;
-  titleEl.focus();
-  const range = document.createRange();
-  range.selectNodeContents(titleEl);
-  const selection = window.getSelection();
-  selection.removeAllRanges();
-  selection.addRange(range);
-  let cancelled = false;
-  const onKey = (event) => {
-    event.stopPropagation();
-    if (event.key === 'Enter') { event.preventDefault(); titleEl.blur(); }
-    else if (event.key === 'Escape') { event.preventDefault(); cancelled = true; titleEl.blur(); }
-  };
-  titleEl.addEventListener('keydown', onKey);
-  titleEl.addEventListener('blur', () => {
-    titleEl.removeEventListener('keydown', onKey);
-    titleEl.contentEditable = 'false';
-    selection.removeAllRanges();
-    if (!cancelled) {
-      if (!setColumnDisplayTitle(col, titleEl.textContent)) titleEl.textContent = columnLabel(col);
-    } else titleEl.textContent = columnLabel(col);
-  }, { once: true });
-}
-
-function baseBoardLayout() {
-  return BoardCore.graphLayout(columns, {
-    nodeWidth: BOARD_NODE_WIDTH,
-    nodeHeight: BOARD_NODE_HEIGHT,
-    gapX: 94,
-    gapY: 44,
-    padding: BOARD_PADDING,
-  });
-}
-
-function autoArrangeBoard() {
-  const layout = baseBoardLayout();
-  config.boardPositions = Object.fromEntries(layout.nodes.map((node) => [
-    node.taskId,
-    { x: Math.round(node.x), y: Math.round(node.y) },
-  ]));
-  saveConfig();
-  renderBoardGraph();
-  showToast('Board arranged.');
-}
-
-function boardCanvasPoint(clientX, clientY) {
-  const rect = boardScrollerEl.getBoundingClientRect();
-  return {
-    x: clientX - rect.left + boardScrollerEl.scrollLeft,
-    y: clientY - rect.top + boardScrollerEl.scrollTop,
-  };
-}
-
-function boardNodeGeometry(taskId) {
-  const card = boardNodesEl.querySelector(`.board-node[data-task-id="${CSS.escape(taskId)}"]`);
-  if (!card) return null;
-  return {
-    x: parseFloat(card.style.left) || 0,
-    y: parseFloat(card.style.top) || 0,
-    width: card.offsetWidth || BOARD_NODE_WIDTH,
-    height: card.offsetHeight || BOARD_NODE_HEIGHT,
-  };
-}
-
-function boardEdgeGeometry(from, to) {
-  let x1, y1, x2, y2, path;
-  if (Math.abs(from.x - to.x) < 40) {
-    const forward = from.y <= to.y;
-    x1 = from.x + from.width / 2;
-    y1 = forward ? from.y + from.height : from.y;
-    x2 = to.x + to.width / 2;
-    y2 = forward ? to.y : to.y + to.height;
-    const side = Math.max(from.x, to.x) + Math.max(from.width, to.width) + 36;
-    path = `M ${x1} ${y1} C ${side} ${y1}, ${side} ${y2}, ${x2} ${y2}`;
-  } else {
-    const forward = from.x < to.x;
-    x1 = forward ? from.x + from.width : from.x;
-    y1 = from.y + from.height / 2;
-    x2 = forward ? to.x : to.x + to.width;
-    y2 = to.y + to.height / 2;
-    const bend = Math.max(42, Math.abs(x2 - x1) / 2);
-    path = `M ${x1} ${y1} C ${x1 + (forward ? bend : -bend)} ${y1}, ${x2 + (forward ? -bend : bend)} ${y2}, ${x2} ${y2}`;
-  }
-  return { x1, y1, x2, y2, path };
-}
-
-function updateBoardSurfaceSize() {
-  const cards = Array.from(boardNodesEl.querySelectorAll('.board-node'));
-  const maxRight = Math.max(0, ...cards.map((card) =>
-    (parseFloat(card.style.left) || 0) + (card.offsetWidth || BOARD_NODE_WIDTH)));
-  const maxBottom = Math.max(0, ...cards.map((card) =>
-    (parseFloat(card.style.top) || 0) + (card.offsetHeight || BOARD_NODE_HEIGHT)));
-  const width = Math.max(boardScrollerEl.clientWidth - 16, maxRight + 180, 720);
-  const height = Math.max(boardScrollerEl.clientHeight - 16, maxBottom + 140, 520);
-  boardSurfaceEl.style.width = `${width}px`;
-  boardSurfaceEl.style.height = `${height}px`;
-  boardEdgesEl.setAttribute('width', String(width));
-  boardEdgesEl.setAttribute('height', String(height));
-  boardEdgesEl.setAttribute('viewBox', `0 0 ${width} ${height}`);
-}
-
-function updateRenderedBoardLinks() {
-  allBoardLinks().forEach((link) => {
-    const from = boardNodeGeometry(link.fromTaskId);
-    const to = boardNodeGeometry(link.toTaskId);
-    if (!from || !to) return;
-    const geometry = boardEdgeGeometry(from, to);
-    const path = boardEdgesEl.querySelector(`.board-edge[data-link-id="${CSS.escape(link.id)}"]`);
-    if (path) path.setAttribute('d', geometry.path);
-    const chip = boardNodesEl.querySelector(`.board-link-chip[data-link-id="${CSS.escape(link.id)}"]`);
-    if (chip) {
-      chip.style.left = `${(geometry.x1 + geometry.x2) / 2}px`;
-      chip.style.top = `${(geometry.y1 + geometry.y2) / 2}px`;
-    }
-  });
-}
-
-function maybeAutoScrollBoard(clientX, clientY) {
-  const rect = boardScrollerEl.getBoundingClientRect();
-  const edge = 42;
-  let dx = 0, dy = 0;
-  if (clientX < rect.left + edge) dx = -16;
-  else if (clientX > rect.right - edge) dx = 16;
-  if (clientY < rect.top + edge) dy = -16;
-  else if (clientY > rect.bottom - edge) dy = 16;
-  if (dx || dy) boardScrollerEl.scrollBy(dx, dy);
-}
-
-function attachBoardNodeDrag(card, col) {
-  card.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0 || event.target.closest('button, h2, [contenteditable="true"]')) return;
-    const startPoint = boardCanvasPoint(event.clientX, event.clientY);
-    const startX = parseFloat(card.style.left) || 0;
-    const startY = parseFloat(card.style.top) || 0;
-    let dragging = false;
-    card.setPointerCapture(event.pointerId);
-
-    const onMove = (moveEvent) => {
-      const point = boardCanvasPoint(moveEvent.clientX, moveEvent.clientY);
-      if (!dragging && Math.hypot(point.x - startPoint.x, point.y - startPoint.y) < 4) return;
-      dragging = true;
-      card.classList.add('dragging');
-      maybeAutoScrollBoard(moveEvent.clientX, moveEvent.clientY);
-      const current = boardCanvasPoint(moveEvent.clientX, moveEvent.clientY);
-      card.style.left = `${Math.max(16, Math.round(startX + current.x - startPoint.x))}px`;
-      card.style.top = `${Math.max(16, Math.round(startY + current.y - startPoint.y))}px`;
-      updateBoardSurfaceSize();
-      updateRenderedBoardLinks();
-      moveEvent.preventDefault();
-    };
-    const onUp = () => {
-      card.removeEventListener('pointermove', onMove);
-      card.removeEventListener('pointerup', onUp);
-      card.removeEventListener('pointercancel', onUp);
-      card.classList.remove('dragging');
-      if (!dragging) return;
-      card.dataset.justDragged = 'true';
-      setTimeout(() => { delete card.dataset.justDragged; }, 0);
-      config.boardPositions[col.taskId] = {
-        x: Math.round(parseFloat(card.style.left) || 16),
-        y: Math.round(parseFloat(card.style.top) || 16),
-      };
-      saveConfig();
-      updateBoardSurfaceSize();
-      updateRenderedBoardLinks();
-    };
-    card.addEventListener('pointermove', onMove);
-    card.addEventListener('pointerup', onUp);
-    card.addEventListener('pointercancel', onUp);
-  });
-}
-
-function clearBoardLinkDrag() {
-  document.body.classList.remove('linking-board');
-  boardNodesEl.querySelectorAll('.board-node.link-target').forEach((card) => card.classList.remove('link-target'));
-  const preview = boardEdgesEl.querySelector('.board-edge-preview');
-  if (preview) preview.remove();
-  boardLinkDrag = null;
-}
-
-function boardLinkTargetAt(clientX, clientY, sourceTaskId) {
-  const candidates = Array.from(boardNodesEl.querySelectorAll('.board-node'))
-    .filter((card) => card.dataset.taskId !== sourceTaskId)
-    .map((card) => {
-      const rect = card.getBoundingClientRect();
-      const inside = clientX >= rect.left - 10 && clientX <= rect.right + 10 &&
-        clientY >= rect.top - 10 && clientY <= rect.bottom + 10;
-      const dx = clientX - (rect.left + rect.width / 2);
-      const dy = clientY - (rect.top + rect.height / 2);
-      return { card, inside, distance: Math.hypot(dx, dy) };
-    })
-    .filter((candidate) => candidate.inside)
-    .sort((a, b) => a.distance - b.distance);
-  const card = candidates[0] && candidates[0].card;
-  return card ? {
-    card,
-    column: columns.find((col) => col.taskId === card.dataset.taskId),
-  } : null;
-}
-
-function attachBoardLinkDrag(port, source) {
-  port.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0) return;
-    event.stopPropagation();
-    event.preventDefault();
-    clearBoardLinkDrag();
-    const sourceCard = port.closest('.board-node');
-    const start = boardNodeGeometry(source.taskId);
-    if (!sourceCard || !start) return;
-    const preview = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    preview.setAttribute('class', 'board-edge-preview');
-    preview.setAttribute('marker-end', 'url(#boardArrowPreview)');
-    boardEdgesEl.appendChild(preview);
-    boardLinkDrag = { source, target: null, moved: false, preview, startClientX: event.clientX, startClientY: event.clientY };
-    document.body.classList.add('linking-board');
-    port.setPointerCapture(event.pointerId);
-
-    const onMove = (moveEvent) => {
-      if (!boardLinkDrag) return;
-      maybeAutoScrollBoard(moveEvent.clientX, moveEvent.clientY);
-      const point = boardCanvasPoint(moveEvent.clientX, moveEvent.clientY);
-      if (Math.hypot(moveEvent.clientX - boardLinkDrag.startClientX, moveEvent.clientY - boardLinkDrag.startClientY) > 4) {
-        boardLinkDrag.moved = true;
-      }
-      const hit = boardLinkTargetAt(moveEvent.clientX, moveEvent.clientY, source.taskId);
-      const targetCard = hit && hit.card;
-      const target = hit && hit.column;
-      boardNodesEl.querySelectorAll('.board-node.link-target').forEach((card) =>
-        card.classList.toggle('link-target', card === targetCard && !!target));
-      boardLinkDrag.target = target;
-      const from = boardNodeGeometry(source.taskId);
-      const targetGeometry = target ? boardNodeGeometry(target.taskId) : null;
-      if (from) {
-        const x1 = from.x + from.width;
-        const y1 = from.y + from.height / 2;
-        const x2 = targetGeometry ? targetGeometry.x : point.x;
-        const y2 = targetGeometry ? targetGeometry.y + targetGeometry.height / 2 : point.y;
-        const direction = x2 >= x1 ? 1 : -1;
-        const bend = Math.max(56, Math.abs(x2 - x1) / 2);
-        preview.setAttribute('d', `M ${x1} ${y1} C ${x1 + direction * bend} ${y1}, ${x2 - direction * bend} ${y2}, ${x2} ${y2}`);
-      }
-    };
-    const onUp = (upEvent) => {
-      port.removeEventListener('pointermove', onMove);
-      port.removeEventListener('pointerup', onUp);
-      port.removeEventListener('pointercancel', onUp);
-      const drag = boardLinkDrag;
-      const finalHit = drag && boardLinkTargetAt(upEvent.clientX, upEvent.clientY, source.taskId);
-      const target = (finalHit && finalHit.column) || (drag && drag.target);
-      const moved = drag && drag.moved;
-      clearBoardLinkDrag();
-      if (moved && target) {
-        port.dataset.suppressClick = 'true';
-        setTimeout(() => { delete port.dataset.suppressClick; }, 0);
-        openLinkDialog(null, source, target);
-      }
-    };
-    port.addEventListener('pointermove', onMove);
-    port.addEventListener('pointerup', onUp);
-    port.addEventListener('pointercancel', onUp);
-  });
-  port.addEventListener('click', (event) => {
-    event.stopPropagation();
-    if (port.dataset.suppressClick === 'true') {
-      delete port.dataset.suppressClick;
-      return;
-    }
-    startBoardConnect(source);
-  });
-}
-
-function renderBoardGraph() {
-  if (!boardSurfaceEl) return;
-  clearBoardLinkDrag();
-  const layout = BoardCore.applyBoardPositions(baseBoardLayout(), config.boardPositions);
-  const managedCount = columns.filter((c) => c.role !== 'manual').length;
-  const surfaceW = Math.max(layout.width, boardScrollerEl.clientWidth - 16, 720);
-  const surfaceH = Math.max(layout.height, boardViewEl.clientHeight - 132, 520);
-  boardSurfaceEl.style.width = surfaceW + 'px';
-  boardSurfaceEl.style.height = surfaceH + 'px';
-  boardEdgesEl.setAttribute('width', String(surfaceW));
-  boardEdgesEl.setAttribute('height', String(surfaceH));
-  boardEdgesEl.setAttribute('viewBox', `0 0 ${surfaceW} ${surfaceH}`);
-  boardEdgesEl.innerHTML = '<defs>' +
-    '<marker id="boardArrowDelegation" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
-    '<marker id="boardArrowDependency" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
-    '<marker id="boardArrowHandoff" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
-    '<marker id="boardArrowPreview" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path></marker>' +
-    '</defs>';
-  boardNodesEl.innerHTML = '';
-  boardEmptyEl.hidden = managedCount > 0;
-
-  const nodeByTaskId = new Map(layout.nodes.map((node) => [node.taskId, node]));
-  const stateByTaskId = Object.fromEntries(columns.map((col) => [col.taskId, boardStateFor(col)]));
-  allBoardLinks().forEach((link) => {
-    const from = nodeByTaskId.get(link.fromTaskId);
-    const to = nodeByTaskId.get(link.toTaskId);
-    if (!from || !to) return;
-    const geometry = boardEdgeGeometry(from, to);
-    const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    pathEl.setAttribute('class', `board-edge ${link.type}`);
-    pathEl.dataset.linkId = link.id;
-    pathEl.setAttribute('d', geometry.path);
-    const marker = link.type === 'delegation' ? 'Delegation' : link.type === 'handoff' ? 'Handoff' : 'Dependency';
-    pathEl.setAttribute('marker-end', `url(#boardArrow${marker})`);
-    boardEdgesEl.appendChild(pathEl);
-    const chip = document.createElement('button');
-    const linkState = BoardCore.linkState(link, columns, stateByTaskId);
-    chip.className = `board-link-chip ${link.type}${linkState === 'Blocked' ? ' blocked' : ''}`;
-    chip.dataset.linkId = link.id;
-    chip.dataset.linkState = linkState;
-    chip.style.left = `${(geometry.x1 + geometry.x2) / 2}px`;
-    chip.style.top = `${(geometry.y1 + geometry.y2) / 2}px`;
-    chip.textContent = `${BoardCore.linkLabel(link.type)} · ${linkState}`;
-    chip.title = 'Edit or remove this relationship';
-    chip.onclick = (event) => { event.stopPropagation(); openLinkDialog(link); };
-    boardNodesEl.appendChild(chip);
-  });
-
-  layout.nodes.forEach((node) => {
-    const col = columns.find((candidate) => candidate.id === node.id);
-    if (!col) return;
-    const card = document.createElement('article');
-    card.className = `board-node ${col.role || 'manual'}${selectedBoardId === col.id ? ' selected' : ''}`;
-    card.dataset.columnId = col.id;
-    card.dataset.taskId = col.taskId;
-    card.dataset.state = boardStateFor(col);
-    card.style.left = node.x + 'px';
-    card.style.top = node.y + 'px';
-    card.style.width = node.width + 'px';
-    card.style.height = node.height + 'px';
-
-    const top = document.createElement('div');
-    top.className = 'board-node-top';
-    const role = document.createElement('span');
-    role.className = 'board-role';
-    role.textContent = col.role === 'conductor' ? 'Conductor' : col.role === 'worker' ? 'Worker' : 'Manual';
-    const agent = document.createElement('span');
-    agent.className = 'board-agent';
-    agent.textContent = col.agentType || BoardCore.inferAgentType(col.cmd);
-    top.append(role, agent);
-
-    const title = document.createElement('h2');
-    title.className = 'board-title-bar';
-    title.textContent = columnLabel(col);
-    title.tabIndex = 0;
-    title.title = 'Double-click, press Enter, or press F2 to rename';
-    title.addEventListener('dblclick', (event) => { event.stopPropagation(); beginBoardRename(title, col); });
-    title.addEventListener('keydown', (event) => {
-      if ((event.key === 'Enter' || event.key === 'F2') && title.contentEditable !== 'true') {
-        event.preventDefault();
-        event.stopPropagation();
-        beginBoardRename(title, col);
-      }
-    });
-    const status = document.createElement('div');
-    status.className = 'board-node-status';
-    const statusDot = document.createElement('i');
-    statusDot.className = 'legend-dot';
-    const statusText = document.createElement('span');
-    statusText.className = 'board-status-text';
-    status.append(statusDot, statusText);
-    const relation = document.createElement('p');
-    relation.className = 'board-relation';
-    relation.textContent = columnRelationshipLabel(col);
-    const progress = document.createElement('p');
-    progress.className = 'board-progress';
-    progress.textContent = col.result || col.progress || '';
-    progress.title = progress.textContent;
-    const actions = document.createElement('div');
-    actions.className = 'board-node-actions';
-    const inspect = document.createElement('button');
-    inspect.className = 'board-inspect';
-    inspect.textContent = 'Inspect here';
-    inspect.onclick = (event) => { event.stopPropagation(); selectBoardNode(col.id, true); };
-    actions.append(inspect);
-    const inPort = document.createElement('span');
-    inPort.className = 'board-port in';
-    inPort.setAttribute('aria-hidden', 'true');
-    const outPort = document.createElement('button');
-    outPort.className = 'board-port out';
-    outPort.type = 'button';
-    outPort.title = `Drag to link from ${columnLabel(col)}; click for keyboard connect mode`;
-    outPort.setAttribute('aria-label', `Connect from ${columnLabel(col)}`);
-    card.append(inPort, outPort, top, title, status, relation, progress, actions);
-    attachBoardNodeDrag(card, col);
-    attachBoardLinkDrag(outPort, col);
-    card.addEventListener('click', (event) => {
-      if (card.dataset.justDragged === 'true') {
-        delete card.dataset.justDragged;
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      if (event.target.closest('button') || event.target.closest('[contenteditable="true"]')) return;
-      if (connectSourceTaskId && connectSourceTaskId !== col.taskId) {
-        const source = columns.find((candidate) => candidate.taskId === connectSourceTaskId);
-        if (source) openLinkDialog(null, source, col);
-      } else {
-        selectBoardNode(col.id, true);
-      }
-    });
-    boardNodesEl.appendChild(card);
-  });
-  updateBoardSurfaceSize();
-  updateRenderedBoardLinks();
-  syncBoardState();
-  if (activeView === 'board' && boardCanvasMode() && columns.length) {
-    const selected = columns.find((col) => col.id === selectedBoardId) ||
-      columns.find((col) => col.role === 'conductor') || columns[0];
-    setTimeout(() => selectBoardNode(selected.id, false), 0);
-  }
-}
-
-function syncBoardState() {
-  if (!boardNodesEl) return;
-  boardNodesEl.querySelectorAll('.board-node').forEach((card) => {
-    const col = columns.find((candidate) => candidate.id === card.dataset.columnId);
-    if (!col) return;
-    const state = boardStateFor(col);
-    card.dataset.state = state;
-    const statusText = card.querySelector('.board-status-text');
-    if (statusText) statusText.textContent = boardStatusLabel(col, state);
-    const progress = card.querySelector('.board-progress');
-    const entry = terms.get(col.id);
-    const live = entry && entry.lastScreen ? lastActivityLine(entry.lastScreen) : '';
-    const text = col.result || col.progress || live;
-    if (progress && progress.textContent !== text) {
-      progress.textContent = text;
-      progress.title = text;
-    }
-  });
-  const selected = columns.find((col) => col.id === selectedBoardId);
-  if (selected) {
-    const state = boardStateFor(selected);
-    boardInspectorTitleEl.textContent = columnLabel(selected);
-    boardInspectorStateEl.textContent = `${boardStatusLabel(selected, state)}${selected.progress ? ` · ${selected.progress}` : ''}`;
-    boardInspectorStateEl.dataset.state = state;
-    boardInspectorSendTaskEl.hidden = selected.role === 'manual' || selected.taskCompleted || !selected.taskPrompt;
-    boardInspectorSendTaskEl.textContent = selected.initialPromptSent ? 'Resend task' : 'Send task';
-  }
-  const stateByTaskId = Object.fromEntries(columns.map((col) => [col.taskId, boardStateFor(col)]));
-  allBoardLinks().forEach((link) => {
-    const chip = boardNodesEl.querySelector(`.board-link-chip[data-link-id="${CSS.escape(link.id)}"]`);
-    if (!chip) return;
-    const state = BoardCore.linkState(link, columns, stateByTaskId);
-    chip.dataset.linkState = state;
-    chip.classList.toggle('blocked', state === 'Blocked');
-    chip.textContent = `${BoardCore.linkLabel(link.type)} · ${state}`;
-  });
 }
 
 function boardCliCommand() {
@@ -1758,7 +1184,6 @@ function queueInitialPrompt(col, delay) {
     col.initialPromptSent = true;
     col.progress = 'Task ready in managed shell';
     saveConfig();
-    syncBoardState();
     return;
   }
   const id = col.id;
@@ -1775,7 +1200,6 @@ function queueInitialPrompt(col, delay) {
     col.initialPromptSent = true;
     col.progress = 'Task assigned';
     saveConfig();
-    syncBoardState();
   }, 'Waiting for agent prompt', delay || 0);
 }
 
@@ -1807,13 +1231,11 @@ function whenTerminalReady(col, callback, waitingLabel, initialDelay) {
     if (col.progress !== nextProgress) {
       col.progress = nextProgress;
       saveConfig();
-      syncBoardState();
     }
     if (Date.now() - startedAt >= 120_000) {
       promptQueueIds.delete(queueId);
-      col.progress = 'Task delivery paused: use Send task after the agent is ready';
+      col.progress = 'Task delivery paused: the agent was not ready within two minutes';
       saveConfig();
-      syncBoardState();
       return;
     }
     setTimeout(check, 500);
@@ -1872,8 +1294,6 @@ deckEl.addEventListener('scroll', () => {
 function render(isFresh = false) {
   SidePane.restoreTerminal();
   ChatUI.onRender();
-  restoreBoardTerminal();
-  boardTerminalHostEl.innerHTML = '';
   // tear down existing terminals; pty processes keep running until killed.
   // Run each entry's disposers too — the deckEl scroll listener and the
   // ResizeObserver live outside the column's DOM and would leak per column
@@ -1888,7 +1308,6 @@ function render(isFresh = false) {
   columns.forEach((col) => deckEl.appendChild(buildColumn(col, isFresh)));
   updateColumnStyles();
   renderColNav();
-  renderBoardGraph();
 }
 
 // "Fit window" divides the deck area (screen minus the sidebar) into fitCols()
@@ -2392,12 +1811,11 @@ function buildColumn(col, isFresh) {
     // Re-fit on any size change of this column (drag-resize, window resize, fit toggle).
     let raf;
     const ro = new ResizeObserver(() => {
-      if (activeView === 'board' && termEl.parentElement !== boardTerminalHostEl) return;
+      if (activeView === 'board') return;
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         try {
           fit.fit();
-          if (activeView === 'board' && term.rows > 0) term.refresh(0, term.rows - 1);
         } catch (_) {}
       });
     });
@@ -2835,7 +2253,6 @@ function removeCol(col) {
   if (col.subCaptain) window.MainSession?.releaseSubCrew?.(col, '关掉');
   saveConfig();
   renderColNav();
-  renderBoardGraph();
 }
 // Take a column off the deck: its terminal, pty and board relationships.
 // keepReplay saves the terminal's output first (archive) so a restore replays it.
@@ -2844,10 +2261,6 @@ function detachColumn(col, keepReplay) {
   const idx = columns.indexOf(col);
   // Its place in the deck the user sees: 队长's background sessions are in `columns` but not there.
   const deckIdx = deckColumns().indexOf(col);
-  if (selectedBoardId === col.id) {
-    restoreBoardTerminal();
-    selectedBoardId = null;
-  }
   if (SidePane.holdsTerminalOf(col.id)) SidePane.restoreTerminal();
   if (t) {
     (t.disposers || []).forEach((fn) => { try { fn(); } catch (_) {} });
@@ -2856,7 +2269,6 @@ function detachColumn(col, keepReplay) {
   window.deck.ptyKill(col.id, keepReplay);
   if (idx >= 0) columns.splice(idx, 1);
   config.links = (config.links || []).filter((link) => link.fromTaskId !== col.taskId && link.toTaskId !== col.taskId);
-  delete config.boardPositions[col.taskId];
   if (zoomedId === col.id) { zoomedId = null; updateColumnStyles(); fitAll(); }
   // Don't leave focusedId pointing at the removed column: every focusedId-based
   // shortcut (Cmd+W, Cmd+arrows, search, broadcast) would silently no-op until
@@ -2903,7 +2315,6 @@ function archiveColumn(col, opts) {
     try { window.MainSession?.settleArchivedWorktree?.(snapshot); } catch (_) {}
   }
   renderColNav();
-  renderBoardGraph();
   if (!(opts && opts.quiet)) showToast(`已归档「${columnLabel(col)}」，在左侧「已归档」里可以恢复`);
 }
 // quiet: 队长 bringing back a background session; your view stays as it is.
@@ -2939,7 +2350,6 @@ function insertColumn(col, isFresh) {
   updateColumnStyles();
   saveConfig();
   renderColNav();
-  renderBoardGraph();
 }
 // The terminal is created on the next frame; run fn once it exists.
 function whenMounted(col, fn, tries = 0) {
@@ -3124,12 +2534,10 @@ function nextTitle() {
 }
 // New column with no dialog: auto-numbered title, default (global) cwd, focused.
 function addAndFocusColumn(opts) {
-  const stayOnBoard = activeView === 'board';
   if (zoomedId) { zoomedId = null; updateColumnStyles(); } // new column must be visible
   Pages.hide();
   const col = addColumn({ title: nextTitle(), role: 'manual', folderId: (opts && opts.folderId) || null });
-  if (stayOnBoard) setTimeout(() => selectBoardNode(col.id, true), 100);
-  else whenMounted(col, () => jumpToColumn(col)); // wait for its terminal
+  whenMounted(col, () => jumpToColumn(col)); // wait for its terminal
   return col;
 }
 // A session opened by Schedule or 队长; background runs don't steal focus.
@@ -3193,8 +2601,6 @@ function restartWorker(col) {
 // opts.freshChat keeps the retired conversation under the old id.
 function respawnColumn(col, opts) {
   const t = terms.get(col.id);
-  const wasBoardSelected = selectedBoardId === col.id;
-  if (wasBoardSelected) restoreBoardTerminal();
   window.deck.ptyKill(col.id);
   if (SidePane.holdsTerminalOf(col.id)) SidePane.restoreTerminal();
   if (t) {
@@ -3209,7 +2615,6 @@ function respawnColumn(col, opts) {
   if (!(opts && opts.freshChat)) ChatUI.onColumnIdChanged(oldId, col.id);
   if (focusedId === oldId) focusedId = col.id;
   if (zoomedId === oldId) zoomedId = col.id; // stay zoomed across a respawn
-  if (wasBoardSelected) selectedBoardId = col.id;
   const fresh = buildColumn(col, true); // cwd/cmd just changed: start fresh, no auto-resume
   if (t) t.wrap.replaceWith(fresh);
   else {
@@ -3220,7 +2625,6 @@ function respawnColumn(col, opts) {
   saveConfig();
   updateColumnStyles();
   renderColNav();
-  renderBoardGraph();
   return col;
 }
 
@@ -3242,7 +2646,6 @@ function setColumnTitle(col, title) {
   const nav = navItems.get(col.id);
   applyNavTitle(nav && nav.label, label);
   saveConfig();
-  renderBoardGraph();
 }
 
 const colNavEl = document.getElementById('colNav');
@@ -3304,10 +2707,6 @@ function scrollColumnInDeck(wrap, center = false) {
 function jumpToColumn(col) {
   const t = terms.get(col.id);
   if (!t) return;
-  if (activeView === 'board' && boardCanvasMode()) {
-    selectBoardNode(col.id, true);
-    return;
-  }
   if (activeView === 'board') showView('terminals');
   Pages.hide(); // a Schedule/Artifacts page would cover the column
   TaskBoardUI.close(); // so would the task board
@@ -3434,237 +2833,6 @@ document.getElementById('dlgSave').onclick = () => {
   });
 });
 
-// ---- User-created board relationships ----
-const connectNoticeEl = document.getElementById('boardConnectNotice');
-const connectNoticeTextEl = document.getElementById('boardConnectNoticeText');
-const linkDlg = document.getElementById('boardLinkDialog');
-const linkDlgTitle = document.getElementById('boardLinkDialogTitle');
-const linkSourceLabel = document.getElementById('linkSourceLabel');
-const linkTargetLabel = document.getElementById('linkTargetLabel');
-const linkTypeInput = document.getElementById('linkTypeInput');
-const linkMessageInput = document.getElementById('linkMessageInput');
-const linkGrantControl = document.getElementById('linkGrantControl');
-const linkControlOption = document.getElementById('linkControlOption');
-const linkRemoveBtn = document.getElementById('linkRemove');
-let editingBoardLink = null;
-let linkDialogSource = null;
-let linkDialogTarget = null;
-
-function cancelBoardConnect() {
-  connectSourceTaskId = null;
-  connectNoticeEl.hidden = true;
-  boardNodesEl.querySelectorAll('.board-node').forEach((card) => card.classList.remove('connect-source'));
-}
-document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape') return;
-  if (boardLinkDrag) clearBoardLinkDrag();
-  if (connectSourceTaskId) cancelBoardConnect();
-});
-
-function startBoardConnect(col) {
-  connectSourceTaskId = col.taskId;
-  connectNoticeTextEl.textContent = `Linking from “${columnLabel(col)}”. Click a target card, or cancel.`;
-  connectNoticeEl.hidden = false;
-  boardNodesEl.querySelectorAll('.board-node').forEach((card) => {
-    const candidate = columns.find((item) => item.id === card.dataset.columnId);
-    card.classList.toggle('connect-source', candidate && candidate.taskId === col.taskId);
-  });
-}
-
-function updateLinkControlOption() {
-  const delegation = linkTypeInput.value === 'delegation';
-  linkControlOption.hidden = !delegation;
-  if (!delegation) linkGrantControl.checked = false;
-  const canGrant = linkDialogSource && linkDialogSource.role !== 'manual';
-  linkGrantControl.disabled = !canGrant;
-  if (delegation && !canGrant) {
-    linkControlOption.title = 'Only an existing managed conductor/worker can receive control capability.';
-  } else {
-    linkControlOption.title = '';
-  }
-}
-
-function openLinkDialog(link, source, target) {
-  editingBoardLink = link ? { ...link } : null;
-  linkDialogSource = source || columns.find((col) => col.taskId === link.fromTaskId);
-  linkDialogTarget = target || columns.find((col) => col.taskId === link.toTaskId);
-  if (!linkDialogSource || !linkDialogTarget || linkDialogSource === linkDialogTarget) {
-    showToast('Choose two different terminals to connect.');
-    return;
-  }
-  linkDlgTitle.textContent = link ? 'Edit relationship' : 'Connect terminals';
-  linkSourceLabel.textContent = columnLabel(linkDialogSource);
-  linkTargetLabel.textContent = columnLabel(linkDialogTarget);
-  linkTypeInput.value = (link && link.type) || (linkDialogSource.role === 'manual' ? 'handoff' : 'delegation');
-  linkMessageInput.value = (link && link.message) || '';
-  linkGrantControl.checked = !!(link && link.grantedControl);
-  linkRemoveBtn.hidden = !link;
-  updateLinkControlOption();
-  cancelBoardConnect();
-  linkDlg.showModal();
-  setTimeout(() => linkTypeInput.focus(), 30);
-}
-
-function sendExplicitBoardMessage(target, message, delay) {
-  const text = BoardCore.cleanText(message, 12000);
-  if (!text) return;
-  whenTerminalReady(target, () => {
-    const entry = terms.get(target.id);
-    if (!entry || !entry.alive) {
-      showToast(`Relationship saved, but “${columnLabel(target)}” is not available for input.`);
-      return;
-    }
-    entry.term.paste(text);
-    setTimeout(() => window.deck.ptyInput(target.id, '\r'), 40);
-    ChatUI.noteSent(target, text);
-  }, 'Waiting to deliver relationship message', delay || 0);
-}
-
-function hasActiveTerminal(targets) {
-  return targets.some((target) => {
-    const entry = terms.get(target.id);
-    return entry && entry.alive && (entry.state === 'working' || entry.state === 'input');
-  });
-}
-
-function revokeRelationshipControl(source, target) {
-  if (!source || !target) return false;
-  if (target.role === 'worker' && target.parentTaskId === source.taskId) {
-    const subtree = managedSubtree(target, true);
-    if (hasActiveTerminal(subtree) &&
-        !confirm('Revoking control restarts this managed terminal and releases its descendants as independent terminals. Continue?')) {
-      return false;
-    }
-    releaseManagedSubtree(target, true, `Control from "${columnLabel(source)}" was revoked.`);
-    return true;
-  }
-  return false;
-}
-
-function grantRelationshipControl(source, target, message) {
-  const grantError = BoardCore.controlGrantError(columns, source, target, MAX_TASK_DEPTH);
-  if (grantError) throw new Error(grantError);
-  const alreadyGranted = target.role === 'worker' && target.parentTaskId === source.taskId;
-  if (!alreadyGranted && hasActiveTerminal([target]) &&
-      !confirm('Granting control restarts this terminal with a managed capability. Continue?')) {
-    return false;
-  }
-  if (!alreadyGranted) {
-    cancelManagedRequests(target, `Terminal was reassigned to "${columnLabel(source)}".`);
-    config.links = (config.links || []).map((link) =>
-      link.toTaskId === target.taskId && link.grantedControl ? { ...link, grantedControl: false } : link);
-  }
-  target.role = 'worker';
-  target.parentTaskId = source.taskId;
-  target.relationship = `Explicitly delegated by ${columnLabel(source)}`;
-  target.taskTitle = target.taskTitle || target.title;
-  target.taskPrompt = BoardCore.cleanText(message, 20000) ||
-    `Continue the work in this terminal under conductor "${columnLabel(source)}".`;
-  target.requestId = null;
-  target.waitRequestIds = [];
-  target.createdByRequestId = null;
-  target.taskCompleted = false;
-  // First grant always delivers the complete managed protocol after the real
-  // agent prompt is ready. No terminal history or hidden context is copied.
-  if (!alreadyGranted) target.initialPromptSent = false;
-  if (!alreadyGranted) respawnColumn(target);
-  return !alreadyGranted;
-}
-
-document.getElementById('boardConnectCancel').onclick = cancelBoardConnect;
-linkTypeInput.onchange = updateLinkControlOption;
-document.getElementById('linkCancel').onclick = () => { linkDlg.close(); editingBoardLink = null; };
-document.getElementById('linkUseSourceResult').onclick = () => {
-  if (!linkDialogSource) return;
-  linkMessageInput.value = linkDialogSource.result || linkDialogSource.progress || '';
-  linkMessageInput.focus();
-};
-document.getElementById('linkSave').onclick = () => {
-  if (!linkDialogSource || !linkDialogTarget) return;
-  try {
-    const type = linkTypeInput.value;
-    const message = BoardCore.cleanText(linkMessageInput.value, 12000);
-    const grant = type === 'delegation' && linkGrantControl.checked;
-    const old = editingBoardLink;
-    const existing = (config.links || []).find((candidate) =>
-      candidate.fromTaskId === linkDialogSource.taskId &&
-      candidate.toTaskId === linkDialogTarget.taskId &&
-      candidate.type === (old ? old.type : type));
-    let restarted = false;
-    if (!grant && (type === 'delegation' || (old && old.grantedControl)) &&
-        linkDialogTarget.parentTaskId === linkDialogSource.taskId) {
-      const revoked = revokeRelationshipControl(linkDialogSource, linkDialogTarget);
-      if (!revoked && linkDialogTarget.parentTaskId === linkDialogSource.taskId) return;
-      restarted = revoked;
-    } else if (grant) {
-      restarted = grantRelationshipControl(linkDialogSource, linkDialogTarget, message);
-      if (!restarted && !(linkDialogTarget.role === 'worker' &&
-          linkDialogTarget.parentTaskId === linkDialogSource.taskId)) return;
-    }
-    const normalized = BoardCore.normalizeLink({
-      id: old && !old.synthetic ? old.id : `link-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
-      fromTaskId: linkDialogSource.taskId,
-      toTaskId: linkDialogTarget.taskId,
-      type,
-      message,
-      grantedControl: grant,
-      createdAt: old && old.createdAt,
-    });
-    const duplicateIndex = (config.links || []).findIndex((candidate) =>
-      candidate.id === normalized.id ||
-      (!old && candidate.fromTaskId === normalized.fromTaskId &&
-       candidate.toTaskId === normalized.toTaskId && candidate.type === normalized.type));
-    if (duplicateIndex >= 0) config.links[duplicateIndex] = normalized;
-    else config.links.push(normalized);
-    saveConfig();
-    renderBoardGraph();
-    linkDlg.close();
-    // A first-time grant includes the exact message inside the managed task
-    // prompt. Existing grants and non-control relationships send only the
-    // user-selected message, never arbitrary terminal history.
-    if (message && !(grant && restarted) && (!old || old.message !== message || !existing)) {
-      sendExplicitBoardMessage(linkDialogTarget, message, 0);
-    }
-    showToast(`${BoardCore.linkLabel(type)} saved.`);
-  } catch (err) {
-    showToast(err && err.message ? err.message : String(err));
-  }
-};
-linkRemoveBtn.onclick = () => {
-  if (!editingBoardLink || !linkDialogSource || !linkDialogTarget) return;
-  if (editingBoardLink.grantedControl &&
-      linkDialogTarget.parentTaskId === linkDialogSource.taskId &&
-      !revokeRelationshipControl(linkDialogSource, linkDialogTarget)) return;
-  config.links = (config.links || []).filter((link) => link.id !== editingBoardLink.id);
-  if (editingBoardLink.synthetic && linkDialogTarget.parentTaskId === linkDialogSource.taskId) {
-    linkDialogTarget.parentTaskId = null;
-    linkDialogTarget.relationship = linkDialogTarget.role === 'manual' ? 'Independent manual terminal' : 'Unlinked managed task';
-  }
-  saveConfig();
-  renderBoardGraph();
-  linkDlg.close();
-  showToast('Relationship removed.');
-};
-
-document.getElementById('boardInspectorOpenPage').onclick = () => {
-  if (selectedBoardId) inspectColumn(selectedBoardId);
-};
-document.getElementById('boardInspectorRename').onclick = () => {
-  const col = columns.find((candidate) => candidate.id === selectedBoardId);
-  if (!col) return;
-  const value = prompt('Terminal display title', columnLabel(col));
-  if (value !== null) setColumnDisplayTitle(col, value);
-};
-boardInspectorSendTaskEl.onclick = () => {
-  const col = columns.find((candidate) => candidate.id === selectedBoardId);
-  if (!col || col.role === 'manual' || col.taskCompleted || !col.taskPrompt) return;
-  col.initialPromptSent = false;
-  col.progress = 'Task delivery requested';
-  saveConfig();
-  syncBoardState();
-  queueInitialPrompt(col, 0);
-};
-
 // ---- Conductor Board control plane ----
 // The main process authenticates each command with a per-PTY capability token.
 // Renderer ownership checks are the second boundary: a managed terminal can
@@ -3765,7 +2933,6 @@ function finishManagedTask(col, result) {
     respondBoard(requestId, { done: true, result: col.result, childId: col.taskId }));
   col.waitRequestIds = [];
   saveConfig();
-  syncBoardState();
 }
 
 function createManagedChild(message, caller) {
@@ -3804,7 +2971,6 @@ function createManagedChild(message, caller) {
     grantedControl: true,
   }));
   saveConfig();
-  renderBoardGraph();
   if (message.action === 'create-child') {
     respondBoard(message.id, { done: false, childId: child.taskId });
   } else {
@@ -3954,7 +3120,6 @@ window.deck.onBoardCommand(async (message) => {
     if (message.action === 'progress') {
       caller.progress = BoardCore.cleanText(message.message, 1000);
       saveConfig();
-      syncBoardState();
       respondBoard(message.id, { done: true, result: 'Progress recorded.' });
       return;
     }
@@ -4002,54 +3167,7 @@ window.deck.onBoardCommand(async (message) => {
 });
 window.deck.boardReady();
 
-// ---- Assign top-level conductor task dialog ----
-const taskDlg = document.getElementById('taskDialog');
-const taskTitleInput = document.getElementById('taskTitleInput');
-const taskPromptInput = document.getElementById('taskPromptInput');
-const taskAgentInput = document.getElementById('taskAgentInput');
-const taskCwdInput = document.getElementById('taskCwdInput');
-
-function openTaskDialog() {
-  taskTitleInput.value = '';
-  taskPromptInput.value = '';
-  taskCwdInput.value = '';
-  taskDlg.showModal();
-  setTimeout(() => taskTitleInput.focus(), 40);
-}
-
 document.getElementById('boardToTerminals').onclick = () => showView('terminals');
-document.getElementById('boardAutoArrange').onclick = autoArrangeBoard;
-document.getElementById('boardNewTerminal').onclick = () => addAndFocusColumn();
-document.getElementById('boardNewTask').onclick = openTaskDialog;
-document.getElementById('taskCancel').onclick = () => taskDlg.close();
-document.getElementById('taskCreate').onclick = () => {
-  const title = BoardCore.cleanText(taskTitleInput.value, 200);
-  const taskPrompt = BoardCore.cleanText(taskPromptInput.value, 20000);
-  if (!title || !taskPrompt) {
-    showToast('Add a task title and instructions.');
-    return;
-  }
-  const cmd = BoardCore.commandForAgent(taskAgentInput.value);
-  const col = addColumn({
-    title,
-    taskTitle: title,
-    taskPrompt,
-    role: 'conductor',
-    relationship: 'Top-level task',
-    agentType: BoardCore.inferAgentType(cmd),
-    cmd,
-    cwd: BoardCore.cleanText(taskCwdInput.value, 1000),
-    progress: 'Task assigned',
-    initialPromptSent: false,
-    manualTitle: true,
-  });
-  taskDlg.close();
-  if (activeView === 'board') {
-    renderBoardGraph();
-    setTimeout(() => selectBoardNode(col.id, true), 100);
-  }
-  else setTimeout(() => jumpToColumn(col), 100);
-};
 
 // ---- Boot ----
 // The search/broadcast bars use the app's SVG icon set (the raw Unicode glyphs
@@ -4216,8 +3334,7 @@ battery.every('quotaCache', () => readQuotaCache().catch(() => {}));
 syncChromeState();
 window.addEventListener('resize', () => {
   applyNavWidth();
-  if (activeView === 'board') renderBoardGraph();
-  else { updateColumnStyles(); fitAll(); }
+  if (activeView !== 'board') { updateColumnStyles(); fitAll(); }
 });
 // A file dropped anywhere but a terminal would otherwise make the window
 // navigate to file://… — swallow those so the app never reloads.
@@ -4780,7 +3897,6 @@ battery.every('statusTick', () => {
   syncNav(); // mirror status dots + active highlight into the sidebar
   renderQuotaBar();
   Sidebar.refreshTimes();
-  syncBoardState();
   CrewMap.refresh();
 
   // Dock badge: how many agents are blocked waiting on the human.
@@ -4797,12 +3913,9 @@ function focusColumnByIndex(idx) {
   const col = shown[Math.max(0, Math.min(idx, shown.length - 1))];
   if (!col) return;
   TaskBoardUI.close();
-  if (activeView === 'board') {
-    selectBoardNode(col.id, true);
-    return;
-  }
   const t = terms.get(col.id);
   if (!t) return;
+  if (activeView === 'board') showView('terminals');
   Pages.hide();
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
   focusColumnInput(col.id); focusedId = col.id; scrollColumnInDeck(t.wrap); syncNav();
@@ -4922,8 +4035,7 @@ const SEARCH_DECOR = {
 function positionSearchBar() {
   const t = terms.get(searchColId);
   if (!t) return;
-  const anchor = activeView === 'board' && t.el.parentElement === boardTerminalHostEl ? t.el : t.wrap;
-  const r = anchor.getBoundingClientRect();
+  const r = t.wrap.getBoundingClientRect();
   searchBar.style.top = Math.round(r.top + 8) + 'px';
   searchBar.style.left = Math.round(Math.max(8, r.right - 312)) + 'px';
 }
@@ -4968,8 +4080,7 @@ document.getElementById('searchNext').onclick = () => doSearch(1);
 document.getElementById('searchPrev').onclick = () => doSearch(-1);
 document.getElementById('searchClose').onclick = () => closeSearch();
 
-// The board view opens on the 终端架构图; the old free canvas is its second tab.
-function boardCanvasMode() { return CrewMap.mode() === 'canvas'; }
+// The board view is 队伍 (the crew map).
 const crewMapHost = {
   config, terms, columnLabel, findColumn: (id) => columns.find((c) => c.id === id) || (config.archived || []).find((a) => a.id === id),
   columns: () => columns,
@@ -4982,8 +4093,6 @@ const crewMapHost = {
   renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', ClaudeSeats.described(config.claudeSeats)),
   visible: () => activeView === 'board',
   save: saveConfig,
-  enterCanvas: () => { if (activeView === 'board') renderBoardGraph(); },
-  leaveCanvas: () => restoreBoardTerminal(),
   // a node opens its real column; an archived one is restored first
   open: (node) => {
     if (node.kind === 'waiting') return;
@@ -4996,9 +4105,9 @@ const crewMapHost = {
 };
 // init draws the map for the first time. A throw there (2.0.2: an empty map on the hidden board view) must not stop
 // this script before 任务看板, its tabs and the saved view below are set up.
-try { CrewMap.init(crewMapHost); } catch (error) { console.error('终端架构图首次绘制失败：', error); }
+try { CrewMap.init(crewMapHost); } catch (error) { console.error('队伍首次绘制失败：', error); }
 // 任务看板 covers whichever view is showing; opening it hides any page. The
-// crew map's 架构图 / 自由画布 / 任务看板 tabs and the board's own tabs switch
+// crew map's 队伍 / 任务看板 / Token 用量 tabs and the board's own tabs switch
 // between the two: the map shows the sessions running now, the board every task.
 function openTaskSession(id) {
   let col = columns.find((c) => c.id === id);
@@ -5025,10 +4134,9 @@ TaskBoardUI.init({
   copy: (text) => window.deck.clipboardWrite(text),
   renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', ClaudeSeats.described(config.claudeSeats)),
   openSession: openTaskSession,
-  showBoard: (mode) => {
+  showBoard: () => {
     TaskBoardUI.close();
     if (activeView !== 'board') showView('board');
-    if (CrewMap.mode() !== mode) CrewMap.setMode(mode);
   },
   onToggle: (isOpen) => {
     if (isOpen) Pages.hide();

@@ -58,7 +58,6 @@ const status = (id) => page.locator(`.cm-node[data-node-id="${id}"]`).getAttribu
 test('the board opens on the map: 队长 on top, a line to each session, review links, archived folded', async () => {
   await page.evaluate(() => showView('board'));
   await expect(page.locator('#crewMap')).toBeVisible();
-  await expect(page.locator('.board-workspace')).toBeHidden();
   await expect(page.locator('.cm-node.kind-captain')).toHaveCount(1);
   await expect(page.locator('.cm-node.kind-worker')).toHaveCount(4);
   await expect(page.locator('.cm-edges .cm-edge.dispatch')).toHaveCount(4);
@@ -119,13 +118,15 @@ test('a canvas: cards drag and stay put inside their own frame, the view pans an
   expect(await page.evaluate(() => config.crewMap.positions)).toEqual({});
 });
 
-test('a node opens its real column; the old canvas stays one click away', async () => {
+test('a node opens its real column; the board has only 队伍 / 任务看板 / Token 用量', async () => {
   await page.locator('.cm-node[data-node-id="c2002"]').click();
   await expect.poll(() => page.evaluate(() => [activeView, focusedId])).toEqual(['terminals', 'c2002']);
   await page.evaluate(() => showView('board'));
-  await page.locator('.board-mode button[data-mode="canvas"]').click();
-  await expect(page.locator('.board-workspace')).toBeVisible();
-  await expect(page.locator('#crewMap')).toBeHidden();
-  await page.locator('.board-mode button[data-mode="crew"]').click();
+  await expect(page.locator('#boardView .board-toolbar h1')).toHaveText('队伍');
+  await expect(page.locator('#boardView .board-mode button')).toHaveText(['队伍', '任务看板', 'Token 用量']);
+  await expect(page.locator('#boardView .board-mode button.active')).toHaveText('队伍');
+  await page.locator('#boardTasksTab').click();
+  await expect(page.locator('#taskBoardView .board-mode button')).toHaveText(['队伍', '任务看板', 'Token 用量']);
+  await page.locator('#taskBoardView .board-mode button[data-view="crew"]').click();
   await expect(page.locator('#crewMap')).toBeVisible();
 });

@@ -1,18 +1,23 @@
 # Conductor Board
 
-AgentDeck's Conductor Board is a live orchestration workspace built on the
-existing column and `node-pty` session model. Board nodes are not mocks. The
-selected node moves its existing xterm element into the board inspector, so the
-graph and the full interactive terminal stay visible together.
+AgentDeck's board view is built on the existing column and `node-pty` session
+model. It has one page, **队伍** (called 终端架构图 / 架构图 before 2.0.5); its tab
+row also switches to **任务看板** and **Token 用量**. Nothing on it is a mock:
+clicking a card opens that real column.
 
-## 终端架构图 (default tab)
+The 自由画布 (free canvas) tab, with its draggable task cards, link cables,
+terminal inspector, **Auto arrange**, **New terminal** and **Assign conductor
+task**, was removed in 2.0.5. A profile last left on it opens on 队伍. What it had
+saved stays in `config.json` (in the app's user-data directory) and is not shown:
+card positions under `boardPositions`, relationships under `links`.
 
-The board button (Cmd+Shift+B) opens on the **架构图** tab; the free canvas
-described below is the second tab (**自由画布**). The map is a read-only
+## 队伍
+
+The board button (Cmd+Shift+B) opens on **队伍**. The map is a read-only
 projection of 队长's ledger sources: `config.mainSession.tasks`, the live columns
 and `config.archived` (`crew-map-core.js` builds, lays out and routes it,
 `crew-map.js` draws it; no new IPC). Its own state is `config.crewMap`
-(`mode`, dragged card `positions`, project offsets `projectPositions`, pan/zoom
+(dragged card `positions`, project offsets `projectPositions`, pan/zoom
 `view`, `showReturn`, and `collapsedProjects`), checked on load. The entry is the
 leftmost top-bar icon, directly beside the sidebar collapse/expand icon.
 
@@ -66,11 +71,9 @@ leftmost top-bar icon, directly beside the sidebar collapse/expand icon.
 - **Manual**: an independent user terminal. It receives no board-control
   capability and cannot be controlled by a conductor.
 
-The `+` button and **New terminal** always create manual terminals. A manual
-terminal becomes managed only when the user explicitly creates a delegation
-relationship and checks the control-grant option. AgentDeck explains that this
-restarts the shell so the capability can be injected. Removing that link
-revokes control and restores the terminal to manual mode.
+The `+` button always creates manual terminals. Since 2.0.5 the app has no
+control to start a conductor task or to grant a terminal control; conductors and
+workers saved before then keep working with the commands below.
 
 ## Managed-terminal commands
 
@@ -98,46 +101,13 @@ cancellation to any waiting caller.
 
 AgentDeck waits for a recognized agent prompt before delivering managed task
 instructions and pauses at trust or permission prompts. If an agent takes
-longer than two minutes to become ready, the Board shows a visible paused state
-and the inspector offers **Send task** to retry. Raw shells keep the task on the
-Board instead of executing natural-language instructions as shell code.
-
-## User-created relationships
-
-Drag the blue output port on any node directly onto another node to create a
-directional, persisted relationship. The relationship dialog opens only after
-the cable is dropped, so the source and target are already selected. Clicking
-the output port remains as a keyboard-friendly fallback: click the destination
-card next.
-
-- **Delegation**: source assigns work to target. Control remains off unless the
-  user explicitly grants it.
-- **Dependency**: target waits on source. The edge reports **Blocked** until the
-  source is complete.
-- **Message / handoff**: a visible channel for an explicit task, result, or
-  progress message.
-
-Creating a link never merges contexts and never copies terminal history. Only
-the text entered in the relationship dialog is sent (a first-time control grant
-wraps that text in the documented managed-terminal protocol). Click an edge
-label to edit or remove the relationship. Control grants reject cycles, and a
-terminal has at most one controlling parent.
-
-## Canvas layout
-
-Every card can be dragged freely by its body. Its `{x, y}` canvas position is
-persisted by stable task ID and restored across renderer reloads and app
-restarts. Directional cables and relationship labels follow the card live while
-it moves. Newly created terminals get a collision-safe automatic position.
-
-**Auto arrange** restores a clean DAG layout at any time: conductors and workers
-are placed in dependency-depth lanes, while independent manual terminals remain
-in their own lane. Auto arrange writes those positions back to the same
-freeform model, so users can immediately continue adjusting the result.
+longer than two minutes to become ready, delivery pauses and the task's progress
+says so. Raw shells keep the task instead of executing natural-language
+instructions as shell code.
 
 ## Display titles
 
-Every node title is editable by double-click, Enter, or F2. The custom
-`displayTitle` is persisted and used in the board, terminal header, sidebar,
-inspector, notifications, and relationship dialogs. Internal column IDs,
-stable task IDs, and automatic titles remain unchanged.
+A session's title is editable from the sidebar (double-click or rename). The
+custom `displayTitle` is persisted and used in the terminal header, sidebar,
+队伍 and notifications. Internal column IDs, stable task IDs, and automatic
+titles remain unchanged.

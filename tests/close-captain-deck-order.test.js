@@ -27,16 +27,16 @@ function deck() {
   ].map((c) => ({ role: 'manual', taskId: 't-' + c.id, folderId: null, ...c })), folders);
   const terms = new Map(columns.map((c) => [c.id, { wrap: { remove() {} }, term: { dispose() {}, focus() {} }, disposers: [] }]));
   const context = vm.createContext({
-    columns, terms, focusedId: 'captain', peekId: null, zoomedId: null, selectedBoardId: null, activeView: 'terminals',
-    config: { links: [], boardPositions: {}, mainSession: { colId: 'captain' }, folders },
+    columns, terms, focusedId: 'captain', peekId: null, zoomedId: null, activeView: 'terminals',
+    config: { links: [], mainSession: { colId: 'captain' }, folders },
     SidebarCore, deckEl: { appendChild() {} },
     window: { deck: { ptyKill() {} } },
     confirm: () => true,
     SidePane: { holdsTerminalOf: () => false, restoreTerminal() {} },
     ChatUI: { onColumnRemoved() {}, isChatMode: () => false, setMode() {}, focusInput: () => false },
     TaskBoardUI: { close() {} }, Pages: { hide() {} },
-    restoreBoardTerminal() {}, updateColumnStyles() {}, fitAll() {}, syncNav() {}, scrollColumnInDeck() {}, focusColumnInput() {},
-    cancelManagedRequests() {}, releaseManagedSubtree() {}, saveConfig() {}, renderColNav() {}, renderBoardGraph() {}, isManagedDescendant: () => false,
+    updateColumnStyles() {}, fitAll() {}, syncNav() {}, scrollColumnInDeck() {}, focusColumnInput() {},
+    cancelManagedRequests() {}, releaseManagedSubtree() {}, saveConfig() {}, renderColNav() {}, isManagedDescendant: () => false,
     columnLabel: (col) => col.id,
   });
   vm.runInContext(['isBackstage', 'deckColumns', 'managedSubtree', 'removeCol', 'detachColumn', 'focusColumnByIndex', 'reflowDeck'].map(fn).join('\n'), context);

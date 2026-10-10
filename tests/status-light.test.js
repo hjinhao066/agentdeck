@@ -272,7 +272,7 @@ test('archive rechecks the live terminal and open turns instead of trusting a st
     userComposing: () => composing, ChatUI: { hasDraft: () => draft,
       turnsOf: () => open ? [{ kind: 'turn', done: false }] : [], onColumnArchived() {} },
     cancelManagedRequests() {}, releaseManagedSubtree() {}, detachColumn: () => detached++,
-    saveConfig() {}, renderColNav() {}, renderBoardGraph() {} });
+    saveConfig() {}, renderColNav() {} });
   vm.runInContext(source.slice(source.indexOf('const WORKING_RE'), source.indexOf('function setDot')) +
     source.slice(source.indexOf('function statusScreen'), source.indexOf('// Format elapsed ms')) +
     source.slice(source.indexOf('function archiveColumn'), source.indexOf('// quiet: 队长 bringing back')), ctx);
