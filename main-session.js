@@ -1289,7 +1289,7 @@
       return Bat() ? Bat().withTaskNote(joined, Bat().shared.active()) : joined;
     }, {
       cancelled: () => batch.cancelled || batch.items.every((i) => i.task.status === 'stopped' || i.task.status === 'failed'),
-      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, requireIdle: true, timeout: 30 * 60_000, keepWaiting: true,
+      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, requireIdle: true, timeout: supplement ? SUPPLEMENT_NOTICE : 30 * 60_000, keepWaiting: true,
       onSent: (turn) => {
         if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
         if (batch.cancelled || sentItems.every((i) => i.task.status === 'stopped' || i.task.status === 'failed')) return;
@@ -1316,12 +1316,26 @@
       },
       onWaiting: (reason) => {
         const task = batch.items.find((i) => i.task.status === 'queued')?.task;
-        const why = reason || '会话还没准备好接收指令';
-        if (task) { push(task, { summary: `补充指令等待超过 30 分钟，仍在排队：${why}`, source: 'queue' }); save(); }
+        if (!task) return;
+        const summary = supplement
+          ? `补充指令等了 ${SUPPLEMENT_NOTICE / 60_000} 分钟还没送到，仍在排队：${supplementWait(col, reason)}。它停下后会合并送达；急事用 tell --now。`
+          : `补充指令等待超过 30 分钟，仍在排队：${reason || '会话还没准备好接收指令'}`;
+        push(task, { summary, source: 'queue' }); save();
       },
       onDeferred: () => { batch.sending = false; },
     });
     return task;
+  }
+  // An addition waits for the worker's turn to end; after this long the Captain hears why, once.
+  const SUPPLEMENT_NOTICE = 5 * 60_000;
+  function supplementWait(col, reason) {
+    const entry = host.terms.get(col.id);
+    const why = reason || '会话还没准备好接收指令';
+    if (!(entry && (M.workingForSend(entry) || M.terminalActivity(entry.lastScreen, col.cmd) === 'working'))) return why;
+    const running = state().tasks.findLast((t) => t.colId === col.id && t.status === 'working' && t.startedAt);
+    if (!running) return why + '，队员这一轮还在跑';
+    const said = window.BoardCore.cleanText(running.progress, 200).replace(/\s+/g, ' ').trim();
+    return `${why}，队员这一轮已跑 ${Math.max(1, Math.round((Date.now() - running.startedAt) / 60_000))} 分钟${said ? `，最后进度：${said}` : ''}`;
   }
   function cancelSupplement(colId) {
     const batch = dispatches.get(colId);
@@ -1794,6 +1808,7 @@
     if (message.action === 'session-exit') {
       if (task.status === 'stopped' && task.receipt?.source === 'fallback') {
         task.status = 'working';
+        task.gen = s.gen; // closed under an earlier Captain: the exit receipt goes to this one
         dropReceipts(s, (p) => p.taskId === task.id && p.source === 'fallback');
       }
       if (!CLOSED.includes(task.status) || task.status === 'asking') {
@@ -2565,6 +2580,7 @@
         delete task.doneAt;
         delete task.processEnded;
         task.status = 'working'; task.endedAt = 0;
+        task.gen = s.gen; // a closed task keeps its old Captain's generation, and its receipt would be dropped
         dropReceipts(s, (p) => p.taskId === task.id && p.source === 'fallback');
         autoBoardEvent(task, 'started', '', 'resume-fallback-' + Date.now());
         update(task);
@@ -2578,6 +2594,7 @@
       if (task.status === 'stopped' && task.receipt?.source === 'fallback' &&
           (!entry.alive || entry.state === 'quota' || M.terminalActivity(entry.lastScreen, col?.cmd) === 'quota')) {
         task.status = 'working';
+        task.gen = s.gen;
         dropReceipts(s, (p) => p.taskId === task.id && p.source === 'fallback');
       }
       if (!['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(task.status)) continue;
@@ -2666,13 +2683,21 @@
       if (!task.processEnded && entry.alive && turn?.interrupted) { task.endedAt = 0; continue; }
       const ended = task.endedAt || (turn?.done && !turn.interrupted && entry.state === 'done' ? (task.endedAt = Date.now()) : 0);
       if (!ended || turn && !turn.done && !task.processEnded) continue;
+      // A command Claude started still running in the terminal's process tree (a Bash call waiting in the machine's
+      // E2E queue, a long test run, a background shell) means the turn is not over, however still the screen is;
+      // the three minutes count from when it is gone. No answer yet is no verdict; a listing that failed (null)
+      // leaves it to the screen.
+      const claude = /\bclaude\b/i.test(col?.cmd || '');
+      const work = claude && !task.processEnded && entry.alive && host.ptyBackgroundWork ? host.ptyBackgroundWork(col) : null;
+      if (work === true) { task.endedAt = 0; continue; }
       const anchor = entry.state === 'done' ? ended : Math.max(ended, entry.lastOutputAt || 0);
       if (Date.now() - anchor < STOP_QUIET) continue;
+      if (work === undefined) continue;
       // Last look before calling a Claude turn over: its full-screen rows as they are, one per row (the status
       // light reads them with soft wraps joined). A spinner or a scrolled-up view there means it is still at it.
       // On Windows a PowerShell prompt at the bottom means Claude has exited (or crashed): whatever it drew
       // above the prompt is history, as for the status light, and must not hold the task open.
-      if (/\bclaude\b/i.test(col?.cmd || '') && entry.term && host.dumpScreen && host.screenState) {
+      if (claude && entry.term && host.dumpScreen && host.screenState) {
         let rows = host.dumpScreen(entry.term, 40);
         if (host.platform === 'win32' && M.isWindowsShellPrompt(rows)) rows = M.windowsAgentOutput(rows);
         if (host.screenState(rows, { ...entry, state: 'working' }, col.cmd) === 'working') {
@@ -2680,7 +2705,9 @@
           continue;
         }
       }
-      settle(task, { summary: NO_RECEIPT, files: [], images: [], failed: '', explicit: false, source: 'fallback' });
+      // A progress is not a receipt, but the last one says why the worker stopped: it goes with the notice.
+      const said = window.BoardCore.cleanText(task.progress, 300).replace(/\s+/g, ' ').trim();
+      settle(task, { summary: NO_RECEIPT + (said ? `（最后进度：${said}）` : ''), files: [], images: [], failed: '', explicit: false, source: 'fallback' });
     }
   }
   function onTurnStarted(colId, turn) {
@@ -2826,6 +2853,11 @@
     if (!col) {
       const old = archivedCrew(message.to, isSubCaptain(caller) ? caller : null);
       if (old) {
+        // Its copy was reclaimed when it was archived (cwd now the main checkout): it is not brought back to work there.
+        const copy = old.worktree;
+        if (copy && (copy.removed === true || (copy.repo && old.cwd === copy.repo))) {
+          throw new Error(`「${host.columnLabel(old)}」的代码副本 ${copy.path || ''} 已在归档时回收，tell 不会把它恢复到主仓库 ${copy.repo || old.cwd}。请用 new --worktree ${copy.repo || old.cwd} 重新派这件活${copy.branch ? `（它原来的分支是 ${copy.branch}）` : ''}。`);
+        }
         // Back on its own seat or not at all: a seat that is gone or signed out restores nothing.
         const blocked = window.ClaudeSeatsCore.launchBlock(old, host.config, await Promise.resolve(window.deck.claudeSeats?.()).catch(() => []));
         if (blocked) throw new Error(`「${host.columnLabel(old)}」没有恢复：${blocked}，不会换到别的席位。请用户先登录这个席位（席位设置里有复制登录命令的图标）再 tell；急的话用 new --task-id … --seat 另一个已登录席位 改派。`);
@@ -2905,7 +2937,8 @@
       t.receipt = { summary: summary || (archive ? '队长已结束终端并归档。' : '队长已请求中断当前操作。'), files: [], images: [], failed: '', explicit: true, source: archive ? 'captain-archive' : 'captain-stop' };
       update(t);
     });
-    dropReceipts(s, (p) => p.colId === id);
+    // Automatic notices about this session go; the worker's own complete/ask stays unread for the Captain.
+    dropReceipts(s, (p) => p.colId === id && p.source !== 'command');
     if (col.executor === 'chatgpt-web') {
       try { await window.deck.chatgptWebCancel(id); }
       finally { if (entry) entry.webExecutorStopping = false; }

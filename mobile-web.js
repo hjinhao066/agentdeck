@@ -341,7 +341,9 @@ class MobileWebServer {
       await this.persist();
       if (!this.settings.enabled) return this.status();
       const server = http.createServer((req, res) => { this.handle(req, res).catch(() => { if (!res.headersSent) this.json(res, 500, { error: 'Local service unavailable.' }); else res.end(); }); });
-      server.requestTimeout = 10_000;
+      // A whole request may take 30 s: a phone on a weak uplink sends a shrunk image (up to about
+      // 1 MB) more slowly than that. Slow headers are still cut at 10 s.
+      server.requestTimeout = 30_000;
       server.headersTimeout = 10_000;
       await new Promise((resolve, reject) => {
         server.once('error', reject);

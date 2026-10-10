@@ -7,7 +7,8 @@ const path = require('path');
 async function scanProcesses({ platform = process.platform, execFileImpl = execFile } = {}) {
   const command = platform === 'win32' ? 'powershell.exe' : 'ps';
   const args = platform === 'win32'
-    ? ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath) | ConvertTo-Json -Compress"]
+    // UTF-8 out, or a Chinese folder in an ExecutablePath arrives as U+FFFD (Windows PowerShell 5.1 writes the OEM code page).
+    ? ['-NoProfile', '-NonInteractive', '-Command', "[Console]::OutputEncoding = [Text.Encoding]::UTF8; $ErrorActionPreference='Stop'; @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath) | ConvertTo-Json -Compress"]
     : ['-eo', 'pid=,ppid=,lstart=,comm='];
   // Never request process arguments or environment: either can hold credentials.
   const output = await new Promise((resolve, reject) => {

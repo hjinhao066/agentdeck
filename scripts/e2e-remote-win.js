@@ -50,6 +50,7 @@ const makeRunId = (sha, now = new Date()) =>
   `${now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${sha.slice(0, 7)}-${crypto.randomBytes(2).toString('hex')}`;
 
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const isAncestor = (commit, of) => { try { git('merge-base', '--is-ancestor', commit, of); return true; } catch { return false; } };
 const ssh = (host, command, options = {}) =>
   execFileSync('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', host, command], { encoding: 'utf8', ...options });
 const scp = (...args) => execFileSync('scp', ['-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', ...args], { stdio: ['ignore', 'inherit', 'inherit'] });
@@ -121,40 +122,52 @@ async function main(argv = process.argv.slice(2)) {
   // mkdir makes parents; errors for "already exists" are expected and ignored. (`if ... & ...` would skip the rest.)
   ssh(o.host, prepareCommand(winBase, runId));
 
-  // Ship the commit as a bundle (no GitHub login needed, unpushed commits work).
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-e2e-remote-'));
-  const tempRef = `refs/e2e-remote/${runId}`;
+  // From here on, whatever ends the run (a failed upload, Ctrl-C, SIGTERM from a command timeout,
+  // a closed terminal) stops ssh, brings back what there is and removes what this run made on Windows.
+  let child = null, stopped = false, code = 130, pulled = false;
+  const stop = () => { stopped = true; if (child) child.kill('SIGTERM'); };
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  for (const signal of signals) process.on(signal, stop);
   try {
-    git('update-ref', tempRef, sha);
-    const bundle = path.join(tmp, 'commit.bundle');
-    const known = knownBases(o.host);
-    const needBundle = !known.includes(sha); // Windows may already hold this exact commit
-    if (needBundle) git('bundle', 'create', bundle, tempRef, ...known.map((b) => `^${b}`));
-    const job = makeJob({ runId, sha, ref: tempRef, winBase, needBundle, specs: o.specs, playwrightArgs: o.playwrightArgs, install: o.install });
-    fs.writeFileSync(path.join(tmp, 'job.json'), JSON.stringify(job, null, 2));
-    for (const file of TOOLS) scp(path.join(__dirname, file), `${o.host}:${BASE}/inbox/${runId}/tools/${file}`);
-    const inbox = `${o.host}:${BASE}/inbox/${runId}`;
-    if (needBundle) scp(bundle, `${inbox}/commit.bundle`);
-    scp(path.join(tmp, 'job.json'), `${inbox}/job.json`);
+    // Ship the commit as a bundle (no GitHub login needed, unpushed commits work).
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-e2e-remote-'));
+    const tempRef = `refs/e2e-remote/${runId}`;
+    try {
+      git('update-ref', tempRef, sha);
+      const bundle = path.join(tmp, 'commit.bundle');
+      const known = knownBases(o.host);
+      // Windows already holds the commit when it is one of its tips or an ancestor of one (a release
+      // baseline, say): there is nothing to send, and git refuses to write an empty bundle.
+      const needBundle = !known.some((tip) => tip === sha || isAncestor(sha, tip));
+      if (needBundle) git('bundle', 'create', bundle, tempRef, ...known.map((b) => `^${b}`));
+      const job = makeJob({ runId, sha, ref: tempRef, winBase, needBundle, specs: o.specs, playwrightArgs: o.playwrightArgs, install: o.install });
+      fs.writeFileSync(path.join(tmp, 'job.json'), JSON.stringify(job, null, 2));
+      for (const file of TOOLS) scp(path.join(__dirname, file), `${o.host}:${BASE}/inbox/${runId}/tools/${file}`);
+      const inbox = `${o.host}:${BASE}/inbox/${runId}`;
+      if (needBundle) scp(bundle, `${inbox}/commit.bundle`);
+      scp(path.join(tmp, 'job.json'), `${inbox}/job.json`);
+    } finally {
+      try { git('update-ref', '-d', tempRef); } catch {}
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+
+    // Run it, streaming the Windows output here and into a local log.
+    if (!stopped) {
+      const log = fs.createWriteStream(path.join(out, 'console.log'));
+      code = await new Promise((resolve) => {
+        child = spawn('ssh', ['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', o.host, queueCommand(home, runId, o)], { stdio: ['ignore', 'pipe', 'pipe'] });
+        const tee = (stream, sink) => stream.on('data', (chunk) => { sink.write(chunk); log.write(chunk); });
+        tee(child.stdout, process.stdout); tee(child.stderr, process.stderr);
+        child.on('close', (c, signal) => resolve(c ?? (signal ? 130 : 1)));
+      });
+      log.end();
+      pulled = pull(o.host, runId, out);
+    }
   } finally {
-    try { git('update-ref', '-d', tempRef); } catch {}
-    fs.rmSync(tmp, { recursive: true, force: true });
+    for (const signal of signals) process.removeListener(signal, stop);
+    // Remove only what this run created on Windows (full path, validated run id).
+    try { ssh(o.host, removeRunCommand(winBase, runId)); } catch {}
   }
-
-  // Run it, streaming the Windows output here and into a local log.
-  const log = fs.createWriteStream(path.join(out, 'console.log'));
-  const code = await new Promise((resolve) => {
-    const child = spawn('ssh', ['-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', o.host, queueCommand(home, runId, o)], { stdio: ['ignore', 'pipe', 'pipe'] });
-    const tee = (stream, sink) => stream.on('data', (chunk) => { sink.write(chunk); log.write(chunk); });
-    tee(child.stdout, process.stdout); tee(child.stderr, process.stderr);
-    process.on('SIGINT', () => child.kill('SIGTERM'));
-    child.on('close', (c, signal) => resolve(c ?? (signal ? 130 : 1)));
-  });
-  log.end();
-
-  const pulled = pull(o.host, runId, out);
-  // Remove only what this run created on Windows (full path, validated run id).
-  try { ssh(o.host, removeRunCommand(winBase, runId)); } catch {}
   let summary = null;
   try { summary = JSON.parse(fs.readFileSync(path.join(out, 'summary.json'), 'utf8')); } catch {}
   say(`exit ${code}${summary ? `, playwright exit ${summary.exitCode}, ${summary.seconds ?? '?'} s` : ''}; results in ${out}${pulled ? '' : ' (incomplete)'}`);

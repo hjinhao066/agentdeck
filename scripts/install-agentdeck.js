@@ -146,7 +146,7 @@ async function install(options, ops = macOperations(options)) {
     backup = path.join(backupDir, 'AgentDeck.app');
     await ops.stop();
     ops.copy(options.appPath, backup); ops.verify(backup);
-    for (const item of ['config.json', 'chats', 'sessions', 'long-prompts', 'board-control']) {
+    for (const item of ['config.json', 'archived.json', 'chats', 'sessions', 'long-prompts', 'board-control']) {
       const from = path.join(options.data, item);
       if (fs.existsSync(from)) ops.copy(from, path.join(backupDir, 'userData', item));
     }
@@ -163,7 +163,7 @@ async function install(options, ops = macOperations(options)) {
         ops.verify(options.appPath);
         if (options['with-data']) {
           const dataBackup = path.join(options.backup, 'userData'); requireFile(dataBackup);
-          for (const item of ['config.json', 'chats', 'sessions', 'long-prompts', 'board-control']) {
+          for (const item of ['config.json', 'archived.json', 'chats', 'sessions', 'long-prompts', 'board-control']) {
             const from = path.join(dataBackup, item);
             if (fs.existsSync(from)) ops.copy(from, path.join(options.data, item));
           }

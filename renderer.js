@@ -317,11 +317,18 @@ function saveConfig() {
   config.columns = columns;
   if (!saveTimer) saveTimer = setTimeout(flushConfig, 150);
 }
+// The archive is written to its own file (archived.json, archive-recovery.js), and only when it
+// changed: it is most of the config, and most saves are about something else. It goes with the
+// first save of this page and whenever its text differs, an entry edited in place included.
+let savedArchive = null;
 function flushConfig() {
   clearTimeout(saveTimer);
   saveTimer = 0;
   config.columns = columns;
-  window.deck.saveConfig(config);
+  const { archived, ...rest } = config;
+  const text = JSON.stringify(archived || []);
+  window.deck.saveConfig(text === savedArchive ? rest : { ...rest, archivedText: text });
+  savedArchive = text;
 }
 window.addEventListener('pagehide', flushConfig);
 document.addEventListener('visibilitychange', () => { if (document.hidden && saveTimer) flushConfig(); });

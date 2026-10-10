@@ -140,7 +140,7 @@ function runChild(command, lease, runMs, graceMs = 10000) {
       cwd: process.cwd(), stdio: 'inherit', detached: process.platform !== 'win32',
       env: { ...process.env, AGENTDECK_E2E_QUEUE_HELD: '1', [TAG_VAR]: tag },
     });
-    lease.setChild(child.pid);
+    lease.setChild(child.pid, { deadline: Date.now() + runMs + graceMs });
     const run = { pid: child.pid, tag, seen: new Map() };
     // Remember descendants while the run goes on (they may leave before the run ends).
     const watch = setInterval(() => { try { runMembers(run); } catch {} }, 1000);

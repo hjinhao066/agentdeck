@@ -335,6 +335,8 @@ skipped.
 会话恢复干活时，自动生成的「已结束，未提交回执」提示会从回执栏及任务卡清除；真实命令回执保留。
 Codex 的状态行写着「Waiting for background terminal」（队员在 `sleep 300` 里等长任务）、「Waiting for agents」或「Compacting context」，或底栏有「N background terminal running」时，同样算还在干活：不发「已结束，未提交回执」，也不把会话标成已完成。队员真的干完、闲着超过三分钟没交回执，仍照常提醒。
 Claude 队员回合结束后还有后台 shell / Monitor 在跑时，输入框上方的状态行会写「✻ Baked for 1m · done 8:27 AM · 1 shell, 1 monitor still running」（窄列会折成两到五行，例如「✻ Churned for 3m 55s · done」「9:16 PM · 1 shell still」「running」，中间可夹「Update available!」），后台子 agent 在跑时这一行写「✻ Waiting for 1 background agent to finish」，输入框下方的自定义状态栏不带数字；这一行紧贴输入框时同样算还在干活，中间只隔着 Claude 画的一整个方框（例如反馈草稿框「Bug report drafted … 1 to review · 2 to send」，用户处理前一直挂着）也算紧贴，方框下面再有回复就是旧行（底栏的「· 1 shell ·」「N shell … still running」照旧认，窄列把底栏截成「· 1 she」这种半个词也认，至少要两个字母），不发「已结束，未提交回执」、不计自动归档。状态行折出来单独一行的「running」不是转圈，不会让会话一直显示在干活。任务结束、状态行不再带数字后重新计三分钟，仍不交回执照常提醒。
+
+Claude 一轮还在跑时，输入框下方底栏的最后一段是「esc to interrupt」，窄列会截成「· esc…」「· esc to i…」；干完时这一段换成「← for agents」或模式提示。屏幕上没有转圈行时（窄列在缩放后整屏重画，最新的工具输出紧贴输入框，Claude 可能几分钟不再画东西），这段底栏也算还在干活，不发「已结束，未提交回执」。只读输入框横线以下的底栏，回复正文里出现同样的字不算。屏幕什么都看不出时还要再看一眼进程：Claude 起的命令还在这个终端的进程树里跑（例如 Bash 调用正在全机 E2E 排队器里等、长测试、后台 shell，和自动归档用的是同一份进程清单），这一轮就没结束，三分钟从命令结束时重新算；清单还没读回来就先等，读失败才只看屏幕。
 这种「回合已结束、只剩后台 shell / Monitor」的队员，圆点照旧黄色、回执计时照旧等，但输入框是空闲的：队长的 `tell` 立即送达，不再排「待补充」干等（真正在干活、停在确认提示、额度等待时仍然等）。Claude Code 输入框里灰色的「下一步建议」是 dim 文字，不算草稿；用户自己手打的字（默认颜色）仍算草稿，`tell` 不会盖上去。队长开的 Claude 会话启动时带 `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0`（Claude Code 自带开关，对应设置项 `promptSuggestionEnabled`），不再显示这行建议；用户手开的终端和自己的 Claude 设置不动。
 睡眠或断网打断：会话停在提示符、屏幕写着「Your computer went to sleep mid-response」「Connection lost mid-response」「Can't reach the API server」（Claude），或「There was a network issue connecting to the server」「write: broken pipe」（agy）时，不算「已结束，未提交回执」，也不算已完成。程序等电脑醒来（系统睡眠/唤醒事件，或页面长时间没有轮询）并且网络在线后，再静置 15 秒，给它发一句简短的「接着做」（要求任务其实已做完就 complete）；之后每次间隔 30 秒、1 分钟、2 分钟、4 分钟，最多 4 次，睡眠期间和断网时一次都不发。会话重新干活并持续 1 分钟后这一轮清零，下一次睡眠重新计；每个任务累计最多 20 次。连续 4 次仍没恢复，向队长交一条「被睡眠或断网打断」异常回执（来源 sleep，不算验收不通过）。只有睡眠事件、屏幕上没有这些字样时（任务干到一半睡眠，醒来 10 分钟内回合结束且没回执），只发 1 次，仍无效就回到原来的三分钟规则。队长 stop、你自己按 Esc 中断、已经交过回执或已关闭的任务不会被续接；屏幕上引号、代码、diff 里引用这些英文不算。规则在 `sleep-resume-core.js`，会话侧在 `main-session.js` 的 `sleepResumeStep`。
 
@@ -607,6 +609,9 @@ again with the current provider, model and effort instructions.
   but release their work slot. A finished background session is archived after 10
   minutes with nothing new once the 队长 has its receipt (never one you have
   open); `tell` to it restores it first, and `ledger` lists those and the waiting work.
+  A `new --worktree` session whose copy was removed when it was archived is not
+  restored (its cwd would be the main checkout): `tell` says so and the 队长
+  dispatches the work again with `new --worktree`.
   Archiving ends the terminal, so a session that is working, waiting on an
   answer or has printed anything in the last minute is never archived, by the
   app or by a click, and nothing asks about it (a click on a busy one only
@@ -614,6 +619,9 @@ again with the current provider, model and effort instructions.
   `stop --id <session-id>` (Esc, keeps the terminal, cancels unsent supplements),
   or end and archive it with `archive --id <session-id>` even while busy, without
   a confirmation dialog. Both commands protect the Captain's own session.
+  They (and `tell --now`) withdraw that session's unread automatic notices
+  (a confirmation prompt, 已结束，未提交回执); a complete or ask the worker
+  already submitted stays for the 队长 to read.
   If a new session stops on a startup dialog before the task can go in (Cursor
   asks "Do you trust this workspace?" in a folder it has not seen), nothing is
   typed into the dialog; the 队长 is sent its text once and answers with
@@ -683,8 +691,11 @@ again with the current provider, model and effort instructions.
   does not connect them. Claude's existing listener channel is unchanged.
   An instruction added to a session that is still busy
   shows as 待补充 and goes in when the session frees up.
-  It does not expire while waiting: after 30 minutes the Captain receives a
-  single 仍在排队 reminder, and delivery continues waiting for an idle prompt.
+  It does not expire while waiting: after 5 minutes the Captain receives a
+  single reminder saying why (the worker's turn is still running, for how long,
+  with its last progress; or a confirmation prompt, a quota wait, a draft in its
+  box), and delivery continues waiting for an idle prompt. For something urgent
+  use `tell --now`.
   If the session exits or becomes unavailable, its failure card keeps the full
   unsent instruction. The receipt includes `read --id <task-id>` to retrieve it
   even after the worker has gone; unsent text is not in the worker's chat history.
@@ -713,9 +724,11 @@ again with the current provider, model and effort instructions.
   to the 队长 with only the prompt's last lines; it answers with `answer` when sure
   and asks you otherwise. A pause between tool calls, between two instructions or a silent
   start (Cursor can print nothing for a minute or two) is not a stop: a turn that
-  ended without a command receipt gets a three-minute grace period. Only a
-  finished, uninterrupted turn can trigger the
-  fallback: “已结束，未提交回执”, with no screen content or inferred files.
+  ended without a complete or ask receipt gets a three-minute grace period (a
+  progress is not a receipt). Only a finished, uninterrupted turn can trigger the
+  fallback: “已结束，未提交回执”, with no screen content or inferred files; when the
+  worker sent a progress for that task, its last one is attached:
+  “已结束，未提交回执（最后进度：…）”.
   Claude workers whose live footer still reports background shells/monitors/tasks
   running remain busy even after the model's reply. They produce no missing-command
   receipt and cannot auto-archive; the three-minute grace starts after their
@@ -1173,13 +1186,20 @@ an index from before this counts nothing as new). The phone hub does not have it
   ⌘\ / Ctrl+Shift+\ toggle the side pane.
 - Conversations are saved locally in the app's userData folder under `chats`
   (one private JSON file per session, written atomically) and are not committed.
-  Folders, archived sessions and schedules live in the
-  local `config.json` in the same folder. A saved conversation that nothing lists any more (before 2.0.4
+  Folders and schedules live in the
+  local `config.json` in the same folder; archived sessions in `archived.json` beside it, written only when
+  the archive changes (it was most of `config.json`, which is rewritten several times a minute). The first
+  launch of a version with `archived.json` moves the archive there: `config.json` is first copied to
+  `config.json.before-archive-split-<time>`, and the archive leaves `config.json` only once `archived.json`
+  is written and reads back whole. Rolling back to an older version: it starts normally but shows an empty
+  已归档 (its own recovery below brings back the conversations the user spoke in, from that copy), and its
+  launch deletes the saved terminal output of the other archived sessions; installing this version again
+  merges both lists. A saved conversation that nothing lists any more (before 2.0.4
   the archive kept only its newest 500 sessions and dropped the rest at launch) is put back into 已归档 at
   the next launch, if the user spoke in it: with the command, folder and card it had when an older copy of
   `config.json` (beside it, or in an install backup) still lists it, otherwise named after its first prompt,
-  and restoring that one opens a plain shell. `config.json` is first copied to
-  `config.json.before-archive-recovery-<time>`; no chat file is changed and nothing is deleted. Terminal output
+  and restoring that one opens a plain shell. `archived.json` is first copied to
+  `archived.json.before-archive-recovery-<time>`; no chat file is changed and nothing is deleted. Terminal output
   already pruned does not come back. `node scripts/archive-recovery.js [--list]` shows what the next launch
   would bring back without writing anything (`--user-data COPY --apply` tries it on a copy). Turning a reply into a bubble is heuristic, so a TUI
   that redraws unusually may produce an imperfect bubble; the terminal view
@@ -1371,7 +1391,7 @@ node scripts/e2e-queue.js --queue-status                                  # 看�
 
 - 入口是 `scripts/e2e-queue.js`（逻辑在 `scripts/e2e-queue-core.js`）。全机（所有会话、所有 `~/agentdeck-worktrees/*` 副本）同一时间只放 **1 组**（一次 `npm run e2e` 调用算一组），其余打印 `排队中，前面还有 X 组（正在跑 R 组，排在前面 Q 组，并发上限 N）` 并按先来后到等。轮到时打印 `轮到了（等了 N 秒）`。
 - 锁目录在 `/tmp/agentdeck-e2e-queue/`（Windows 是系统临时目录下同名目录）：`slots/<n>/owner.json` 是正在跑的组，`queue/` 是排队票。**不需要手动清理**：持锁进程（包括它启动的 Electron）都不在了，下一个排队者会自动回收并打印 `回收失效的锁`；进程号被别的程序复用也认得出（对比进程启动时间）。
-- 超时：排队最多等 120 分钟（退出码 75），单组最多跑 45 分钟（超时先发终止信号，宽限 10 秒后强杀，包括不听 SIGTERM 的后代和已脱离进程组的后代；**整棵进程树都退出后才释放锁**，退出码 124）。正常跑完时也会清掉遗留的辅助进程再放行下一组：运行期间每秒记录一次进程树，并给每次运行的所有子孙进程打上环境变量标记 `AGENTDECK_E2E_RUN_TAG`，所以连「已脱离进程组、父进程又立刻退出」的常驻辅助进程也能按标记找到并结束（Mac/Linux；Windows 靠 `taskkill /T`，不做这一步）。主动清掉环境变量并脱离进程组的进程无法识别。可调：`--queue-wait-timeout 分钟`、`--queue-run-timeout 分钟`、`--queue-slots N`（并发上限，默认 1），或环境变量 `AGENTDECK_E2E_WAIT_MINUTES`、`AGENTDECK_E2E_RUN_MINUTES`、`AGENTDECK_E2E_SLOTS`。机器空闲时可以 `AGENTDECK_E2E_SLOTS=2` 放宽；`--queue-` 开头的参数由入口吃掉，其余原样交给 Playwright。
+- 超时：排队最多等 120 分钟（退出码 75），单组最多跑 45 分钟（超时先发终止信号，宽限 10 秒后强杀，包括不听 SIGTERM 的后代和已脱离进程组的后代；**整棵进程树都退出后才释放锁**，退出码 124）。正常跑完时也会清掉遗留的辅助进程再放行下一组：运行期间每秒记录一次进程树，并给每次运行的所有子孙进程打上环境变量标记 `AGENTDECK_E2E_RUN_TAG`，所以连「已脱离进程组、父进程又立刻退出」的常驻辅助进程也能按标记找到并结束（Mac/Linux；Windows 靠 `taskkill /T`，不做这一步）。主动清掉环境变量并脱离进程组的进程无法识别。包装进程自己被强杀（SIGKILL）、测试进程还在跑时，锁照旧算它的；过了上限加宽限仍没结束，下一个排队者会结束它的进程组再回收锁（Mac/Linux），一组卡住的测试不会永远占着全机的锁。可调：`--queue-wait-timeout 分钟`、`--queue-run-timeout 分钟`、`--queue-slots N`（并发上限，默认 1），或环境变量 `AGENTDECK_E2E_WAIT_MINUTES`、`AGENTDECK_E2E_RUN_MINUTES`、`AGENTDECK_E2E_SLOTS`。机器空闲时可以 `AGENTDECK_E2E_SLOTS=2` 放宽；`--queue-` 开头的参数由入口吃掉，其余原样交给 Playwright。
 - 也可以包一条任意命令：`node scripts/e2e-queue.js -- <命令 参数…>`。已经在排队入口里面的命令（如 `release.js` 跑冒烟）不会再等自己。
 - `release.js` 的冒烟走 `npm run test:smoke`，所以自动排队；整个 `release.js` 也可以包在排队入口里跑（`node scripts/e2e-queue.js -- node scripts/release.js …`），它给子进程清掉 `AGENTDECK_*` 时保留排队器自己的 `AGENTDECK_E2E_QUEUE_HELD`，冒烟不会排在自己后面干等；`/tmp/agentdeck-test.lock` 仍只管单测和发版。
 
@@ -1383,7 +1403,7 @@ node scripts/e2e-remote-win.js <分支或提交> tests/e2e/foo.spec.js [tests/e2
 ```
 
 - 只测**已提交**的代码：脚本把这个提交打成 git bundle 传过去（不需要先 push，也不需要 Windows 登录 GitHub），所以先 `git commit`。工作区里没提交的改动不会被带过去，脚本会提醒。
-- Windows 上一切都在自己的目录 `C:\Users\hjinh\agentdeck-e2e-win\`：`hub\` 存传过去的提交，`checkouts\<运行号>\` 是每次运行自己的检出（跑完删），`deps\<依赖键>\` 按 lockfile 各装一份依赖（只在依赖变了才新装，首次要下载 Electron，约几分钟；自动只留最近 2 份；新装前空间不足 2GB 先清旧的，仍不够就退出码 16，`e2e-auto` 改在 Mac 跑，见 `docs/e2e-windows-background.md`），`inbox\<运行号>\`（含本次上传的排队脚本）和 `runs\<运行号>\` 是每次运行的临时目录，跑完自动只删本次的。**不碰** Windows 上已安装的 AgentDeck、别的会话目录和用户目录里别的东西。
+- Windows 上一切都在自己的目录 `C:\Users\hjinh\agentdeck-e2e-win\`：`hub\` 存传过去的提交，`checkouts\<运行号>\` 是每次运行自己的检出（跑完删），`deps\<依赖键>\` 按 lockfile 各装一份依赖（只在依赖变了才新装，首次要下载 Electron，约几分钟；自动只留最近 2 份；新装前空间不足 2GB 先清旧的，仍不够就退出码 16，`e2e-auto` 改在 Mac 跑，见 `docs/e2e-windows-background.md`），`inbox\<运行号>\`（含本次上传的排队脚本）和 `runs\<运行号>\` 是每次运行的临时目录，跑完、中途出错或被中断（Ctrl-C、SIGTERM、终端关闭）都只删本次的；被中断时先停掉 ssh、把已有的结果拉回再删。**不碰** Windows 上已安装的 AgentDeck、别的会话目录和用户目录里别的东西。
 - Windows 上同样走 `e2e-queue`，同一时间只跑 1 组，后来的排队。
 - 结果拉回 Mac：`~/reports/agentdeck-e2e-remote/<运行号>/`，内含 `console.log`（完整输出）、`results.json`（Playwright JSON 报告）、`summary.json`（提交、spec、退出码、耗时）、`test-results/`（失败时的 trace 等）。脚本退出码等于 Windows 上的结果（0 通过，75 排队超时，124 跑太久，其余为失败）。
 
@@ -1661,7 +1681,7 @@ the Windows Electron UI or install, rebuild, or restart either installed app.
 
 
 
-Coding tasks can pass `new --worktree <repo> [--base ref] [--branch name]`. AgentDeck adds a git worktree under `~/agentdeck-worktrees/<repo>/<branch>` and starts the session there. After the session is archived, the copy is removed only when the tree has no uncommitted, untracked, stashed, or ignored files and the branch is merged into main/master (or origin's default branch) or is still present on a remote. Any ignored file or directory blocks that automatic removal, including `node_modules`. A copy whose ignored content is entirely inside `node_modules`, and whose branch is already merged or pushed, is marked manually cleanable and listed by `worktree clean` with its path, branch, a summary of the ignored content, and the size. Other ignored paths, such as `dist`, `build`, `out`, and `.env`, are kept and named, and are not offered in that list. `worktree clean` only lists. Deleting one copy requires `--apply` and `--path` for that copy, and the same checks run again. Removal never uses `git worktree remove --force`.
+Coding tasks can pass `new --worktree <repo> [--base ref] [--branch name]`. AgentDeck adds a git worktree under `~/agentdeck-worktrees/<repo>/<branch>` and starts the session there. After the session is archived, the copy is removed only when the tree has no uncommitted, untracked, stashed, or ignored files and the branch is merged into main/master (or origin's default branch) or is still present on a remote. Any ignored file or directory blocks that automatic removal, including `node_modules`. A copy whose ignored content is entirely inside `node_modules`, and whose branch is already merged or pushed, is marked manually cleanable and listed by `worktree clean` with its path, branch, a summary of the ignored content, and the size. Other ignored paths, such as `dist`, `build`, `out`, and `.env`, are kept and named, and are not offered in that list. `worktree clean` only lists. Deleting one copy requires `--apply` and `--path` for that copy, and the same checks run again. Removal never uses `git worktree remove --force`. A session whose copy was removed is not brought back by `tell` (its directory would be the repository itself); the 队长 is told to dispatch the work again with `new --worktree`.
 
 Claude Code asks "do you trust this folder" once per directory and judges a linked worktree on its own path (trust for the repository or a parent folder does not carry over), with "No, exit" as the default row. So that an unattended session does not die there, AgentDeck records the answer itself right after it creates a copy and before the session starts: `projects[<copy path>].hasTrustDialogAccepted = true` in the global file of the Claude seat that will run the session (`~/.claude.json` for the default seat, `<seat dir>/.claude.json` for the others), written the way Claude Code writes it (same lock directory, atomic rename, other content untouched). Only that one directory is recorded (its real path, and the path as given when they differ); the repository, `~/agentdeck-worktrees` and the home folder are never trusted, a damaged seat file is left alone, and only a linked worktree under `~/agentdeck-worktrees` is accepted. Other agents do not change Claude's seat file. If the record cannot be written the task still starts and the 队长 is told once; it can then answer the menu with `answer --key down,enter`.
 

@@ -6,7 +6,7 @@ const { execFile } = require('child_process');
 const S = require('./claude-seats-core');
 const { validId } = require('./security');
 const { saveChat } = require('./side-main');
-const { accountIdentity } = require('./quota-codex');
+const { accountIdentity, cliLaunch } = require('./quota-codex');
 const os = require('os');
 const Handoff = require('./relay-handoff-core');
 const { loginCommand } = require('./seat-auth-alert');
@@ -245,8 +245,10 @@ function readAuthStatus(seat, home, env, execFileImpl = execFile) {
       for (const key of ['ELECTRON_RUN_AS_NODE', 'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT']) delete childEnv[key];
     } catch (_) { return resolve(null); }
     try {
-      execFileImpl(process.platform === 'win32' ? 'claude.exe' : 'claude', ['auth', 'status', '--json'], {
-        env: childEnv, shell: false, windowsHide: true, encoding: 'utf8', timeout: 15000, maxBuffer: 64 * 1024,
+      // Windows: npm's claude.cmd is followed to the claude.exe it starts (quota-codex.js cliLaunch).
+      const launch = cliLaunch('claude', ['auth', 'status', '--json'], childEnv);
+      execFileImpl(launch.file, launch.args, {
+        env: launch.env, shell: false, windowsHide: true, encoding: 'utf8', timeout: 15000, maxBuffer: 64 * 1024,
       }, (_error, stdout) => {
         try {
           const value = JSON.parse(stdout);

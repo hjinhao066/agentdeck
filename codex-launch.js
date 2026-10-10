@@ -15,7 +15,9 @@ function probeCommand(program, platform) {
   const resolve = /[\\/]/.test(program)
     ? `(Get-Item -LiteralPath ${quote(program)} -ErrorAction Stop).FullName`
     : `(Get-Command ${quote(program)} -CommandType Application,ExternalScript -ErrorAction Stop | Select-Object -First 1).Source`;
-  const script = `$p = ${resolve}; $h = & $p --help | Out-String; if ($LASTEXITCODE -ne 0) { exit 1 }; Write-Output ('AGENTDECK_CODEX_HELP=' + (@{ program=$p; help=$h } | ConvertTo-Json -Compress))`;
+  // Windows PowerShell 5.1 writes a pipe in the OEM code page (GBK on a Chinese Windows): a Chinese
+  // folder in the path would come back as U+FFFD. Ask for UTF-8, as pty-work.js's WIN_QUERY does.
+  const script = `[Console]::OutputEncoding = [Text.Encoding]::UTF8; $p = ${resolve}; $h = & $p --help | Out-String; if ($LASTEXITCODE -ne 0) { exit 1 }; Write-Output ('AGENTDECK_CODEX_HELP=' + (@{ program=$p; help=$h } | ConvertTo-Json -Compress))`;
   return ['-NoLogo', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
 }
 
