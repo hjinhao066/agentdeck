@@ -2476,7 +2476,7 @@ function trimTrail(text, s, e) {
 // punctuation (，。、；：（）「」…), full-width letters, curly quotes, "…" and "—".
 const PATH_STOP = '\\u2014\\u2015\\u2018-\\u201f\\u2026\\u3000-\\u3004\\u3008-\\u303f\\uff01-\\uff60\\uffe0-\\uffe6';
 const FILE_EXT = /\.[A-Za-z][A-Za-z0-9]{0,7}(?::\d+(?::\d+)?)?$/;
-const CJK_WORD = /^[぀-ヿ㐀-鿿豈-﫿]+$/;
+const CJK_WORD = /^[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]+$/;
 // Where an absolute path the pattern took really ends. The pattern lets single
 // spaces through for folder names ("Application Support", "My Project"), so it
 // also took the prose after a path: "…/renderer.js 里的 findLinks", or
@@ -2505,7 +2505,7 @@ function pathEnd(text, s, e, sep) {
   }
   let name = p.length;
   while (name > 0 && !sep.test(p[name - 1])) name--;
-  const glued = /^(.*?\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?)[぀-ヿ㐀-鿿豈-﫿]/.exec(p.slice(name));
+  const glued = /^(.*?\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?)[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/.exec(p.slice(name));
   if (glued && !p.slice(name + glued[1].length).includes('.')) p = p.slice(0, name + glued[1].length);
   return trimTrail(text, s, s + p.length);
 }
@@ -2575,8 +2575,8 @@ function findLinks(text) {
   // and the search goes on from there: the rest of the line may hold the next one.
   // No path is longer than 1024 characters (macOS's PATH_MAX); the cap keeps a
   // long line of short paths with prose between them from being read to its end
-  // once per path. What remains ambiguous is settled in the main process, which resolves the
-  // longest path that actually exists on disk.
+  // once per path. What remains ambiguous is settled in the main process, which
+  // resolves the longest path that actually exists on disk.
   const sep = env.platform === 'win32' ? /[\\/]/ : /\//;
   const fileRe = new RegExp('(?:file:\\/\\/)?(?:~\\/|\\/)(?:\\\\ |[^\\s"\'`<>|' + PATH_STOP + ']| (?![\\s/])){1,1024}', 'gu');
   while ((m = fileRe.exec(text))) {
