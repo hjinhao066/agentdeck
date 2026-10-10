@@ -817,7 +817,7 @@
   }
   function copyButton(title, text) {
     return toolButton('copy', title, async (_e, b) => {
-      try { await host.clipboardWrite(text); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
+      try { await host.clipboardWrite(text); } catch (_) { host.showToast('没能复制到剪贴板，请再试一次'); return; }
       b.innerHTML = host.ICONS.check; b.classList.add('done');
       b.title = '已复制'; b.setAttribute('aria-label', '已复制');
       clearTimeout(b.checkTimer);

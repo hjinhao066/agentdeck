@@ -112,14 +112,24 @@ either the column shows a hint for a few seconds (the clipboard is never left un
 silence): 「粘贴失败」 when nothing could be read (held by another program, or not text), 「粘贴不了」
 when the clipboard holds something that is neither text nor a screenshot (copied files).
 Chromium's paste is asked only while the terminal still has the focus, and a paste event of
-its that arrives after the 300 ms wait is dropped, so pressing again as the hint says pastes once.
+its that arrives after the 300 ms wait is dropped for 1.5 s, so pressing again as the hint says
+pastes once. The drop ends the moment the column gets input of the user's own (a key that is not a
+lone modifier or a plain Ctrl+V, or a mouse press): Chromium's late paste has no input in front of
+it, a paste the user makes (right click, Shift+Insert, Ctrl+Shift+V, a voice tool's simulated
+Shift+Insert such as Type4Me's) always has.
 A second Ctrl+V meanwhile adds nothing, and keys typed meanwhile follow the paste in order.
 Ctrl+Shift+V, right-click paste, dropped files and bracketed paste are unchanged.
 
 Electron 44's clipboard is asynchronous (`writeText`, `readText` and `read` return Promises, and
 `readImage` is gone). Every copy button waits for `deck.clipboardWrite(text)`, which resolves only
 once the text is on the clipboard and rejects when it could not be written: the check then does not
-show and a message says so (a terminal selection stays selected). A screenshot is read from
+show and a message says so (a terminal selection stays selected; while it stays, Ctrl+C copies, so
+the message says to click the terminal to let go first if Ctrl+C is meant as the interrupt). The check
+on a copy button is kept as state per button (`copy-mark.js`), so a list that redraws while the write
+runs still shows it on the new button. Pasted screenshots are saved to `agentdeck-paste` in the temp
+folder and those older than 24 hours are removed at launch and on every save. A paste event that
+carries a picture the clipboard cannot give (an image file copied in the file manager) says the
+clipboard holds files and that only text and screenshots can be pasted. A screenshot is read from
 `clipboard.read()` as `image/png`; a clipboard that holds a picture and text pastes the text only.
 The deck reads through `clipboard:read` (`clipboard:read-sync` answers only a test profile, which has
 a private in-memory clipboard; `app.testClipboardImage` and `app.testClipboardWriteFails` let a test

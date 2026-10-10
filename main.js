@@ -1920,14 +1920,20 @@ app.whenReady().then(async () => {
       return file;
     } catch (_) { return null; }
   });
-  // Startup sweep: pasted screenshots older than 24h are stale (Windows %TEMP%
-  // is never auto-cleaned, so without this the dir grows without bound).
-  try {
-    for (const f of fs.readdirSync(PASTE_DIR)) {
-      const p = path.join(PASTE_DIR, f);
-      if (Date.now() - fs.statSync(p).mtimeMs > 24 * 60 * 60 * 1000) fs.unlinkSync(p);
-    }
-  } catch (_) {}
+  // Pasted screenshots older than 24h are stale (Windows %TEMP% is never auto-cleaned, so
+  // without this the dir grows without bound). Swept at launch and on every save, so an app
+  // left open for days does not pile them up either.
+  const sweepPasteDir = () => {
+    try {
+      for (const f of fs.readdirSync(PASTE_DIR)) {
+        try {
+          const p = path.join(PASTE_DIR, f);
+          if (Date.now() - fs.statSync(p).mtimeMs > 24 * 60 * 60 * 1000) fs.unlinkSync(p);
+        } catch (_) {} // one file that is gone or in use never stops the rest
+      }
+    } catch (_) {}
+  };
+  sweepPasteDir();
   // Electron 44 has no clipboard.readImage(): the picture comes from clipboard.read() as
   // image/png. Text wins: a clipboard that holds both (a cell copied from a spreadsheet, a
   // page selection) pastes its text and never the picture, so one paste is one thing. The
@@ -1950,6 +1956,7 @@ app.whenReady().then(async () => {
       fs.mkdirSync(PASTE_DIR, { recursive: true });
       const f = path.join(PASTE_DIR, 'paste-' + Date.now() + '.png');
       fs.writeFileSync(f, png);
+      sweepPasteDir();
       return f;
     } catch (_) { return null; }
   });

@@ -42,6 +42,20 @@
       (e.key === 'v' || e.key === 'V' || e.code === 'KeyV');
   }
 
+  // Input that proves a person (or a program simulating one) is at the keyboard or mouse, as
+  // opposed to Chromium's late paste, which has no input in front of it. A key counts unless it
+  // is a lone modifier (Shift is pressed before Insert, Ctrl before V) or the plain Ctrl+V that
+  // the hint asks for again; any mouse press counts. A voice tool's simulated keys (Type4Me's
+  // Shift+Insert) reach the page as the same key events, so they count too.
+  const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'AltGraph', 'OS']);
+  function isUserInput(e) {
+    if (!e) return false;
+    if (e.type === 'mousedown' || e.type === 'pointerdown') return true;
+    if (e.type !== 'keydown') return false;
+    if (MODIFIER_KEYS.has(e.key)) return false;
+    return !isCtrlV(e);
+  }
+
   // The hint under a failed Ctrl+V. `kind` is what the clipboard holds: 'other' (files or
   // anything that is not text or a picture) or 'none' / unknown.
   function failureHint(kind) {
@@ -50,11 +64,25 @@
       : '粘贴失败：剪贴板里没读到文字（可能被别的程序占用，也可能复制的不是文字），请再按一次 Ctrl+V';
   }
 
+  // The toast when a paste event carried a picture but the main process could not read one off the
+  // clipboard. `kind` is what the clipboard holds ('other': files, an image file copied in the file
+  // manager among them): retrying will not help there, so it says so; `where` names the box.
+  function pictureFailureHint(kind, where) {
+    return kind === 'other'
+      ? `粘贴不了：剪贴板里是文件，${where || '这里'}只能粘贴文字和截图`
+      : '剪贴板里的截图没读出来，请再粘贴一次';
+  }
+
   // Chromium's own paste, asked of the main process, arrives as a paste event with the text.
   // options: listen(fn) -> stop; subscribes to paste events seen in the capture phase that carry
   // text, fn(text) returns true when it took the event (the page then stops it, so xterm does
   // not paste it a second time); request() -> Promise<boolean> (true: Chromium ran);
   // setTimer / clearTimer. The result is the text it delivered, '' for none.
+  // The function it returns has .userInput(event): the page calls it for every key and mouse
+  // press in the column, and input that is not a lone modifier or a plain Ctrl+V (isUserInput)
+  // lifts the late-paste guard at once. Chromium's late paste has no input in front of it; a
+  // paste the user makes (right click, Shift+Insert, Ctrl+Shift+V, a voice tool's simulated
+  // keys) always has, and must not be swallowed.
   function createNativePaste(options) {
     const o = options || {};
     const setTimer = o.setTimer || ((fn, ms) => setTimeout(fn, ms));
@@ -62,10 +90,11 @@
     const waitMs = o.waitMs > 0 ? o.waitMs : NATIVE_WAIT_MS;
     const graceMs = o.graceMs >= 0 ? o.graceMs : NATIVE_GRACE_MS;
     const guards = new Set(); // late-paste guards still up
-    return function nativePaste() {
+    const lift = () => { for (const g of [...guards]) g.stop(); };
+    const nativePaste = function nativePaste() {
       // A new request takes over from the guards of the one before: its own paste event must
       // reach it, not be swallowed as that earlier one's late arrival.
-      for (const g of [...guards]) g.stop();
+      lift();
       return new Promise((resolve) => {
         let done = false;
         let timer = null;
@@ -95,6 +124,8 @@
         asked.then((ran) => { if (!ran) finish('', false); }, () => finish('', false));
       });
     };
+    nativePaste.userInput = (e) => { if (isUserInput(e)) lift(); };
+    return nativePaste;
   }
 
   // readText() -> string | Promise<string>; readImage() -> Promise<boolean> (true: a path was
@@ -202,5 +233,5 @@
     };
   }
 
-  return { create, createNativePaste, isCtrlV, failureHint, INTERVAL_MS, WINDOW_MS, NATIVE_WAIT_MS, NATIVE_GRACE_MS };
+  return { create, createNativePaste, isCtrlV, isUserInput, failureHint, pictureFailureHint, INTERVAL_MS, WINDOW_MS, NATIVE_WAIT_MS, NATIVE_GRACE_MS };
 });

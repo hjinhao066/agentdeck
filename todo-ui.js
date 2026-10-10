@@ -25,6 +25,13 @@
     return n;
   }
   function svg(name) { return host.ICONS[name] || ''; }
+  // The check on a 复制路径 button belongs to the key, not to the clicked node: the list redraws
+  // while the write runs, and the new button must show it (copy-mark.js).
+  const copied = window.CopyMark.create({
+    find: (key) => document.querySelectorAll(`[data-focus-key="${(window.CSS && CSS.escape ? CSS.escape(key) : key)}"]`),
+    show: (b) => { b.innerHTML = svg('check'); b.title = '已复制'; b.setAttribute('aria-label', '已复制'); b.classList.add('done'); },
+    hide: (b) => { b.innerHTML = svg('copy'); b.title = '复制路径'; b.setAttribute('aria-label', '复制路径'); b.classList.remove('done'); },
+  });
   function iconButton(name, label, onClick, cls) {
     const b = el('button', 'todo-ibtn' + (cls ? ' ' + cls : ''));
     b.type = 'button'; b.title = label; b.setAttribute('aria-label', label); b.innerHTML = svg(name);
@@ -247,14 +254,13 @@
         const open = el('button', 'todo-ai-open', name);
         open.type = 'button'; open.title = p; open.dataset.focusKey = `aifile:${t.id}:${i}`;
         open.addEventListener('click', (e) => window.SidePane.openLink({ kind: 'file', text: p }, e));
+        const copyKey = `aicopy:${t.id}:${i}`;
         const copy = iconButton('copy', '复制路径', async () => {
-          try { await host.clipboardWrite(p); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
-          const mark = (icon, label) => { copy.innerHTML = svg(icon); copy.title = label; copy.setAttribute('aria-label', label); };
-          mark('check', '已复制'); copy.classList.add('done');
-          clearTimeout(copy.checkTimer);
-          copy.checkTimer = setTimeout(() => { mark('copy', '复制路径'); copy.classList.remove('done'); }, 1200);
+          try { await host.clipboardWrite(p); } catch (_) { host.showToast('没能复制到剪贴板，请再试一次'); return; }
+          copied.done(copyKey);
         }, 'todo-ai-tool');
-        copy.dataset.focusKey = `aicopy:${t.id}:${i}`;
+        copy.dataset.focusKey = copyKey;
+        copied.adopt(copyKey, copy);
         const reveal = host.platform === 'darwin' ? '在访达中显示' : host.platform === 'win32' ? '在资源管理器中显示' : '在文件管理器中显示';
         const show = iconButton('folderOpen', reveal, () => window.deck.revealPath(p), 'todo-ai-tool');
         show.dataset.focusKey = `aireveal:${t.id}:${i}`;

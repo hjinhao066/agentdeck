@@ -218,3 +218,121 @@ test('a paste event without text is not taken (an image or empty clipboard is le
   await n.advance(PasteRetryCore.NATIVE_WAIT_MS);
   assert.equal(await result, '');
 });
+
+// ---- the user's own input lifts the late-paste guard ----
+
+const key = (extra) => ({ type: 'keydown', key: 'a', code: 'KeyA', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...extra });
+// A late Chromium paste: the wait gave up at 300 ms, and the guard is up.
+async function guarded() {
+  const n = nativeHarness();
+  const result = n.nativePaste();
+  await n.advance(PasteRetryCore.NATIVE_WAIT_MS);
+  assert.equal(await result, '');
+  assert.equal(n.listeners.size, 1, 'a guard is up');
+  return n;
+}
+
+test('what counts as the user: a key that is not a lone modifier or a plain Ctrl+V, or a mouse press', () => {
+  const yes = (e) => assert.equal(PasteRetryCore.isUserInput(e), true, JSON.stringify(e));
+  const no = (e) => assert.equal(PasteRetryCore.isUserInput(e), false, JSON.stringify(e));
+  yes(key({ key: 'Insert', code: 'Insert', shiftKey: true })); // Shift+Insert, also a voice tool's simulated one
+  yes(key({ key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true })); // Ctrl+Shift+V
+  yes(key({ key: 'v', code: 'KeyV', metaKey: true })); // Cmd+V
+  yes(key({ key: 'x' }));
+  yes(key({ key: 'Enter', code: 'Enter' }));
+  yes({ type: 'mousedown', button: 0 });
+  yes({ type: 'mousedown', button: 2 }); // right click
+  yes({ type: 'pointerdown' });
+  no(key({ key: 'v', code: 'KeyV', ctrlKey: true })); // the Ctrl+V the hint asks for again
+  no(key({ key: 'v', code: 'KeyV', ctrlKey: true, repeat: true }));
+  for (const k of ['Control', 'Shift', 'Alt', 'Meta', 'AltGraph']) no(key({ key: k, ctrlKey: k === 'Control', shiftKey: k === 'Shift' })); // the press before the real key
+  no({ type: 'keyup', key: 'Insert' });
+  no({ type: 'mouseup' });
+  no({ type: 'mousemove' });
+  no(null);
+});
+
+test('a right-click paste right after the failure hint is pasted, not swallowed', async () => {
+  const n = await guarded();
+  await n.advance(200);
+  n.nativePaste.userInput({ type: 'mousedown', button: 2 });
+  assert.equal(n.listeners.size, 0, 'the guard is gone at once');
+  assert.equal(n.timers.length, 0, 'and its timer');
+  assert.equal(n.pasteEvent('from the context menu'), false, 'xterm pastes it');
+});
+
+test('Shift+Insert (the way Type4Me pastes on Windows, simulated or not) is pasted: Shift alone changes nothing, Insert lifts the guard', async () => {
+  const n = await guarded();
+  n.nativePaste.userInput(key({ key: 'Shift', code: 'ShiftLeft', shiftKey: true }));
+  assert.equal(n.listeners.size, 1, 'a lone Shift is no input yet');
+  n.nativePaste.userInput(key({ key: 'Insert', code: 'Insert', shiftKey: true }));
+  assert.equal(n.listeners.size, 0);
+  assert.equal(n.pasteEvent('spoken words'), false, 'the voice text reaches the terminal');
+  assert.deepEqual(n.log, [['xterm', 'spoken words']]);
+});
+
+test('Ctrl+Shift+V is pasted: Ctrl alone changes nothing, the V lifts the guard', async () => {
+  const n = await guarded();
+  n.nativePaste.userInput(key({ key: 'Control', code: 'ControlLeft', ctrlKey: true }));
+  n.nativePaste.userInput(key({ key: 'Shift', code: 'ShiftLeft', ctrlKey: true, shiftKey: true }));
+  assert.equal(n.listeners.size, 1);
+  n.nativePaste.userInput(key({ key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true }));
+  assert.equal(n.listeners.size, 0);
+  assert.equal(n.pasteEvent('by hand'), false);
+});
+
+test('Cmd+V on a Mac is pasted as well', async () => {
+  const n = await guarded();
+  n.nativePaste.userInput(key({ key: 'Meta', code: 'MetaLeft', metaKey: true }));
+  n.nativePaste.userInput(key({ key: 'v', code: 'KeyV', metaKey: true }));
+  assert.equal(n.pasteEvent('mac paste'), false);
+});
+
+test("Chromium's late paste has no input in front of it: it is still swallowed, so nothing is pasted twice", async () => {
+  const n = await guarded();
+  // nothing but time passes; mouse moves and key releases are not input
+  n.nativePaste.userInput({ type: 'mousemove' });
+  n.nativePaste.userInput({ type: 'keyup', key: 'v' });
+  await n.advance(400);
+  assert.equal(n.pasteEvent('late text'), true, 'taken');
+  assert.deepEqual(n.log, [['taken', 'late text']]);
+});
+
+test('pressing Ctrl+V again as the hint says (Ctrl, then V, V auto-repeating) does not lift the guard, so the late paste is not doubled', async () => {
+  const n = await guarded();
+  n.nativePaste.userInput(key({ key: 'Control', code: 'ControlLeft', ctrlKey: true }));
+  n.nativePaste.userInput(key({ key: 'v', code: 'KeyV', ctrlKey: true }));
+  n.nativePaste.userInput(key({ key: 'v', code: 'KeyV', ctrlKey: true, repeat: true }));
+  assert.equal(n.listeners.size, 1, 'the guard is up');
+  assert.equal(n.pasteEvent('late text'), true);
+  // and the new press still gets exactly one paste: its request takes over from the guard
+  const second = n.nativePaste();
+  await n.advance(5);
+  assert.equal(n.pasteEvent('fresh'), true);
+  assert.equal(await second, 'fresh');
+});
+
+test('input while a request is waiting changes nothing, and input with no guard is harmless', async () => {
+  const n = nativeHarness();
+  n.nativePaste.userInput(key({ key: 'x' })); // no guard at all
+  const result = n.nativePaste();
+  await n.advance(5);
+  n.nativePaste.userInput(key({ key: 'x' })); // the request itself is waiting, not a guard
+  assert.equal(n.pasteEvent('hello'), true);
+  assert.equal(await result, 'hello');
+});
+
+test('renderer.js hands every key and mouse press of the column to the guard, in the capture phase', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'renderer.js'), 'utf8');
+  assert.match(src, /for \(const type of \['keydown', 'mousedown'\]\) termEl\.addEventListener\(type, nativePasteWhenFocused\.userInput, true\)/);
+});
+
+test('a picture the main process cannot read: files get their own words, anything else keeps "paste again"', () => {
+  const files = PasteRetryCore.pictureFailureHint('other', '终端');
+  assert.match(files, /剪贴板里是文件/);
+  assert.match(files, /终端只能粘贴文字和截图/);
+  assert.doesNotMatch(files, /再粘贴一次/, 'retrying will not help');
+  for (const kind of ['none', 'image', 'text', undefined]) assert.equal(PasteRetryCore.pictureFailureHint(kind, '终端'), '剪贴板里的截图没读出来，请再粘贴一次');
+});

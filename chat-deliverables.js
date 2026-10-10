@@ -285,7 +285,7 @@
 
     const actions = el('span', 'dlv-actions');
     const copy = iconButton('dlv-tool', 'copy', '复制路径', async (_e, b) => {
-      try { await host.clipboardWrite(item.path); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
+      try { await host.clipboardWrite(item.path); } catch (_) { host.showToast('没能复制到剪贴板，请再试一次'); return; }
       b.innerHTML = host.ICONS.check; b.classList.add('done'); label(b, '已复制');
       clearTimeout(b.checkTimer);
       b.checkTimer = setTimeout(() => { b.innerHTML = host.ICONS.copy; b.classList.remove('done'); label(b, '复制路径'); }, 1200);

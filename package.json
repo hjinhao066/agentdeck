@@ -92,6 +92,7 @@
       "todo-shortcut-core.js",
       "app-shortcuts-core.js",
       "paste-retry-core.js",
+      "copy-mark.js",
       "todo-store.js",
       "todo-ai.js",
       "todo-backend-errors.js",

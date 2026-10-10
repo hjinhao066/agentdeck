@@ -2185,7 +2185,10 @@ function buildColumn(col, isFresh) {
         // interrupt again); a failed copy keeps it, says so, and can simply be pressed again.
         window.deck.clipboardWrite(text).then(() => {
           if (env.platform !== 'darwin') term.clearSelection();
-        }, () => showToast('复制失败：剪贴板可能被别的程序占用，选区还在，请再按一次'));
+        }, () => showToast(env.platform === 'darwin'
+          ? '复制失败：剪贴板可能被别的程序占用，选区还在，请再按一次'
+          // The selection stays, and while it does Ctrl+C copies instead of interrupting.
+          : '复制失败：剪贴板可能被别的程序占用，选区还在，请再按一次；想用 Ctrl+C 中断程序，先点一下终端取消选区'));
         if (env.platform !== 'darwin') e.preventDefault();
         return false;
       }
@@ -2438,6 +2441,9 @@ function buildColumn(col, isFresh) {
       // else (another column, a chat box) is not pulled back here: nothing is asked of Chromium.
       request: () => (termEl.contains(document.activeElement) ? window.deck.clipboardNativePaste() : Promise.resolve(false)),
     });
+    // Input in this column ends the swallowing of a late paste (see the core): a paste the user
+    // makes comes after a key or a click, Chromium's late one does not. Simulated keys count.
+    for (const type of ['keydown', 'mousedown']) termEl.addEventListener(type, nativePasteWhenFocused.userInput, true);
     const ctrlV = PasteRetryCore.create({
       readText: () => window.deck.clipboardReadText(),
       readImage: pasteImageAsPath,
@@ -2462,7 +2468,10 @@ function buildColumn(col, isFresh) {
       if (!items.some((it) => it.kind === 'file' && /^image\//.test(it.type))) return;
       if (e.clipboardData.getData('text/plain')) return;
       e.preventDefault(); e.stopPropagation();
-      pasteImageAsPath().then((ok) => { if (!ok) showToast('剪贴板里的截图没读出来，请再粘贴一次'); });
+      pasteImageAsPath().then((ok) => {
+        if (ok) return;
+        window.deck.clipboardKind().catch(() => 'none').then((kind) => showToast(PasteRetryCore.pictureFailureHint(kind, '终端')));
+      });
     }, true);
 
     // Drag a file from Finder onto a column → insert its (shell-quoted) path,

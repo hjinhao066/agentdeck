@@ -17,7 +17,7 @@ const between = (from, to) => {
   return source.slice(a, b);
 };
 const clipboardBlock = between("  let testClipboard = '';", "  onMain('env-info-sync'");
-const imageBlock = between("  handleMain('paste-image:save'", "\n  // Composer \"+\"");
+const imageBlock = between('  // Pasted screenshots older than 24h',"\n  // Composer \"+\"");
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'); // the first bytes of a PNG: content is not parsed
 const TEXT = 'copied words';
@@ -54,10 +54,11 @@ function fakeClipboard(initial = {}) {
   return { clipboard, state };
 }
 
-function driver(t, { tud = false, clip = {}, testAppState = {} } = {}) {
+function driver(t, { tud = false, clip = {}, testAppState = {}, seed } = {}) {
   const fake = fakeClipboard(clip);
   const pasteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-clipboard-handlers-'));
   t.after(() => fs.rmSync(pasteDir, { recursive: true, force: true }));
+  if (seed) seed(pasteDir);
   const handlers = {}, syncHandlers = {}, logs = [];
   const context = vm.createContext({
     handleMain: (name, fn) => { handlers[name] = fn; },
@@ -228,4 +229,41 @@ test('a test profile can hold a picture and can make copies fail', async (t) => 
   assert.equal(await d.write('more'), false);
   assert.equal(await d.readText(), 'words', 'a failed copy changed nothing');
   assert.deepEqual(d.state.calls, []);
+});
+
+// ---- 4. the temp folder of pasted pictures is swept on every save, not only at launch ----
+
+const aged = (dir, name, hours) => {
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, PNG);
+  const when = new Date(Date.now() - hours * 3_600_000);
+  fs.utimesSync(file, when, when);
+  return name;
+};
+
+test('saving a picture removes pasted pictures older than 24 hours and keeps the newer ones', async (t) => {
+  let fresh, stale;
+  // The app has been open for days: these were left by earlier pastes. The launch sweep runs
+  // first, so they are put in place after the handlers exist.
+  const d = driver(t, { clip: { png: PNG } });
+  stale = [aged(d.pasteDir, 'paste-1.png', 25), aged(d.pasteDir, 'paste-2.png', 100)];
+  fresh = [aged(d.pasteDir, 'paste-3.png', 23), aged(d.pasteDir, 'paste-4.png', 0.01)];
+  assert.equal(d.saved().length, 4);
+  const file = await d.saveImage();
+  const left = d.saved();
+  for (const name of stale) assert.ok(!left.includes(name), `${name} is gone`);
+  for (const name of fresh) assert.ok(left.includes(name), `${name} stays`);
+  assert.ok(left.includes(path.basename(file)), 'and the picture just saved is there');
+});
+
+test('the launch sweep still runs, and a file that cannot be removed does not stop the rest', (t) => {
+  const d = driver(t, { seed: (dir) => { aged(dir, 'paste-old.png', 30); aged(dir, 'paste-new.png', 1); fs.mkdirSync(path.join(dir, 'locked')); } });
+  assert.deepEqual(d.saved().sort(), ['locked', 'paste-new.png'], 'a directory (unlink fails) is left, the old picture went');
+});
+
+test('a clipboard with no picture saves nothing and sweeps nothing', async (t) => {
+  const d = driver(t, { clip: { text: TEXT } });
+  aged(d.pasteDir, 'paste-old.png', 30);
+  assert.equal(await d.saveImage(), null);
+  assert.deepEqual(d.saved(), ['paste-old.png']);
 });

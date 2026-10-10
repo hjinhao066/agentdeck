@@ -295,7 +295,15 @@ test('a screenshot pasted into the composer becomes an attachment; with text nex
     await paste(true, '');
     await expect.poll(() => page.evaluate(() => { const t = document.getElementById('toast'); return t && t.classList.contains('show') ? t.textContent : ''; }), { timeout: 5000 }).toContain('截图');
     await expect(chips).toHaveCount(0);
-  } finally { await application.evaluate(({ app }) => { app.testClipboardImage = null; }); }
+    // an image file copied in the file manager: the clipboard holds files, which is said, not "paste again"
+    await application.evaluate(({ app }) => { app.testClipboardOther = true; });
+    await paste(true, '');
+    const toastText = () => page.evaluate(() => { const t = document.getElementById('toast'); return t && t.classList.contains('show') ? t.textContent : ''; });
+    await expect.poll(toastText, { timeout: 5000 }).toContain('剪贴板里是文件');
+    expect(await toastText()).toContain('聊天框只能粘贴文字和截图');
+    expect(await toastText()).not.toContain('再粘贴一次');
+    await expect(chips).toHaveCount(0);
+  } finally { await application.evaluate(({ app }) => { app.testClipboardImage = null; app.testClipboardOther = false; }); }
   await composer.fill('');
 });
 

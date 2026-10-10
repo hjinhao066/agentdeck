@@ -226,9 +226,9 @@
       // the text and not the picture: one paste is one thing.
       if (e.clipboardData.getData('text/plain')) return;
       e.preventDefault();
-      window.deck.pasteImageSave().then((p) => {
-        if (p) addAttachment(v, p); else host.showToast('剪贴板里的截图没读出来，请再粘贴一次');
-      }).catch(() => host.showToast('剪贴板里的截图没读出来，请再粘贴一次'));
+      const unreadable = () => window.deck.clipboardKind().catch(() => 'none')
+        .then((kind) => host.showToast(kind === 'other' ? PasteRetryCore.pictureFailureHint(kind, '聊天框') + '；文件请点 + 选择或拖进来' : PasteRetryCore.pictureFailureHint(kind)));
+      window.deck.pasteImageSave().then((p) => { if (p) addAttachment(v, p); else return unreadable(); }).catch(unreadable);
     });
     chat.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
     chat.addEventListener('drop', (e) => {

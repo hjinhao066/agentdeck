@@ -137,12 +137,29 @@ test('a paste event whose picture cannot be read from the clipboard says so', as
   expect(savedPictures().length).toBe(before);
 });
 
+test('a paste event with a picture file while the clipboard holds files says it is files, not "paste again"', async () => {
+  await app.evaluate(({ app: electronApp }) => { electronApp.testClipboardOther = true; }); // a test says the clipboard holds files
+  try {
+    const before = savedPictures().length;
+    await pasteEvent({ picture: true }); // an image file copied in the file manager: the page sees a picture
+    await expect.poll(toast, { timeout: 5000 }).toContain('剪贴板里是文件');
+    expect(await toast()).toContain('终端只能粘贴文字和截图');
+    expect(await toast()).not.toContain('再粘贴一次');
+    expect(received()).toBe('');
+    expect(savedPictures().length).toBe(before);
+  } finally {
+    await app.evaluate(({ app: electronApp }) => { electronApp.testClipboardOther = false; });
+  }
+});
+
 test('copying a selection: a failed write says so and keeps the selection; the next try copies and lets go', async () => {
   expect(await selectLine()).toBe('COPY-ME-4721');
   await setClipboard('before');
   await failCopies(true);
   await page.keyboard.press(mac ? 'Meta+C' : 'Control+Shift+C');
   await expect.poll(toast, { timeout: 5000 }).toContain('复制失败');
+  // Where Ctrl+C copies while text is selected, the hint says how to get the interrupt back.
+  if (!mac) expect(await toast()).toContain('Ctrl+C 中断程序，先点一下终端取消选区');
   expect(await page.evaluate(() => window.deck.clipboardRead())).toBe('before');
   expect(await page.evaluate((id) => terms.get(id).term.hasSelection(), ID)).toBe(true);
   expect(received()).not.toContain('\x03');
