@@ -1353,6 +1353,8 @@
     let seen = null, seenSince = 0;
     const look = () => {
       if (host.terms.get(col.id) !== entry || !entry.alive || entry.state === 'input' || entry.sendingPrompt) return;
+      // a menu that came up since (Claude's startup questions) would take this Enter as its answer
+      if (host.menuOnScreen && host.menuOnScreen(entry.term, text)) return;
       const screen = host.dumpScreen(entry.term, 80);
       if (!C.promptLeftInBox(screen, text)) return;
       // Quiet: no output, or a screen standing still. An idle Claude Code keeps writing a cursor-position
