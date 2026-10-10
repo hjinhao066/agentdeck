@@ -181,8 +181,8 @@ test('sessions the 队长 opened start Claude Code with prompt suggestions off; 
 test('the crew flag travels renderer -> preload -> main and only a literal true counts', () => {
   const preload = fs.readFileSync(path.resolve(__dirname, '../preload.js'), 'utf8');
   const main = fs.readFileSync(path.resolve(__dirname, '../main.js'), 'utf8');
-  assert.match(source, /boundSeat\.configDir, !!col\.captainCrew && !col\.isMain\)/);
-  assert.match(preload, /ptySpawn: \(id, cwd, cols, rows, managed, seatId, configDir, crew\) => ipcRenderer\.send\('pty:spawn', \{[^}]*\bcrew\b/);
-  assert.match(main, /spawnPty\(id, cwd, cols, rows, !!managed, seatId, configDir, crew === true\)/);
+  assert.match(source, /boundSeat\.configDir, !!col\.captainCrew && !col\.isMain, !!col\.isMain\)/);
+  assert.match(preload, /ptySpawn: \(id, cwd, cols, rows, managed, seatId, configDir, crew, captain\) => ipcRenderer\.send\('pty:spawn', \{[^}]*\bcrew\b/);
+  assert.match(main, /spawnPty\(id, cwd, cols, rows, !!managed, seatId, configDir, crew === true, captain === true\)/);
   assert.match(main, /AgentSessions\.crewEnvironment\(\{ \.\.\.AgentSessions\.clearInheritedSessionIds\(ENV\)/);
 });

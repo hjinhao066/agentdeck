@@ -125,7 +125,7 @@ test('the existing privileged launch channel completes registration before retur
     readLocalConfig: () => ({ columns: [{ id: 'worker', ...column }] }),
     prepareWorkspaceTrust: T.prepareWorkspaceTrust,
     codexLauncher: { prepare(cmd, dir) { launch = { cmd, dir, registered: JSON.parse(fs.readFileSync(file)).trustedWorkspaces.includes(cwd) }; return cmd; } },
-    tudArg: null, HOME: home, send() {}, seatGate: null,
+    tudArg: null, HOME: home, send() {}, seatGate: null, AgentSessions: require('../agent-sessions'), captainCompactSettings: '',
   });
   vm.runInContext(source.slice(begin, end), context);
   const command = await handler(null, { id: 'worker', command: 'agy --model x' });

@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const MainCore = require('./main-core');
 
 const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const MAX_FILES = 400;
@@ -144,6 +145,34 @@ function crewEnvironment(env, crew) {
   return crew ? { ...env, CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: '0' } : env;
 }
 
+// The 队长's own terminal (never a worker's, never a 小队长's) starts Claude Code with an
+// auto-compact window, so a long-lived 队长 compacts itself instead of growing toward the
+// model's full window. `setting` is the saved captainAutoCompactWindow (unset = default, 0 = off).
+// A value already in the inherited environment is the user's own and is left alone.
+function captainEnvironment(env, captain, setting) {
+  if (captain !== true) return env;
+  const tokens = MainCore.autoCompactWindow(setting);
+  return tokens > 0 ? { ...env, CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(tokens) } : env;
+}
+
+// Claude launch line of the 队长 + `--settings <file>`: the file only holds the PreCompact hook that
+// adds MainCore.COMPACT_NOTE to every compaction. Other launch lines (Codex, a stand-in), a line that
+// already passes --settings, and a file name the shell could read differently are left as they are.
+const CLAUDE_PROGRAM = /^((?:command\s+)?(?:"[^"]*claude"|'[^']*claude'|[^\s"']*claude))(\s|$)/;
+function captainLaunchCommand(command, settingsFile) {
+  const line = String(command || '');
+  const match = line.match(CLAUDE_PROGRAM);
+  if (!match || typeof settingsFile !== 'string' || !settingsFile || /["'`$\r\n]/.test(settingsFile)) return line;
+  if (/\s--settings(?:[\s=]|$)/.test(line)) return line;
+  return `${match[1]} --settings "${settingsFile}"${line.slice(match[1].length)}`;
+}
+
+// The settings file's content. The hook runs `node <note script>`; forward slashes keep the same
+// line valid in bash, PowerShell and cmd.
+function captainCompactSettings(noteScript) {
+  return { hooks: { PreCompact: [{ matcher: '', hooks: [{ type: 'command', command: `node "${String(noteScript).replace(/\\/g, '/')}"`, timeout: 10 }] }] } };
+}
+
 function defaultRoots(home) {
   const base = home || '';
   return {
@@ -165,5 +194,5 @@ function resolveSessions(columns, options) {
 }
 
 module.exports = {
-  sameCwd, clearInheritedSessionIds, crewEnvironment, listCursor, listCodex, listAgy, assignSessions, defaultRoots, resolveSessions,
+  sameCwd, clearInheritedSessionIds, crewEnvironment, captainEnvironment, captainLaunchCommand, captainCompactSettings, listCursor, listCodex, listAgy, assignSessions, defaultRoots, resolveSessions,
 };

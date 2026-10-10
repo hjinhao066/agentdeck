@@ -740,7 +740,7 @@
     $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
     if ($('batteryMode')) $('batteryMode').onchange = syncBatteryField;
     // These few wait for 保存设置 (the switches above save on change), so the save bar says when they are edited.
-    for (const id of ['csEnabled', 'csThreshold', 'handoffBudget', 'concurrencyCap', 'batteryMode', 'batteryConcurrency', 'resumeOnRestart']) {
+    for (const id of ['csEnabled', 'csThreshold', 'handoffBudget', 'captainAutoCompact', 'concurrencyCap', 'batteryMode', 'batteryConcurrency', 'resumeOnRestart']) {
       $(id)?.addEventListener?.('input', () => { if ($('csDirty')) $('csDirty').textContent = '有改动还没保存'; });
     }
     if ($('batteryBoostCancel')) $('batteryBoostCancel').onclick = () => { try { setBattery({ boost: false }); } catch (error) { host.showToast(error.message); } };
@@ -751,6 +751,9 @@
       const budgetBox = $('handoffBudget');
       if (budgetBox?.reportValidity && !budgetBox.reportValidity()) return;
       if (budgetBox && budgetBox.value !== undefined) host.config.captainHandoffOverview = M.handoffBudget(budgetBox.value);
+      // Empty or 0 saves 0 (the variable is not set); a number below Claude's own floor is saved as the floor.
+      const compactBox = $('captainAutoCompact');
+      if (compactBox && compactBox.value !== undefined) host.config.captainAutoCompactWindow = M.autoCompactWindow(compactBox.value);
       host.config.captainTokenSaver = M.tokenSaverSettings({ enabled: $('csEnabled').checked, threshold: Number($('csThreshold').value) * 1000 });
       host.config.resumeOnRestart = $('resumeOnRestart').checked;
       if (Bat() && $('batteryMode')) {
@@ -795,6 +798,7 @@
       renderBoostRow();
     }
     if ($('handoffBudget')) $('handoffBudget').value = M.handoffBudget(host.config.captainHandoffOverview);
+    if ($('captainAutoCompact')) $('captainAutoCompact').value = M.autoCompactWindow(host.config.captainAutoCompactWindow);
     const resumeBox = $('resumeOnRestart');
     if (resumeBox) resumeBox.checked = window.RestartResume.resumeEnabled(host.config);
     if ($('csDirty')) $('csDirty').textContent = '';

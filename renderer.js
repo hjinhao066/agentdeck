@@ -128,7 +128,7 @@ let config = {
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false, crewOpen: true, crewModelsCollapsed: [], artifactsCollapsed: [],
   captainTokenSaver: MainCore.tokenSaverSettings(),
-  concurrencyCap: MainCore.concurrencyCap(), captainHandoffOverview: MainCore.handoffBudget(),
+  concurrencyCap: MainCore.concurrencyCap(), captainHandoffOverview: MainCore.handoffBudget(), captainAutoCompactWindow: MainCore.autoCompactWindow(),
   batteryMode: BatteryCore.MODE_DEFAULT, batteryConcurrency: BatteryCore.CAP_DEFAULT,
 };
 const saved = window.deck.loadConfig();
@@ -187,6 +187,7 @@ if (saved) {
   config.batteryMode = BatteryCore.normalizeMode(saved.batteryMode);
   config.batteryConcurrency = BatteryCore.normalizeCap(saved.batteryConcurrency);
   config.captainHandoffOverview = MainCore.handoffBudget(saved.captainHandoffOverview);
+  config.captainAutoCompactWindow = MainCore.autoCompactWindow(saved.captainAutoCompactWindow);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher) || saved.taskBoard?.autoVerify === false) {
@@ -2261,7 +2262,7 @@ function buildColumn(col, isFresh) {
         const boundSeat = col.executor === 'chatgpt-web' ? {} : ClaudeSeatsCore.bindColumn(col, config);
         flushConfig();
 
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain || col.subCaptain === true, boundSeat.id, boundSeat.configDir, !!col.captainCrew && !col.isMain);
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain || col.subCaptain === true, boundSeat.id, boundSeat.configDir, !!col.captainCrew && !col.isMain, !!col.isMain);
         if (col.executor === 'chatgpt-web') terms.get(col.id).webExecutorReady = true;
 
         if (launch && col.executor !== 'chatgpt-web') {

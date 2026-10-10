@@ -150,15 +150,23 @@ test('rotation checkpoints first, retains workers/receipts, briefs continuation 
   expect(records.find((r) => r.colId === id).configDir).toBe(path.join(home, '.claude-us'));
   expect(records.find((r) => r.colId === next).configDir).toBe(path.join(home, '.claude-us'));
   expect(records.every((r) => !r.authOverridePresent)).toBe(true);
+  // Claude's auto-compact window rides only on the 队长 terminals: the first one, and the one Relay opened on the new seat.
+  expect(records.find((r) => r.colId === cn).autoCompact).toBe('200000');
+  expect(records.find((r) => r.colId === id).autoCompact).toBe('200000');
+  expect(records.find((r) => r.colId === 'seat-worker').autoCompact).toBe(null);
+  expect(records.find((r) => r.colId === next).autoCompact).toBe(null);
   expect(capture('prompts.jsonl')).not.toContain('"/clear"');
   expect(records.filter((r) => r.colId === 'seat-worker')).toHaveLength(1);
   const restored = await page.evaluate(() => restoreArchived('seat-legacy-archived', false, true).id);
   expect(await page.evaluate((i) => columns.find((c) => c.id === i).claudeSeatId, restored)).toBe('cn');
   await expect.poll(() => capture('seat-env.jsonl'), { timeout: 20000 }).toContain(restored);
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find((r) => r.colId === restored).configDir).toBe(null);
+  expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find((r) => r.colId === restored).autoCompact).toBe(null);
   await closeApplication(); application = null;
   await launch();
   expect(await page.evaluate(() => config.activeClaudeSeatId)).toBe('us');
+  // An app restart brings the same 队长 back in a new terminal, and that one carries the window again.
+  await expect.poll(() => fs.readFileSync(path.join(profile, 'seat-env.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter((r) => r.colId === id).map((r) => r.autoCompact), { timeout: 30000 }).toEqual(['200000', '200000']);
   expect(await page.evaluate(() => columns.find((c) => c.id === 'seat-worker').claudeSeatId)).toBe('cn');
 });
 test('failed Relay archive acknowledgement preserves the original Captain', async () => {

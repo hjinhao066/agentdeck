@@ -33,6 +33,23 @@
     if (!Number.isFinite(n)) return HANDOFF_BUDGET_DEFAULT;
     return Math.min(HANDOFF_BUDGET_MAX, Math.max(HANDOFF_BUDGET_MIN, Math.round(n)));
   }
+  // CLAUDE_CODE_AUTO_COMPACT_WINDOW for the 队长's Claude Code (measured on claude 2.1.296): the
+  // window Claude compacts at is min(the model's window, this value). Claude itself floors the value
+  // at 100000 and caps it at 1000000, so a smaller number is the same as 100000. Settings store 0
+  // (off: the variable is not set) or 100000–1000000; never set at all means the default.
+  const AUTO_COMPACT_DEFAULT = 200000;
+  const AUTO_COMPACT_MIN = 100000;
+  const AUTO_COMPACT_MAX = 1000000;
+  function autoCompactWindow(value) {
+    if (value == null) return AUTO_COMPACT_DEFAULT;
+    if (typeof value === 'string' && value.trim() === '') return 0;
+    const n = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(n)) return AUTO_COMPACT_DEFAULT;
+    if (n <= 0) return 0;
+    return Math.min(AUTO_COMPACT_MAX, Math.max(AUTO_COMPACT_MIN, Math.round(n)));
+  }
+  // Added to Claude's own compaction by a PreCompact hook, for the 队长 only (agent-sessions.js).
+  const COMPACT_NOTE = '保留在跑和排队的会话、卡号和提交号、等用户拍板的事；其余以看板和决定文件为准';
   function shownCap(cap) {
     return Number.isInteger(cap) && cap > 0 ? cap : CONCURRENCY_DEFAULT;
   }
@@ -1209,7 +1226,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, CORE_LIMIT, BRIEFING_TOPICS, PROVIDERS, ROUTING, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, briefingMark, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, drawsOutput, claudeBackgroundTasks, claudeStatusRowsBlanked, backgroundCommandStatus, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, AUTO_COMPACT_DEFAULT, AUTO_COMPACT_MIN, AUTO_COMPACT_MAX, autoCompactWindow, COMPACT_NOTE, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, CORE_LIMIT, BRIEFING_TOPICS, PROVIDERS, ROUTING, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, briefingMark, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, drawsOutput, claudeBackgroundTasks, claudeStatusRowsBlanked, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, resourceKind, loginNudgeShown, LOGIN_NUDGE_MARK, statusLabel, ledgerText, subCaptainBrief, readText, resetNote, relayNote, restartNote, restartNotice, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };

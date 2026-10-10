@@ -401,7 +401,9 @@ handleMain('pty:prepare-launch', async (_event, { id, command }) => {
   if (seatGate && column?.claudeSeatId) await seatGate.launch(column.claudeSeatId, () => {});
   const prepared = prepareWorkspaceTrust(command, column, cwd, trustHome);
   if (prepared.warning) send('toast', { text: prepared.warning });
-  return codexLauncher.prepare(prepared.command, cwd);
+  // The 队长's Claude launch carries the PreCompact hook file; no other column's does.
+  const launch = column?.isMain === true && captainCompactSettings ? AgentSessions.captainLaunchCommand(prepared.command, captainCompactSettings) : prepared.command;
+  return codexLauncher.prepare(launch, cwd);
 });
 
 const ptySeats = new Map();
@@ -410,6 +412,7 @@ const managedSessions = new Map(); // columnId -> unguessable board-control toke
 const receiptSessions = new Map(); // every column: submission only, never control
 let boardControlDir = '';
 let boardCliPath = '';
+let captainCompactSettings = ''; // the 队长's `claude --settings` file (PreCompact hook); '' = none written
 let automation = null; // 自动回执入口: its own token, on/off switch and rate limit (automation-core.js)
 let boardRendererReady = false;
 const pendingBoardCommands = new Map(); // requestId -> { command, delivered }
@@ -426,17 +429,18 @@ function bufferAppend(id, data) {
   return ++buf.sequence;
 }
 
-function spawnPty(id, cwd, cols, rows, managed, seatId, configDir, crew) {
+function spawnPty(id, cwd, cols, rows, managed, seatId, configDir, crew, captain) {
   if (!validId(id) || ptys.size >= 100) return;
   // Captain notifications replace legacy watch-ai spools, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
-  let selectedSeat, binding;
+  let selectedSeat, binding, compactSetting;
   try {
     let cfg = {};
     try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
     catch (e) { if (e.code !== 'ENOENT') throw e; }
+    compactSetting = cfg.captainAutoCompactWindow;
     selectedSeat = configDir ? { id: seatId, configDir } : ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === (seatId || cfg.activeClaudeSeatId || 'cn'));
     if (!selectedSeat) throw new Error('席位不存在');
     binding = credentialLocation(selectedSeat, seatHome).keychainService;
@@ -458,6 +462,8 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir, crew) {
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
   let terminalEnv = AgentSessions.crewEnvironment({ ...AgentSessions.clearInheritedSessionIds(ENV), AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id }, crew);
+  // Only the 队长's own terminal (every way it starts: new, after a clear, Relay, an app restart) gets the auto-compact window.
+  terminalEnv = AgentSessions.captainEnvironment(terminalEnv, captain === true, compactSetting);
   terminalEnv = seatEnvironment(terminalEnv, selectedSeat, seatHome);
 
   // Never inherit an outer deck's managed capability into an independent shell.
@@ -738,6 +744,12 @@ function setupBoardControl() {
     for (const [name] of require('./main-core').BRIEFING_TOPICS) fs.copyFileSync(path.join(__dirname, 'docs', 'captain', name + '.md'), path.join(toolsDir, 'captain', name + '.md'));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
+    // The 队长's Claude gets one extra compaction instruction through a PreCompact hook (launched with --settings).
+    fs.copyFileSync(path.join(__dirname, 'captain-compact-note.js'), path.join(toolsDir, 'captain-compact-note.js'));
+    captainCompactSettings = '';
+    const compactFile = path.join(toolsDir, 'captain-compact-settings.json');
+    fs.writeFileSync(compactFile, JSON.stringify(AgentSessions.captainCompactSettings(path.join(toolsDir, 'captain-compact-note.js')), null, 2));
+    captainCompactSettings = compactFile;
     fs.copyFileSync(path.join(__dirname, 'codex-captain-driver.js'), path.join(toolsDir, 'codex-captain-driver.js'));
     fs.copyFileSync(path.join(__dirname, 'scripts', 'codex-captain-host.js'), path.join(toolsDir, 'codex-captain-host.js'));
   } catch (err) {
@@ -1539,7 +1551,7 @@ app.whenReady().then(async () => {
     quotaRead = null;
     return [...claudeQuotaRefresh.samples(), ...authSamples()].filter((s) => !seatId || s.seatId === seatId);
   });
-  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir, crew }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir, crew === true));
+  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir, crew, captain }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir, crew === true, captain === true));
   // Only the trusted deck main frame can submit a native worker. No browser
   // credentials or Captain capability are passed into the skill subprocess.
   chatgptWebExecutor = createChatGPTWebExecutor({
