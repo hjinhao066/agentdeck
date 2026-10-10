@@ -92,7 +92,7 @@ function heavyProfile(dir, { pending, synced }) {
   }));
   return cards.slice(pending).map((card) => ({ opId: 'op-seed-' + card.id.slice(2), cardId: card.id, expectedRevision: 0, deviceId: 'dev-win', set: pick(card) }));
 }
-async function launchWithHub({ startDelayMs, prepare = () => [] }) {
+async function launchWithHub({ startDelayMs, prepare = () => [], theme = 'dark' }) {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-fleet-e2e-'));
   const tokenFile = path.join(root, 'token');
   fs.writeFileSync(tokenFile, TOKEN + '\n', { mode: 0o600 });
@@ -107,7 +107,7 @@ async function launchWithHub({ startDelayMs, prepare = () => [] }) {
   server = await startSyncServer({ store, token: TOKEN });
   const column = { id: 'cap', title: '队长', displayTitle: '队长', manualTitle: true, cmd: FAKE, cwd: profile, width: 460, role: 'manual', isMain: true, captainCrew: false };
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
-    theme: 'dark', fitWindow: true, columns: [column],
+    theme, fitWindow: true, columns: [column],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks: [] },
   }));
   const env = { ...process.env, AGENTDECK_FLEET_URL: server.url, AGENTDECK_FLEET_TOKEN_FILE: tokenFile, AGENTDECK_FLEET_SYNC_MS: '200', AGENTDECK_FLEET_START_DELAY_MS: String(startDelayMs) };
@@ -150,6 +150,68 @@ test('the first sync round waits for the start delay after launch', async () => 
   console.log(`[fleet-delay] first heartbeat ${heartbeats[0] - launchedAt} ms after launch`);
   expect(heartbeats[0] - launchedAt).toBeGreaterThanOrEqual(5500);
 });
+
+// Two conflicts the hub recorded. 全部标为已看 silences the sidebar line on this computer only;
+// the cards keep their records and the board's 冲突 tag still shows them.
+const SHOTS = process.env.FLEET_SHOTS || '';
+for (const theme of ['dark', 'light']) {
+  test(`${theme}: 全部标为已看 quiets the 两机 line and leaves every conflict record on its card`, async () => {
+    const clash = (n) => [
+      { opId: 'op-seen-create' + n, cardId: 'card-seen-' + n, expectedRevision: 0, deviceId: 'dev-win', set: { project: 'agentdeck', title: '共享任务 ' + n, detail: '来自 Windows', status: 'todo' } },
+      { opId: 'op-seen-clash0' + n, cardId: 'card-seen-' + n, expectedRevision: 0, deviceId: 'dev-mac', set: { title: '另一份标题 ' + n } },
+    ];
+    await launchWithHub({ startDelayMs: 300, theme, prepare: () => [...clash(1), ...clash(2)] });
+    await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 20000 }).toBe(1);
+    const fleet = page.locator('#fleetStatus');
+    const state = fleet.locator('.fleet-line-state');
+    const ack = fleet.locator('.fleet-ack');
+    await expect(state).toHaveText('2 处冲突', { timeout: 20000 });
+    await expect(ack).toBeVisible();
+    // An icon button: hover hint, accessible name, keyboard focus, a hit area that is easy to click.
+    await expect(ack).toHaveAttribute('title', '全部标为已看');
+    await expect(ack).toHaveAttribute('aria-label', '全部标为已看');
+    await expect(ack).toHaveText('');
+    const box = await ack.boundingBox();
+    expect(box.width).toBeGreaterThanOrEqual(24);
+    expect(box.height).toBeGreaterThanOrEqual(24);
+    await ack.focus();
+    expect(await page.evaluate(() => document.activeElement.className)).toContain('fleet-ack');
+    expect(await ack.evaluate((node) => getComputedStyle(node).outlineStyle)).not.toBe('none');
+    if (SHOTS) {
+      await page.evaluate(() => document.activeElement && document.activeElement.blur());
+      await page.mouse.move(700, 400);
+      await fleet.screenshot({ path: path.join(SHOTS, `fleet-${theme}-conflict.png`) });
+      await fleet.locator('.fleet-line').hover();
+      await expect(fleet.locator('.fleet-detail')).toBeVisible();
+      const row = await fleet.boundingBox();
+      const pop = await fleet.locator('.fleet-detail').boundingBox();
+      const top = Math.max(0, Math.min(row.y, pop.y) - 8);
+      await page.screenshot({ path: path.join(SHOTS, `fleet-${theme}-conflict-detail.png`), clip: { x: 0, y: top, width: pop.x + pop.width + 12, height: row.y + row.height + 8 - top } });
+      await page.mouse.move(700, 400);
+    }
+    await expect(fleet.locator('.fleet-line')).toHaveAttribute('aria-label', /保留一边，另一边的旧值记在冲突记录里/);
+    await ack.click();
+    // For a moment it is a tick, then the line is quiet.
+    await expect(ack).toHaveClass(/done/);
+    await expect(ack).toHaveAttribute('aria-label', '已全部标为已看');
+    await expect(state).toHaveText('');
+    await expect(fleet.locator('.fleet-line')).toHaveAttribute('data-state', 'ok');
+    if (SHOTS) {
+      await page.mouse.move(700, 400);
+      await fleet.screenshot({ path: path.join(SHOTS, `fleet-${theme}-acked.png`) });
+    }
+    await expect(ack).toBeHidden({ timeout: 5000 });
+    await page.waitForTimeout(1000);
+    await expect(state).toHaveText('');
+    // Nothing was taken off the cards: the board still shows both records in full.
+    await page.locator('#taskBoardBtn').click();
+    for (const n of [1, 2]) {
+      const tag = page.locator(`.tbv-card[data-card-id="card-seen-${n}"] .tbv-tag.conflict`);
+      await expect(tag).toHaveText('冲突', { timeout: 15000 });
+      await expect(tag).toHaveAttribute('title', new RegExp('另一份标题 ' + n));
+    }
+  });
+}
 
 test.afterEach(async () => {
   if (application) await closeElectron(application);

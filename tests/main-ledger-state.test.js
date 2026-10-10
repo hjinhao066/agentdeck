@@ -93,7 +93,9 @@ test('installation registration persists before acknowledgement and blocks early
   assert.equal(boardEvents.length, 0);
 });
 
-for (const status of ['success', 'failed']) test(`runtime installation ${status} settles exactly its registered task once`, async () => {
+// 10-10 00:51: the install result was filed as the installing session's final receipt, so its card read done and
+// the restart did not continue it. The result is now a progress note for the Captain; the session's task stays open.
+for (const status of ['success', 'failed']) test(`runtime installation ${status} is a progress note for the Captain and never closes its session's task`, async () => {
   const task = { id: 'install-task', gen: 1, colId: 'worker', boardId: 'card', status: 'working', startedAt: 1 };
   const { api, worker, captain, state, boardEvents } = runtime(task, 'working');
   await api.submit({ action: 'progress', message: '安装待核对', installId: 'install-1', targetVersion: '1.2.0' }, worker);
@@ -102,11 +104,22 @@ for (const status of ['success', 'failed']) test(`runtime installation ${status}
   const message = { action: 'main-install-result', installResult: r, result: '运行结果已核对' };
   await api.handle(message, captain);
   await api.handle(message, captain);
-  assert.equal(task.status, status === 'success' ? 'done' : 'failed');
+  await new Promise(setImmediate);
+  assert.equal(task.status, 'working');
+  assert.equal(task.receipt, undefined);
   assert.equal(task.pendingInstall, undefined);
   assert.equal(task.installResultId, 'install-1');
-  assert.equal(boardEvents.filter((e) => e.op === 'event').length, 1);
-  assert.equal(state.pending.filter((p) => p.taskId === task.id).length, 1);
+  assert.equal(task.installOutcome.targetVersion, '1.2.0');
+  assert.equal(task.installOutcome.summary, '运行结果已核对');
+  assert.deepEqual(boardEvents.filter((e) => e.op === 'event'), [], 'no complete/failed event reaches the card');
+  const notes = boardEvents.filter((e) => e.op === 'resumeNote');
+  assert.equal(notes.length, 1, 'the card carries one progress note');
+  assert.equal(notes[0].input.note, '运行结果已核对');
+  assert.equal(state.pending.filter((p) => p.summary === '运行结果已核对').length, 1, 'the Captain sees it once');
+  assert.equal(state.pending.filter((p) => p.taskId === task.id).length, 0, 'not as a receipt of that task');
+  // and the session can now finish its own work
+  await api.submit({ action: 'complete', result: '装后核对完成' }, worker);
+  assert.equal(task.status, 'done');
 });
 
 
@@ -125,5 +138,6 @@ test('installation registration and receipt refuse acknowledgement when synchron
   await assert.rejects(api.handle(message, captain), /持久保存/);
   window.deck.saveConfigSync = () => true;
   await api.handle(message, captain);
-  assert.equal(task.status, 'done');
+  assert.equal(task.status, 'working');
+  assert.equal(task.installResultId, 'install-1');
 });

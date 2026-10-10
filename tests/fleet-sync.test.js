@@ -298,7 +298,7 @@ test('restored revisioned cards are retained and re-uploaded when client state a
   assert.equal(win.tasks.list()[0].title, card.title);
 });
 
-test('a Git-restored older task snapshot cannot overwrite a newer accepted edit', async (t) => {
+test('a Git-restored older task snapshot cannot overwrite a newer accepted edit, and leaves no conflict behind', async (t) => {
   const { root, server, tokenFile } = await hub(t);
   const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
   const win = machine(root, 'win', 'dev-win', 'win32', server.url, tokenFile);
@@ -315,7 +315,8 @@ test('a Git-restored older task snapshot cannot overwrite a newer accepted edit'
   for (const side of [mac, win]) {
     const card = side.tasks.list()[0];
     assert.equal(card.title, 'newer accepted title');
-    assert.ok(card.conflicts.some((item) => item.fields.title.other === 'old snapshot title'));
+    // The older file is not pushed (tests/fleet-stale-restore.test.js), so the hub records nothing.
+    assert.deepEqual(card.conflicts, []);
   }
 });
 

@@ -381,6 +381,17 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
   border: 0; border-radius: 6px; background: transparent; color: var(--text-2);
   font-size: 11.5px; text-align: left; white-space: nowrap; cursor: pointer;
 }
+/* 全部标为已看: a 24px icon button at the right end of the line, which makes room for it. */
+#fleetStatus.has-ack .fleet-line { padding-right: 32px; }
+.fleet-ack {
+  position: absolute; right: 10px; top: 6px; width: 24px; height: 24px; padding: 0; display: grid; place-items: center;
+  border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer;
+}
+.fleet-ack[hidden] { display: none; }
+.fleet-ack svg { width: 15px; height: 15px; }
+.fleet-ack:hover { background: var(--icon-hover-bg); color: var(--text); }
+.fleet-ack:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fleet-ack.done { color: #2f8a4a; }
 .fleet-line:hover, .fleet-line.open { background: var(--icon-hover-bg); }
 .fleet-line:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .fleet-title { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }

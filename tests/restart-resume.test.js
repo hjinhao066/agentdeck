@@ -209,12 +209,30 @@ test('wrong provider, malformed id and duplicate column identity cannot certify 
   assert.equal(R.bindSessionIdentity({ id: 'claude', cmd: 'claude' }, { Codex: id }, []), false);
 });
 
-test('an installation awaiting runtime verification is never re-dispatched or checkpointed', () => {
-  const pending = task('installer', 'working', '', { pendingInstall: { id: 'install-1' } });
-  assert.equal(R.shouldResume(pending), false);
-  assert.equal(R.holdsAcrossRestart(pending), false);
+// 10-10 00:51: the session that ran the 2.0.6 install was closed with the app and, with an install pending,
+// was left out of the restart's continue list; its post-install check then had no owner until the Captain woke it.
+// It is continued like any open task. It is still not parked (nothing to ask of it: the installer ends the app).
+test('a session whose installation is awaiting verification is continued after the restart, though never checkpointed', () => {
+  const pending = task('installer', 'working', '', { pendingInstall: { id: 'install-1', targetVersion: '2.0.6' } });
+  assert.equal(R.shouldResume(pending), true);
+  assert.equal(R.holdsAcrossRestart(pending), true);
   assert.equal(R.shouldPark(pending), false);
-  assert.deepEqual(R.planResume([crew('installer')], [pending], {}, 'reboot'), []);
+  assert.deepEqual(R.planResume([crew('installer')], [pending], {}, 'reboot').map((p) => p.id), ['installer']);
+  assert.deepEqual(R.planPark([crew('installer')], [pending]), []);
+  // other sessions' rules are unchanged
+  assert.equal(R.shouldResume(task('done', 'done', '做完了')), false);
+  assert.equal(R.shouldResume(task('live', 'working')), true);
+});
+
+test('the continue message tells an installer not to install again and what the install came to', () => {
+  const plain = R.resumeMessage({ mode: 'resume', provider: 'Claude' });
+  assert.doesNotMatch(plain, /安装/);
+  const waiting = R.resumeMessage({ mode: 'resume', provider: 'Claude', install: { targetVersion: '2.0.6' } });
+  assert.match(waiting, /2\.0\.6/);
+  assert.match(waiting, /不要重新安装/);
+  const done = R.resumeMessage({ mode: 'resend', provider: 'Claude', title: '装机', install: { targetVersion: '2.0.6', summary: 'AgentDeck 安装 2.0.6 成功；现在运行 2.0.6。' } });
+  assert.match(done, /AgentDeck 安装 2\.0\.6 成功/);
+  assert.match(done, /不要重新安装/);
 });
 
 // 10-09 12:10–12:15: before installing 2.0.3 the Captain told nine sessions to stop at a safe point. Five
@@ -243,7 +261,6 @@ test('a task closed only by the no-receipt fallback is continued at the next sta
   assert.equal(R.shouldResume(fallbackStop('safe')), true);
   assert.equal(R.holdsAcrossRestart(fallbackStop('safe')), true);
   assert.equal(R.shouldResume(fallbackStop('failed', { receipt: { summary: '', failed: '进程退出', source: 'fallback' } })), false);
-  assert.equal(R.shouldResume(fallbackStop('install', { pendingInstall: { id: 'i' } })), false);
   assert.equal(R.shouldResume(task('stop', 'stopped', '队长已请求中断当前操作。', { receipt: { summary: '队长已请求中断当前操作。', failed: '', source: 'captain-stop' } })), false);
   assert.deepEqual(R.planResume([crew('safe'), crew('done')], [fallbackStop('safe'), task('done', 'done', '功能已做完')], {}).map((p) => p.id), ['safe']);
 });
