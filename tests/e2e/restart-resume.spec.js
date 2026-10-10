@@ -143,7 +143,10 @@ test('a closed card stops the stale local task and gives the captain a specific 
 
 
 test('a second application restart resumes the unfinished card once again', async () => {
-  const before = delivered().filter((row) => row.colId === 'worker-live' && row.text.includes('重发')).length;
+  // The resend itself (重发：…), not the quit's stop-at-a-safe-point message, which says 重发 too (…续不上的会新开会话
+  // 并重发任务和最后回执) and reaches the working session when it is idle within the quit's 800 ms.
+  const resent = () => delivered().filter((row) => row.colId === 'worker-live' && row.text.startsWith('重发：')).length;
+  const before = resent();
   await quitAndWait(app);
   const env = { ...process.env, ZDOTDIR: profile };
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
@@ -152,11 +155,12 @@ test('a second application restart resumes the unfinished card once again', asyn
   isolateShell(env, profile);
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
-  await expect.poll(() => delivered().filter((row) => row.colId === 'worker-live' && row.text.includes('重发')).length, { timeout: 30000 }).toBe(before + 1);
+  await expect.poll(resent, { timeout: 30000 }).toBe(before + 1);
   expect(delivered().some((row) => row.colId === 'worker-done' && row.text.includes('刚重启'))).toBe(false);
-  const manifest = JSON.parse(fs.readFileSync(path.join(profile, 'restart-resume.json'), 'utf8'));
-  expect(manifest.claims['worker-live'].taskId).toBe('k-live');
-  expect(manifest.claims['worker-live'].phase).toBe('sent');
+  // The claim is written once the send is done; the agent may have the text a moment earlier.
+  const claim = () => JSON.parse(fs.readFileSync(path.join(profile, 'restart-resume.json'), 'utf8')).claims['worker-live'];
+  await expect.poll(() => claim()?.phase).toBe('sent');
+  expect(claim().taskId).toBe('k-live');
   expect(delivered().some((row) => row.colId === 'worker-closed' && row.text.includes('刚重启'))).toBe(false);
 });
 

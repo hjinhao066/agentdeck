@@ -1,4 +1,5 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -192,10 +193,12 @@ test('after a crash, a crew session the 3-minute rule had closed at its safe poi
   try {
     app = await launch(profile, files);
     await expect.poll(() => received('cap').length, { timeout: 60000 }).toBe(1);
-    // The app dies: no quit, so nothing is parked.
+    // The app dies: no quit, so nothing is parked. On Windows its whole process tree goes: with only the main
+    // process killed, the rest kept the profile's lock file open (13 s and more) and the next start quit at once.
     const child = app.application.process();
     const gone = new Promise((resolve) => child.once('exit', resolve));
-    child.kill('SIGKILL');
+    if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+    else child.kill('SIGKILL');
     await gone;
     app = null;
     const mark = rows(files.prompts).length;
