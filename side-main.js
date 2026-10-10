@@ -18,6 +18,8 @@ const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 // (never trimmed to fit) and the page is told, so nothing goes missing quietly.
 const MAX_CHAT_BYTES = 64 * 1024 * 1024;
 const MAX_DIR_ENTRIES = 300;
+// A previewed page's link goes to the browser tab only this soon after a real click or key press in it.
+const HAND_OVER_MS = 2000;
 
 // ---- previews ----
 function readPreview(target, raw) {
@@ -300,8 +302,18 @@ function registerSideIpc(ctx) {
     });
     // A link to the public web is handed to the browser tab; nothing else leaves the
     // page. A script can "click" too, so an address on this machine or its network is
-    // not handed over: the browser tab would fetch it on the page's behalf.
-    const outside = (url) => { if (isWebUrl(url) && PreviewHtml.requestAllowed(url)) send('side:preview-link', { url }); };
+    // not handed over: the browser tab would fetch it on the page's behalf. And only
+    // right after the user really clicked or pressed a key in the page (input a script
+    // cannot make): a page that sends itself somewhere (location, <meta refresh>,
+    // window.open on a timer) would otherwise switch the pane to the browser tab, whose
+    // session keeps the user's sign-ins.
+    let touchedAt = 0;
+    wc.on('before-mouse-event', (_e, mouse) => { if (mouse && (mouse.type === 'mouseDown' || mouse.type === 'mouseUp')) touchedAt = Date.now(); });
+    wc.on('before-input-event', (_e, input) => { if (input && input.type === 'keyDown') touchedAt = Date.now(); });
+    const outside = (url) => {
+      if (Date.now() - touchedAt > HAND_OVER_MS) return;
+      if (isWebUrl(url) && PreviewHtml.requestAllowed(url)) send('side:preview-link', { url });
+    };
     wc.setWindowOpenHandler(({ url }) => { outside(url); return { action: 'deny' }; });
     const guard = (event, url) => {
       if (opened && PreviewHtml.sameSite(url, opened.token)) return;

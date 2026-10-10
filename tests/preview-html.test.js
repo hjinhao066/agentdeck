@@ -127,7 +127,7 @@ function standIn() {
   class WebContentsView {
     constructor(options) {
       this.options = options; this.bounds = null; this.visible = false;
-      const wc = this.webContents = { events: {}, loaded: [], closed: false, on: (event, fn) => { wc.events[event] = fn; }, loadURL: (url) => { wc.loaded.push(url); return Promise.resolve(); },
+      const wc = this.webContents = { events: {}, loaded: [], closed: false, on: (event, fn) => { const before = wc.events[event]; wc.events[event] = before ? (...a) => { before(...a); fn(...a); } : fn; }, loadURL: (url) => { wc.loaded.push(url); return Promise.resolve(); },
         setWindowOpenHandler: (fn) => { wc.opener = fn; }, isDestroyed: () => wc.closed, close: () => { wc.closed = true; }, getURL: () => wc.loaded[wc.loaded.length - 1] || '',
         getTitle: () => '', isLoading: () => false, canGoBack: () => false, canGoForward: () => false, reload: () => { wc.reloads = (wc.reloads || 0) + 1; },
         finds: [], stops: [], findInPage: (text, o) => { wc.finds.push([text, o]); return (wc.lastRequest = (wc.lastRequest || 0) + 1); }, stopFindInPage: (how) => { wc.stops.push(how); } };
@@ -188,6 +188,9 @@ test('the page opens in a view of its own: sandboxed, no bridge, a session nothi
   assert.equal(ses.check(), false);
   let stopped = false; ses.events['will-download']({ preventDefault: () => { stopped = true; } });
   assert.equal(stopped, true);
+  // the user clicks in the page (real input, which a script cannot make): a web link then goes to the browser tab
+  const click = () => view.webContents.events['before-mouse-event']({}, { type: 'mouseUp', x: 10, y: 10 });
+  click();
   assert.deepEqual(view.webContents.opener({ url: 'https://example.com/docs' }), { action: 'deny' });
   assert.deepEqual(calls.sent.pop(), ['side:preview-link', { url: 'https://example.com/docs' }]);
   assert.deepEqual(view.webContents.opener({ url: 'file:///etc/hosts' }), { action: 'deny' });
@@ -213,6 +216,28 @@ test('a page\'s alert() or confirm() cannot put a box over the deck window', () 
   calls.handlers['side:preview-html']({}, { raw: path.join(report, 'index.html') });
   const view = calls.views.find((v) => v.webContents.loaded.some((u) => u.startsWith('agentdeck-preview://')));
   assert.equal(view.options.webPreferences.disableDialogs, true);
+});
+
+test('a page that sends itself somewhere without a click does not take the pane to the browser tab', () => {
+  // In the real app a page's own location.href / <meta refresh> / window.open switched the pane
+  // to the browser tab (whose session keeps the user's sign-ins), with nothing clicked.
+  const { calls } = standIn();
+  calls.handlers['side:preview-html']({}, { raw: path.join(report, 'index.html') });
+  const view = calls.views.find((v) => v.webContents.loaded.some((u) => u.startsWith('agentdeck-preview://')));
+  calls.sent.length = 0;
+  let blocked = false;
+  view.webContents.events['will-navigate']({ preventDefault: () => { blocked = true; } }, 'https://example.com/redirected');
+  assert.equal(blocked, true);
+  assert.deepEqual(view.webContents.opener({ url: 'https://example.com/popup' }), { action: 'deny' });
+  // a key press that is not a key down, a mouse move: not a click
+  view.webContents.events['before-input-event']({}, { type: 'keyUp', key: 'a' });
+  view.webContents.events['before-mouse-event']({}, { type: 'mouseMove', x: 1, y: 1 });
+  view.webContents.events['will-navigate']({ preventDefault() {} }, 'https://example.com/again');
+  assert.deepEqual(calls.sent, []);
+  // Enter on a focused link is a key down: that one goes
+  view.webContents.events['before-input-event']({}, { type: 'keyDown', key: 'Enter' });
+  view.webContents.events['will-navigate']({ preventDefault() {} }, 'https://example.com/entered');
+  assert.deepEqual(calls.sent, [['side:preview-link', { url: 'https://example.com/entered' }]]);
 });
 
 test('only a real .html the user clicked is opened, and closing the preview ends the page', () => {

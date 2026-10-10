@@ -230,7 +230,8 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   `agentdeck-preview://<random>/`. Every limit is in `preview-html-core.js` and decided
   on real paths: only the open page's own folder (the page alone in a catch-all folder),
   no `file:`, no loopback or local-network address (the phone page and sync server
-  listen there), nothing handed to the browser tab that the page could not fetch itself.
+  listen there), nothing handed to the browser tab that the page could not fetch itself, and
+  nothing handed over without a real click or key press in the page (`HAND_OVER_MS`).
   Keep `tests/preview-html.test.js` and `tests/e2e/preview-html-themes.spec.js` passing.
 - The preview's reading tools (`preview-reader.js`, wired in `side-pane.js`): find marks words
   with CSS highlight ranges and never rewrites a note's text; the main process watches only the

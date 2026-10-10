@@ -73,7 +73,8 @@ and regression pass, not a penetration-test certification.
 - Network: `file:`, loopback, private and link-local addresses, single-label and
   `.local`-style names, and every scheme but public `http(s)` are cancelled in the
   session's `onBeforeRequest`. Permissions, downloads, dialogs (`alert`, `confirm`) and popups are denied; navigation
-  stays on the page's own address; only a public web link is passed to the browser tab.
+  stays on the page's own address; only a public web link the user clicked (a real mouse or key
+  press in the page within 2 s, which a script cannot make) is passed to the browser tab.
 - Remaining boundary: the check is on the host name, so a public name that resolves to a
   local address (DNS rebinding) is not caught; the same holds for any page in the browser
   tab. A page can send what it can read (its own folder) to the public web.

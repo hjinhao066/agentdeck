@@ -1049,8 +1049,9 @@ an index from before this counts nothing as new). The phone hub does not have it
   `file:`, to this machine (`localhost`, `127.*`, `::1`), to the local network and to
   anything but `http(s)` on the public web are cancelled, so a CDN chart library loads
   and the deck's own phone page or sync server cannot be reached. Permissions,
-  downloads and new windows are denied; the page can move between its own pages; a
-  link to the public web opens in the 浏览器 tab. A page lying in a catch-all folder
+  downloads, dialogs (`alert`, `confirm`) and new windows are denied; the page can move
+  between its own pages; a link to the public web that you click opens in the 浏览器 tab
+  (a page that sends itself somewhere without your click stays where it is). A page lying in a catch-all folder
   (the home folder and what sits right in it such as Desktop, Downloads or `~/reports`,
   a drive, the temporary folder) is given only itself, and the pane says so: put it in
   a folder of its own to load the pictures and scripts next to it. Leaving the page
